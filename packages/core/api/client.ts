@@ -1,4 +1,4 @@
-import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, type CollectionQuery } from "../collections";
+import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, type CollectionFieldPatch, type CollectionQuery } from "../collections";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
@@ -1458,6 +1458,10 @@ export class ApiClient {
       params.set("properties", JSON.stringify(query.properties));
     if (query.group_by) params.set("group_by", query.group_by);
     if (query.group_key !== undefined) params.set("group_key", query.group_key);
+    if (query.sort_by) {
+      params.set("sort_by", query.sort_by);
+      params.set("sort_dir", query.sort_dir ?? "asc");
+    }
     const raw = await this.fetch<unknown>(
       `/api/collections/${id}/records?${params}`,
       {
@@ -1474,8 +1478,76 @@ export class ApiClient {
     if (!result) throw new Error("Invalid records response");
     return result;
   }
-  async createCollectionRecord(id: string, title: string) {
-    return this.collectionRecordCommand(id, "", { title }, "POST");
+  async createCollectionRecord(
+    id: string,
+    title: string,
+    fields?: Record<string, unknown>,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      "",
+      fields && Object.keys(fields).length ? { title, fields } : { title },
+      "POST",
+    );
+  }
+  async updateCollection(id: string, patch: { name?: string }) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    const result = parseWithFallback(
+      raw,
+      CollectionSchema,
+      null as import("../collections").Collection | null,
+      { endpoint: "PATCH /api/collections/:id" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async updateCollectionField(
+    id: string,
+    fieldId: string,
+    patch: CollectionFieldPatch,
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/fields/${fieldId}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+    );
+    const result = parseWithFallback(
+      raw,
+      CollectionFieldSchema,
+      null as import("../collections").CollectionField | null,
+      { endpoint: "PATCH /api/collections/:id/fields/:fieldId" },
+    );
+    if (!result) throw new Error("Invalid field response");
+    return result;
+  }
+  async deleteCollectionRecord(id: string, recordId: string) {
+    return this.collectionRecordCommand(id, `/${recordId}`, undefined, "DELETE");
+  }
+  async restoreCollectionRecord(id: string, recordId: string) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/restore`,
+      undefined,
+      "POST",
+    );
+  }
+  async listCollectionTrash(
+    id: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ) {
+    return parseWithFallback(
+      await this.fetch<unknown>(`/api/collections/${id}/trash`, {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      }),
+      CollectionTrashSchema,
+      { records: [], total: 0, retention_days: 30 } as import("../collections").CollectionTrash,
+      { endpoint: "GET /api/collections/:id/trash" },
+    );
   }
   async updateCollectionRecord(
     id: string,
@@ -1508,11 +1580,11 @@ export class ApiClient {
     id: string,
     suffix: string,
     body: unknown,
-    method: "POST" | "PUT",
+    method: "POST" | "PUT" | "DELETE",
   ) {
     const raw = await this.fetch<unknown>(
       `/api/collections/${id}/records${suffix}`,
-      { method, body: JSON.stringify(body) },
+      body === undefined ? { method } : { method, body: JSON.stringify(body) },
     );
     const result = parseWithFallback(
       raw,

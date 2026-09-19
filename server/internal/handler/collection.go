@@ -205,7 +205,8 @@ func (h *Handler) CreateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		Title string `json:"title"`
+		Title  string                     `json:"title"`
+		Fields map[string]json.RawMessage `json:"fields"`
 	}
 	if !decodeCollectionBody(w, r, &req) {
 		return
@@ -214,7 +215,11 @@ func (h *Handler) CreateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "title is too long")
 		return
 	}
-	record, err := h.Queries.CreateCollectionRecord(r.Context(), db.CreateCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, Title: req.Title})
+	initial, ok := h.initialRecordFields(w, r, collection, req.Fields)
+	if !ok {
+		return
+	}
+	record, err := h.Queries.CreateCollectionRecord(r.Context(), db.CreateCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, Title: req.Title, Fields: initial})
 	if err != nil {
 		writeError(w, 500, "failed to create record")
 		return
@@ -415,6 +420,27 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	if r.URL.Query().Has("group_key") {
 		where = append(where, groupExpr+"="+add(r.URL.Query().Get("group_key")))
 	}
+	// Sort parameters join the argument list only after the group count,
+	// which must not see placeholders it does not use.
+	orderBy := "r.created_at DESC,r.id DESC"
+	sorted := false
+	if sortBy := r.URL.Query().Get("sort_by"); sortBy != "" {
+		direction := "ASC"
+		switch r.URL.Query().Get("sort_dir") {
+		case "", "asc":
+		case "desc":
+			direction = "DESC"
+		default:
+			writeError(w, 400, "sort_dir must be asc or desc")
+			return
+		}
+		expr, ok := h.collectionSortExpression(w, r, collection, sortBy, add)
+		if !ok {
+			return
+		}
+		orderBy = expr + " " + direction + " NULLS LAST,r.created_at DESC,r.id DESC"
+		sorted = true
+	}
 	limit := 50
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, e := strconv.Atoi(raw)
@@ -430,9 +456,13 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	fingerprint := fmt.Sprintf("%x", sha256.Sum256([]byte(uuidToString(collection.WorkspaceID)+":"+uuidToString(collection.ID)+":"+fingerprintQuery.Encode())))
 	type recordCursor struct {
 		Fingerprint string `json:"fingerprint"`
-		CreatedAt   string `json:"created_at"`
-		ID          string `json:"id"`
+		CreatedAt   string `json:"created_at,omitempty"`
+		ID          string `json:"id,omitempty"`
+		// Offset pages a sorted query. Sorting by an arbitrary field value has
+		// no stable keyset, so these cursors are positional.
+		Offset int `json:"offset,omitempty"`
 	}
+	offset := 0
 	if encoded := r.URL.Query().Get("cursor"); encoded != "" {
 		bytes, err := base64.RawURLEncoding.DecodeString(encoded)
 		var cursor recordCursor
@@ -440,18 +470,30 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 			writeError(w, 400, "cursor does not match this query")
 			return
 		}
+		if sorted {
+			if cursor.Offset < 1 {
+				writeError(w, 400, "invalid cursor offset")
+				return
+			}
+			offset = cursor.Offset
+		}
 		at, err := time.Parse(time.RFC3339Nano, cursor.CreatedAt)
+		if sorted {
+			err = nil
+		}
 		if err != nil {
 			writeError(w, 400, "invalid cursor date")
 			return
 		}
-		recordID, ok := parseUUIDOrBadRequest(w, cursor.ID, "cursor.id")
-		if !ok {
-			return
+		if !sorted {
+			recordID, ok := parseUUIDOrBadRequest(w, cursor.ID, "cursor.id")
+			if !ok {
+				return
+			}
+			where = append(where, "(r.created_at,r.id)<("+add(at)+","+add(recordID)+")")
 		}
-		where = append(where, "(r.created_at,r.id)<("+add(at)+","+add(recordID)+")")
 	}
-	rows, err := tx.Query(r.Context(), "SELECT r.id,r.workspace_id,r.collection_id,r.title,r.fields,r.revision,r.position,r.created_at,r.updated_at FROM record r WHERE "+strings.Join(where, " AND ")+" ORDER BY r.created_at DESC,r.id DESC LIMIT "+add(limit+1), args...)
+	rows, err := tx.Query(r.Context(), "SELECT r.id,r.workspace_id,r.collection_id,r.title,r.fields,r.revision,r.position,r.created_at,r.updated_at FROM record r WHERE "+strings.Join(where, " AND ")+" ORDER BY "+orderBy+" LIMIT "+add(limit+1)+" OFFSET "+add(offset), args...)
 	if err != nil {
 		writeError(w, 500, "failed to list records")
 		return
@@ -478,9 +520,50 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	}
 	var next *string
 	if more {
-		raw, _ := json.Marshal(cursors[limit-1])
+		cursor := cursors[limit-1]
+		if sorted {
+			cursor = recordCursor{Fingerprint: fingerprint, Offset: offset + limit}
+		}
+		raw, _ := json.Marshal(cursor)
 		encoded := base64.RawURLEncoding.EncodeToString(raw)
 		next = &encoded
 	}
 	writeJSON(w, 200, map[string]any{"records": records, "total": total, "groups": groups, "next_cursor": next})
+}
+
+// collectionSortExpression orders by title, creation time, or one field.
+// Select options sort in their catalog order; numbers and checkboxes by value;
+// every other type by its stored text.
+func (h *Handler) collectionSortExpression(w http.ResponseWriter, r *http.Request, collection db.Collection, sortBy string, add func(any) string) (string, bool) {
+	switch sortBy {
+	case "title":
+		return "lower(r.title)", true
+	case "created_at":
+		return "r.created_at", true
+	}
+	id, ok := parseUUIDOrBadRequest(w, sortBy, "sort_by")
+	if !ok {
+		return "", false
+	}
+	def, err := h.Queries.GetCollectionField(r.Context(), db.GetCollectionFieldParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
+	if err != nil {
+		writeError(w, 400, "sort_by must name a field")
+		return "", false
+	}
+	key := add(uuidToString(id))
+	switch def.Type {
+	case "number":
+		return "CASE WHEN jsonb_typeof(r.fields->" + key + ")='number' THEN (r.fields->>" + key + ")::numeric END", true
+	case "checkbox":
+		return "CASE WHEN jsonb_typeof(r.fields->" + key + ")='boolean' THEN (r.fields->>" + key + ")::boolean END", true
+	case "select":
+		ids := []string{}
+		for _, option := range parsePropertyConfig(def.Config).Options {
+			ids = append(ids, option.ID)
+		}
+		return "array_position(" + add(ids) + "::text[],r.fields->>" + key + ")", true
+	case "multi_select", "multi_actor":
+		return "(r.fields->" + key + ")->>0", true
+	}
+	return "r.fields->>" + key, true
 }

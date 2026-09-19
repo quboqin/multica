@@ -9,6 +9,7 @@ export const CollectionSchema = z.object({
   created_by: z.string().catch(""),
   project_id: z.string().nullable().catch(null),
   revision: z.number().default(1),
+  record_count: z.number().nonnegative().optional().catch(undefined),
 });
 export const CollectionFieldSchema = z.object({
   id: z.string(),
@@ -38,6 +39,13 @@ export const CollectionRecordSchema = z.object({
   revision: z.number().int().positive(),
   created_at: z.string(),
 });
+export const CollectionTrashSchema = z.object({
+  records: z.array(
+    CollectionRecordSchema.extend({ deleted_at: z.string().catch("") }),
+  ),
+  total: z.number().nonnegative().catch(0),
+  retention_days: z.number().catch(30),
+});
 export const CollectionDetailSchema = z.object({
   collection: CollectionSchema,
   fields: z.array(CollectionFieldSchema),
@@ -60,7 +68,18 @@ export interface CollectionQuery {
   properties?: Record<string, unknown[]>;
   group_by?: string;
   group_key?: string;
+  /** A field id, "title" or "created_at". */
+  sort_by?: string;
+  sort_dir?: "asc" | "desc";
 }
+export interface CollectionFieldPatch {
+  name?: string;
+  type?: string;
+  config?: { options: { id?: string; name: string; color: string }[] };
+  position?: number;
+  archived?: boolean;
+}
+export type CollectionTrash = z.infer<typeof CollectionTrashSchema>;
 export const collectionKeys = {
   all: (wsId: string) => ["collections", wsId] as const,
   detail: (wsId: string, id: string) =>
@@ -73,6 +92,14 @@ export function collectionListOptions(wsId: string) {
     queryKey: [...collectionKeys.all(wsId), "list"],
     queryFn: ({ signal }) => api.listCollections({ workspaceId: wsId, signal }),
     enabled: !!wsId,
+  });
+}
+export function collectionTrashOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: [...collectionKeys.all(wsId), id, "trash"],
+    queryFn: ({ signal }) =>
+      api.listCollectionTrash(id, { workspaceId: wsId, signal }),
+    enabled: !!wsId && !!id,
   });
 }
 export function collectionDetailOptions(wsId: string, id: string) {
