@@ -4,81 +4,89 @@ import {
   ReactNodeViewRenderer,
   type NodeViewProps,
 } from "@tiptap/react";
-import { lazy, Suspense, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { collectionListOptions } from "@multica/core/collections";
-import { issueViewListOptions } from "@multica/core/issue-views/queries";
+import { lazy, Suspense, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { LayoutGrid } from "lucide-react";
+import { issueViewDetailOptions } from "@multica/core/issue-views/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { Button } from "@multica/ui/components/ui/button";
+import { InsertViewDialog } from "../../documents/insert-view-dialog";
 import { useT } from "../../i18n";
 
 const EmbeddedSavedView = lazy(
   () => import("../../documents/embedded-saved-view"),
 );
-function SavedViewNode({ node, updateAttributes }: NodeViewProps) {
+function SavedViewNode({
+  node,
+  editor,
+  updateAttributes,
+  deleteNode,
+}: NodeViewProps) {
   const wsId = useWorkspaceId();
   const { t } = useT("issues");
-  const [input, setInput] = useState(String(node.attrs.viewId ?? ""));
-  const { data: taskViews = [] } = useQuery(
-    issueViewListOptions(wsId, { scope_type: "workspace" }),
-  );
-  const { data: collections = [] } = useQuery(collectionListOptions(wsId));
-  const collectionViews = useQueries({
-    queries: collections.map((collection) =>
-      issueViewListOptions(wsId, {
-        scope_type: "workspace",
-        collection_id: collection.id,
-      }),
-    ),
-  });
-  const views = [
-    ...taskViews,
-    ...collectionViews.flatMap((query) => query.data ?? []),
-  ];
   const viewId = typeof node.attrs.viewId === "string" ? node.attrs.viewId : "";
+  // A node the /view command just inserted opens its picker right away;
+  // cancelling that first pick removes the empty block again.
+  const fresh = node.attrs.autoOpen === true && !viewId;
+  const [open, setOpen] = useState(fresh);
+  const inserted = useRef(false);
+  const { data: view, isError } = useQuery(
+    issueViewDetailOptions(wsId, viewId),
+  );
+  const editable = editor.isEditable;
   return (
     <NodeViewWrapper
       contentEditable={false}
-      className="my-4 overflow-hidden rounded border"
+      className="my-4 overflow-hidden rounded-lg border"
       data-type="saved-view"
     >
-      <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 p-2">
-        <label className="text-caption">
-          {t(($) => $.cortex.embed_view)}{" "}
-          <select
-            className="rounded border bg-background p-1"
-            value={viewId}
-            onChange={(event) => {
-              setInput(event.target.value);
-              updateAttributes({ viewId: event.target.value });
-            }}
+      <div className="flex items-center gap-2 border-b bg-muted/30 px-3 py-2">
+        <LayoutGrid className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-label font-medium">
+          {viewId
+            ? view?.name ||
+              (isError
+                ? t(($) => $.cortex_docs.view_unavailable)
+                : t(($) => $.cortex_docs.saved_view))
+            : t(($) => $.cortex_docs.choose_view)}
+        </span>
+        {viewId && view && (
+          <span className="inline-flex items-center gap-1 text-caption text-success">
+            <span aria-hidden className="size-1.5 rounded-full bg-success" />
+            {t(($) => $.cortex_docs.live)}
+          </span>
+        )}
+        {editable && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-muted-foreground"
+            onClick={() => setOpen(true)}
           >
-            <option value="">—</option>
-            {views.map((view) => (
-              <option key={view.id} value={view.id}>
-                {view.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <details className="text-caption">
-          <summary>{t(($) => $.cortex.view_id)}</summary>
-          <input
-            aria-label={t(($) => $.cortex.view_id)}
-            className="min-w-64 rounded border bg-background p-1 text-caption"
-            value={input}
-            placeholder={t(($) => $.cortex.view_id)}
-            onChange={(event) => setInput(event.target.value)}
-            onBlur={() => {
-              if (/^[0-9a-f-]{36}$/i.test(input))
-                updateAttributes({ viewId: input });
-            }}
-          />
-        </details>
+            {viewId
+              ? t(($) => $.cortex_docs.replace_view)
+              : t(($) => $.cortex_docs.choose_view)}
+          </Button>
+        )}
       </div>
       {viewId && (
-        <Suspense fallback={<p>{t(($) => $.cortex.loading)}</p>}>
+        <Suspense fallback={<p className="p-3">{t(($) => $.cortex_docs.loading)}</p>}>
           <EmbeddedSavedView key={`${wsId}:${viewId}`} viewId={viewId} />
         </Suspense>
+      )}
+      {editable && (
+        <InsertViewDialog
+          open={open}
+          initialViewId={viewId || undefined}
+          onOpenChange={(next) => {
+            setOpen(next);
+            if (!next && fresh && !inserted.current) deleteNode();
+          }}
+          onInsert={(id) => {
+            inserted.current = true;
+            updateAttributes({ viewId: id, autoOpen: false });
+          }}
+        />
       )}
     </NodeViewWrapper>
   );
@@ -92,7 +100,11 @@ export const SavedViewEmbed = Node.create({
   atom: true,
   isolating: true,
   addAttributes() {
-    return { viewId: { default: "" } };
+    return {
+      viewId: { default: "" },
+      // Set only by the /view command; never parsed or serialized.
+      autoOpen: { default: false, rendered: false, parseHTML: () => false },
+    };
   },
   parseHTML() {
     return [

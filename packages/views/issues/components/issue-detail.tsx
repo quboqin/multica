@@ -1022,6 +1022,17 @@ interface IssueDetailProps {
    * the surface the reader arrived from, so only the host can spell that trip.
    */
   leadingAction?: ReactNode;
+  /**
+   * "document" lets the documents page own the chrome: no breadcrumb header,
+   * properties sidebar, parent link or sub-issue block. The host passes its
+   * own meta rows through `documentSlots`.
+   */
+  variant?: "issue" | "document";
+  documentSlots?: {
+    beforeTitle?: ReactNode;
+    afterTitle?: ReactNode;
+    afterBody?: ReactNode;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1143,7 +1154,8 @@ export function IssueDetailSkeleton({ leading }: { leading?: ReactNode } = {}) {
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId, highlightRequestToken, leadingAction }: IssueDetailProps) {
+export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId, highlightRequestToken, leadingAction, variant = "issue", documentSlots }: IssueDetailProps) {
+  const isDocumentVariant = variant === "document";
   const { t } = useT("issues");
   const locale = useLocale();
   const timeAgo = useTimeAgo();
@@ -2771,7 +2783,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             className={cn("absolute top-14 z-30", isMobile ? "right-4" : "right-10")}
           />
         )}
-        <BreadcrumbHeader
+        {!isDocumentVariant && <BreadcrumbHeader
           leading={leadingAction}
           segments={breadcrumbSegments}
           leaf={
@@ -2869,7 +2881,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             </Tooltip>
             </>
           }
-        />
+        />}
 
         {/* scrollbar-gutter both-edges: with classic (space-taking) scrollbars —
             macOS with a mouse or "always show", Windows, Linux — the global
@@ -2888,7 +2900,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             of the scroll: below `md` the composer is not pinned (see
             `useStickyComposer`), so it lands here — right where the launcher
             floats — once the reader scrolls to the bottom. */}
-        <div className="mx-auto w-full max-w-4xl px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8">
+        <div className={cn("mx-auto w-full px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8", isDocumentVariant ? "max-w-[784px] md:pt-10" : "max-w-4xl")}>
+          {documentSlots?.beforeTitle}
           {titleLazy.active && (
             <div className={titleLazy.ready ? undefined : "hidden"}>
               <TitleEditor
@@ -2992,8 +3005,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               )}
             />
           ) : null}
+          {documentSlots?.afterTitle}
 
-          {parentIssue && !issue.source_context && (
+          {!isDocumentVariant && parentIssue && !issue.source_context && (
             <AppLink
               href={paths.issueDetail(parentIssue.id)}
               className="mt-2 inline-flex max-w-full items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors group/parent"
@@ -3058,7 +3072,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             }}
           >
             {descriptionAnnotations.popup}
-            <div data-comment-content={descriptionSourceId}>
+            <div data-comment-content={descriptionSourceId} data-document-body={isDocumentVariant ? "" : undefined}>
               {issue.kind === "doc" ? <DocumentBodyEditor
                 key={id} issue={issue}
                 attachmentIds={(markdown)=>descPendingAttachmentsRef.current.filter(a=>contentReferencesAttachment(markdown,a)).map(a=>a.id)}
@@ -3109,7 +3123,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
             </div>
 
-            <div className="flex items-center gap-1 mt-3">
+            {!isDocumentVariant && <div className="flex items-center gap-1 mt-3">
               <ReactionBar
                 reactions={issueReactions}
                 currentUserId={user?.id}
@@ -3121,7 +3135,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 multiple
                 onSelect={(file) => descEditorRef.current?.uploadFile(file)}
               />
-            </div>
+            </div>}
             {descDragOver && <FileDropOverlay />}
           </div>
 
@@ -3138,7 +3152,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </button>
             </div>
           )}
-          {childIssues.length > 0 && (() => {
+          {documentSlots?.afterBody}
+          {!isDocumentVariant && childIssues.length > 0 && (() => {
             const doneCount = childIssues.filter((c) => issueBehavesAs(c, "done")).length;
             return (
               // Provider hosts the shared right-click actions menu the rows
@@ -3245,7 +3260,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           <div className="my-8 border-t" />
 
           {/* Activity / Comments */}
-          <div>
+          <div data-document-discussion={isDocumentVariant ? "" : undefined}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <h2 className="text-title-sm font-semibold">{t(($) => $.detail.activity_section)}</h2>
@@ -3503,6 +3518,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     </ImageSequenceProvider>
     </CurrentIssueRenderContextProvider>
   );
+
+  if (isDocumentVariant) {
+    return <div className="flex min-h-0 min-w-0 flex-1">{detailContent}</div>;
+  }
 
   if (isMobile) {
     return (

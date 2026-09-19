@@ -5,5 +5,8 @@ export { useReleaseEditingCellOnUnmount } from "./use-release-editing-cell";
 
 export { DataViewCalendar } from "./calendar-view";
 export { DataViewGallery } from "./gallery-view";
-
-export { DataFieldEditor } from "./field-editor";
+export {
+  DataViewChoiceChip,
+  DataViewFieldToggles,
+  type ChoiceOption,
+} from "./choice-chip";

@@ -50,9 +50,17 @@ test.describe("Cortex G1 P0", () => {
       page.getByRole("button", { name: "Publish", exact: true }),
     ).toBeEnabled();
     await page.getByRole("button", { name: "Publish", exact: true }).click();
+    // The top bar's contextual action disappears once the doc is published,
+    // and the status chip / meta line switch to the published label.
     await expect(
-      page.getByText("published", { exact: true }).first(),
+      page.getByRole("button", { name: "Publish", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText("Published", { exact: true }).first(),
     ).toBeVisible();
+    expect((await api.cortexRequest(`/api/issues/${doc.id}`)).body.status).toBe(
+      "published",
+    );
     const legacy = await api.cortexRequest(`/api/issues/${doc.id}`, "PUT", {
       description: "unversioned overwrite",
     });
@@ -105,9 +113,13 @@ test.describe("Cortex G1 P0", () => {
       description: body,
     });
     await page.goto(`/${slug}/documents/${doc.id}`);
-    await expect(
-      page.getByRole("heading", { name: collection.name, exact: true }),
-    ).toBeVisible({ timeout: 30000 });
+    // The embed header names the saved view; the live table underneath
+    // renders the collection through the shared data view.
+    const embed = page.locator('[data-type="saved-view"]');
+    await expect(embed).toContainText("Embedded table", { timeout: 30000 });
+    await expect(embed.locator("[data-source-identity]").first()).toBeVisible({
+      timeout: 30000,
+    });
     await expect(page.getByText("Saved", { exact: true })).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Submit for review", exact: true }),
@@ -150,20 +162,17 @@ test.describe("Cortex G1 P0", () => {
     ).toBe(200);
     await page.goto(`/${slug}/collections/${collection.id}`);
     await expect(
-      page.getByRole("textbox", {
-        name: "Record title: Calendar record",
-        exact: true,
-      }),
+      page.getByRole("button", { name: "Rename Calendar record", exact: true }),
     ).toBeVisible();
     await expect(page.locator("[data-source-identity]")).toHaveAttribute(
       "data-source-identity",
       /collection/,
     );
-    await page.getByRole("button", { name: "Calendar", exact: true }).click();
-    const dateInput = page.getByLabel("Date field: Calendar record", {
-      exact: true,
-    });
-    await expect(dateInput).toHaveValue(day);
+    await page.getByRole("radio", { name: "Calendar", exact: true }).click();
+    const pill = page.locator(`[data-row-id="${record.id}"]`);
+    await expect(
+      page.getByRole("region", { name: day, exact: true }).locator(pill),
+    ).toBeVisible();
     const next = new Date(date);
     next.setDate(date.getDate() + 1);
     const nextDay = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
@@ -172,24 +181,23 @@ test.describe("Cortex G1 P0", () => {
         response.request().method() === "PUT" &&
         response.url().endsWith(`/fields/${field.id}`),
     );
-    await dateInput
-      .locator("..")
-      .dragTo(page.getByRole("region", { name: nextDay, exact: true }));
+    await pill.dragTo(page.getByRole("region", { name: nextDay, exact: true }));
     expect((await save).status()).toBe(200);
     await page.reload();
-    await expect(dateInput).toHaveValue(nextDay);
-    await page.getByRole("button", { name: "Gallery", exact: true }).click();
-    await expect(page.getByRole("article")).toContainText("Calendar record");
-    await page
-      .getByRole("textbox", { name: "View name", exact: true })
-      .fill("My gallery");
-    await page.getByRole("button", { name: "Save view", exact: true }).click();
     await expect(
-      page.getByRole("button", { name: "My gallery", exact: true }),
+      page.getByRole("region", { name: nextDay, exact: true }).locator(pill),
     ).toBeVisible();
+    await page.getByRole("radio", { name: "Gallery", exact: true }).click();
+    await expect(page.getByRole("article")).toContainText("Calendar record");
+    await page.getByRole("button", { name: "Save view", exact: true }).click();
+    await page.getByPlaceholder("View name").fill("My gallery");
+    await page.getByPlaceholder("View name").press("Enter");
+    await expect(
+      page.getByRole("tab", { name: "My gallery", exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
   });
 
-  test("a filtered-out edited record keeps its draft and rereads the current conflict value", async ({
+  test("a cell edit that loses a conflict keeps the user's value until they choose to overwrite", async ({
     page,
   }) => {
     const collection = await api.createCollection(
@@ -217,9 +225,16 @@ test.describe("Cortex G1 P0", () => {
     await page
       .getByRole("textbox", { name: "Search records", exact: true })
       .fill("Find this row");
-    const input = page.getByRole("textbox", { name: /Value:/ });
+    const cell = page.getByRole("button", {
+      name: "Value: Find this row",
+      exact: true,
+    });
+    await expect(cell).toContainText("Before");
+    await cell.click();
+    const input = page.getByPlaceholder("Enter value…");
     await expect(input).toHaveValue("Before");
     await input.fill("Local draft");
+    // Another writer renames the row out of the search and changes the cell.
     expect(
       (
         await api.cortexRequest(
@@ -237,15 +252,12 @@ test.describe("Cortex G1 P0", () => {
         })
       ).status,
     ).toBe(200);
-    await expect(input).toHaveValue("Local draft");
     const conflict = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
         response.url().endsWith(fieldPath),
     );
-    await page
-      .getByRole("heading", { name: collection.name, exact: true })
-      .click();
+    await input.press("Enter");
     expect((await conflict).status()).toBe(409);
     await expect(
       page.getByText("Current value: Remote value", { exact: true }),
@@ -256,10 +268,7 @@ test.describe("Cortex G1 P0", () => {
         response.url().endsWith(fieldPath),
     );
     await page
-      .getByRole("button", {
-        name: "Save draft over current value",
-        exact: true,
-      })
+      .getByRole("button", { name: "Use mine: Local draft", exact: true })
       .click();
     expect((await retry).status()).toBe(200);
     const current = (
@@ -283,10 +292,10 @@ test.describe("Cortex G1 P0", () => {
     await page
       .getByRole("menuitemradio", { name: "Calendar", exact: true })
       .click();
-    const input = page.getByLabel(`Date field: ${issue.title}`, {
-      exact: true,
-    });
-    await expect(input).toHaveValue(day);
+    const pill = page.locator(`[data-row-id="${issue.id}"]`);
+    await expect(
+      page.getByRole("region", { name: day, exact: true }).locator(pill),
+    ).toBeVisible();
     const destination = new Date(now);
     destination.setDate(now.getDate() + 1);
     const movedDay = `${destination.getFullYear()}-${String(destination.getMonth() + 1).padStart(2, "0")}-${String(destination.getDate()).padStart(2, "0")}`;
@@ -295,15 +304,18 @@ test.describe("Cortex G1 P0", () => {
         response.request().method() === "PUT" &&
         response.url().endsWith(`/api/issues/${issue.id}`),
     );
-    await input
-      .locator("..")
-      .dragTo(page.getByRole("region", { name: movedDay, exact: true }));
+    await pill.dragTo(
+      page.getByRole("region", { name: movedDay, exact: true }),
+    );
     expect((await saved).status()).toBe(200);
     await page.reload();
-    await expect(input).toHaveValue(movedDay);
-    await page.locator('input[aria-label="Date field"]').fill(movedDay);
+    await expect(
+      page.getByRole("region", { name: movedDay, exact: true }).locator(pill),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Week", exact: true }).click();
-    await expect(input).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: day, exact: true }),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Calendar", exact: true }).click();
     await page
       .getByRole("menuitemradio", { name: "Gallery", exact: true })
@@ -334,7 +346,9 @@ test.describe("Cortex G1 P0", () => {
     const path = page.getByRole("navigation", { name: "Document path" });
     await expect(path).toContainText(a.title);
     await expect(path).toContainText(child.title);
-    const library = page.getByRole("complementary", { name: "Documents" });
+    const library = page.getByRole("complementary", {
+      name: "Cortex navigation",
+    });
     const from = library.locator('[draggable="true"]').filter({
       has: page.getByRole("link", { name: child.title, exact: true }),
     });
@@ -355,17 +369,27 @@ test.describe("Cortex G1 P0", () => {
       .filter({
         has: page.getByRole("link", { name: leaf.title, exact: true }),
       })
-      .getByRole("button", { name: "Favorite", exact: true })
-      .click();
-    await library
-      .getByRole("button", { name: "Favorites", exact: true })
-      .click();
+      .getByRole("button", { name: "Add to favorites", exact: true })
+      .click({ force: true });
+    // Tree filters live in the section's filter menu.
+    await library.getByRole("button", { name: "Filter documents" }).click();
+    await page.getByRole("menuitemradio", { name: "Favorites" }).click();
+    await page.keyboard.press("Escape");
     await expect(
       library.getByRole("link", { name: leaf.title, exact: true }),
     ).toBeVisible();
-    await library.getByRole("button", { name: "Recent", exact: true }).click();
+    await expect(
+      library.getByRole("link", { name: b.title, exact: true }),
+    ).toHaveCount(0);
+    await library.getByRole("button", { name: "Filter documents" }).click();
+    await page.getByRole("menuitemradio", { name: "Recent" }).click();
+    await page.keyboard.press("Escape");
     await expect(
       library.getByRole("link", { name: leaf.title, exact: true }),
     ).toBeVisible();
+    await expect(
+      library.getByRole("link", { name: a.title, exact: true }),
+    ).toHaveCount(0);
+    await library.getByRole("button", { name: "Clear filter Recent" }).click();
   });
 });

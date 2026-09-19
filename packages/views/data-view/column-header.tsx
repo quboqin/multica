@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { ArrowDown, ArrowUp, EyeOff, GripVertical } from "lucide-react";
@@ -26,6 +26,9 @@ export function DataViewColumnHeader<SortKey extends string>({
   descendingLabel,
   hideLabel,
   reorderLabel,
+  icon,
+  menuContent,
+  menuClassName,
 }: {
   columnKey: string;
   reorderable: boolean;
@@ -39,6 +42,11 @@ export function DataViewColumnHeader<SortKey extends string>({
   descendingLabel: string;
   hideLabel: string;
   reorderLabel: string;
+  /** Leading glyph, e.g. the field type. */
+  icon?: ReactNode;
+  /** Replaces the default sort / hide items with a source-specific menu. */
+  menuContent?: ReactNode;
+  menuClassName?: string;
 }) {
   const {
     attributes,
@@ -121,6 +129,7 @@ export function DataViewColumnHeader<SortKey extends string>({
       )}
       <DropdownMenu>
         <DropdownMenuTrigger className="flex min-w-0 items-center gap-1 rounded-xs px-1.5 py-1 hover:bg-accent">
+          {icon}
           <span className="truncate">{label}</span>
           {active &&
             (sortDirection === "asc" ? (
@@ -129,8 +138,12 @@ export function DataViewColumnHeader<SortKey extends string>({
               <ArrowDown className="size-3 shrink-0" />
             ))}
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-40">
-          {sortField && (
+        <DropdownMenuContent
+          align="start"
+          className={cn(menuContent ? "w-60" : "w-40", menuClassName)}
+        >
+          {menuContent}
+          {!menuContent && sortField && (
             <>
               <DropdownMenuItem onClick={() => onSort(sortField, "asc")}>
                 <ArrowUp />
@@ -142,8 +155,8 @@ export function DataViewColumnHeader<SortKey extends string>({
               </DropdownMenuItem>
             </>
           )}
-          {sortField && onHide && <DropdownMenuSeparator />}
-          {onHide && (
+          {!menuContent && sortField && onHide && <DropdownMenuSeparator />}
+          {!menuContent && onHide && (
             <DropdownMenuItem onClick={onHide}>
               <EyeOff />
               {hideLabel}

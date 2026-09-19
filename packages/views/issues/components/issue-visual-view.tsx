@@ -21,9 +21,15 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { Issue, IssueTableQuerySpec } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import { DataViewCalendar, DataViewGallery } from "../../data-view";
+import { CalendarDays, Eye, Image } from "lucide-react";
+import {
+  DataViewCalendar,
+  DataViewChoiceChip,
+  DataViewFieldToggles,
+  DataViewGallery,
+} from "../../data-view";
 import { useNavigation } from "../../navigation";
-import { useT } from "../../i18n";
+import { useLocale, useT } from "../../i18n";
 
 const capabilities = {
   layouts: ["calendar", "gallery"],
@@ -42,6 +48,7 @@ export function IssueVisualView({
   const paths = useWorkspacePaths();
   const nav = useNavigation();
   const { t } = useT("issues");
+  const locale = useLocale();
   const qc = useQueryClient();
   const source = dataSourceIdentityKey({
     workspaceId: wsId,
@@ -136,66 +143,6 @@ export function IssueVisualView({
   });
   return (
     <div className="min-h-0 flex-1 overflow-auto">
-      <div className="flex flex-wrap gap-3 p-3">
-        {mode === "calendar" ? (
-          <label className="text-caption">
-            {t(($) => $.cortex.date_field)}{" "}
-            <select
-              value={dateField.id}
-              onChange={(event) =>
-                update(source, { dateField: event.target.value })
-              }
-              className="rounded border bg-background p-1"
-            >
-              {fields
-                .filter((field) => field.kind === "date")
-                .map((field) => (
-                  <option key={field.id} value={field.id}>
-                    {field.label}
-                  </option>
-                ))}
-            </select>
-          </label>
-        ) : (
-          <>
-            <label>
-              {t(($) => $.cortex.cover)}{" "}
-              <select
-                className="rounded border bg-background p-1"
-                value={prefs.coverField}
-                onChange={(event) =>
-                  update(source, { coverField: event.target.value })
-                }
-              >
-                <option value="">—</option>
-                {fields
-                  .filter((field) => field.kind === "url")
-                  .map((field) => (
-                    <option key={field.id} value={field.id}>
-                      {field.label}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {fields.map((field) => (
-              <label key={field.id} className="text-caption">
-                <input
-                  type="checkbox"
-                  checked={prefs.displayedFields.includes(field.id)}
-                  onChange={(event) =>
-                    update(source, {
-                      displayedFields: event.target.checked
-                        ? [...prefs.displayedFields, field.id]
-                        : prefs.displayedFields.filter((id) => id !== field.id),
-                    })
-                  }
-                />{" "}
-                {field.label}
-              </label>
-            ))}
-          </>
-        )}
-      </div>
       {(pages.error || mutation.error) && (
         <p role="alert">{(pages.error || mutation.error)?.message}</p>
       )}
@@ -214,7 +161,19 @@ export function IssueVisualView({
           onPeriodChange={(period) => update(source, { period })}
           onMoveDate={(row, value) => mutation.mutate({ row, value })}
           onOpen={(row) => nav.push(paths.issueDetail(row.identifier))}
+          locale={locale}
           capabilities={capabilities}
+          toolbar={
+            <DataViewChoiceChip
+              icon={<CalendarDays className="size-3.5" />}
+              label={t(($) => $.cortex.date_field)}
+              options={fields
+                .filter((field) => field.kind === "date")
+                .map((field) => ({ id: field.id, label: field.label }))}
+              value={dateField.id}
+              onChange={(value) => update(source, { dateField: value })}
+            />
+          }
           labels={{
             month: t(($) => $.cortex.month),
             week: t(($) => $.cortex.week),
@@ -222,6 +181,7 @@ export function IssueVisualView({
             next: t(($) => $.cortex.next),
             date: t(($) => $.cortex.date_field),
             unscheduled: t(($) => $.cortex.unscheduled),
+            today: t(($) => $.cortex_table.today),
           }}
         />
       ) : (
@@ -240,9 +200,30 @@ export function IssueVisualView({
           }}
           onOpen={(row) => nav.push(paths.issueDetail(row.identifier))}
           capabilities={capabilities}
+          toolbar={
+            <>
+              <DataViewChoiceChip
+                icon={<Image className="size-3.5" />}
+                label={t(($) => $.cortex.cover)}
+                options={fields
+                  .filter((field) => field.kind === "url")
+                  .map((field) => ({ id: field.id, label: field.label }))}
+                value={prefs.coverField}
+                emptyLabel={t(($) => $.cortex_table.no_cover)}
+                onChange={(value) => update(source, { coverField: value })}
+              />
+              <DataViewFieldToggles
+                icon={<Eye className="size-3.5" />}
+                label={t(($) => $.cortex_table.card_fields)}
+                options={fields.map((field) => ({ id: field.id, label: field.label }))}
+                selected={prefs.displayedFields}
+                onChange={(displayedFields) => update(source, { displayedFields })}
+              />
+            </>
+          }
         />
       )}
-      <div className="p-3 text-caption" role="status">
+      <div className="px-4 pb-3 text-caption text-muted-foreground" role="status">
         {rows.length} / {pages.data?.pages[0]?.total ?? "…"}{" "}
         {pages.hasNextPage && (
           <Button

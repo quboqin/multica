@@ -128,8 +128,8 @@ export const SlashCommandList = forwardRef<
   // Built-in commands carry an i18n key so the visible description stays
   // localized; skills carry a raw description string from their config.
   const describe = (item: SlashCommandItem): string | undefined =>
-    item.descriptionKey === "note"
-      ? t(($) => $.slash_command.commands.note)
+    item.descriptionKey
+      ? t(($) => $.slash_command.commands[item.descriptionKey!])
       : item.description;
 
   return (
@@ -405,7 +405,19 @@ export function createBuiltinCommandSuggestion(
         return;
       }
 
-      if(props.id === "view") { editor.chain().focus().insertContentAt(range,{type:"savedViewEmbed",attrs:{viewId:""}}).run(); return; }
+      // `/view` drops an empty embed whose node view opens the saved-view
+      // picker immediately (autoOpen is never serialized).
+      if (props.id === "view") {
+        editor
+          .chain()
+          .focus()
+          .insertContentAt(range, {
+            type: "savedViewEmbed",
+            attrs: { viewId: "", autoOpen: true },
+          })
+          .run();
+        return;
+      }
 
       // Insert the plain-text prefix (e.g. "/note ") rather than a rich node,
       // so a menu selection and a hand-typed command are byte-identical and the

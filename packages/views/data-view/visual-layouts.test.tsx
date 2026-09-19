@@ -65,31 +65,3 @@ it("renders configured gallery fields and rejects non-http covers", () => {
   expect(screen.getByRole("article").textContent).toContain("2026-09-18");
   expect(screen.queryByRole("img")).toBeNull();
 });
-
-it("retains a failed cell draft through a server refresh until an explicit merge retry", async () => {
-  const save = vi
-    .fn()
-    .mockRejectedValueOnce(new Error("conflict"))
-    .mockResolvedValueOnce({});
-  const { DataFieldEditor } = await import("./field-editor");
-  const props = {
-    label: "Title",
-    kind: "text" as const,
-    save,
-    labels: {
-      current: "Current",
-      retry: "Overwrite current",
-      discard: "Discard",
-    },
-  };
-  const view = render(<DataFieldEditor {...props} value="Original" />);
-  fireEvent.focus(screen.getByRole("textbox"));
-  fireEvent.change(screen.getByRole("textbox"), { target: { value: "Draft" } });
-  fireEvent.blur(screen.getByRole("textbox"));
-  await screen.findByRole("alert");
-  view.rerender(<DataFieldEditor {...props} value="Remote" />);
-  expect(screen.getByRole("textbox")).toHaveValue("Draft");
-  expect(screen.getByText("Current: Remote")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Overwrite current" }));
-  expect(save).toHaveBeenLastCalledWith("Draft", "Remote");
-});

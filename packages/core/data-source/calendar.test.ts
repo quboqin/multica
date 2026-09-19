@@ -29,4 +29,19 @@ it("restores supported view options and sanitizes malformed saved display fields
   expect(
     parseDataViewPreferences({ layout: "future", displayedFields: null }),
   ).toMatchObject({ layout: "table", displayedFields: [] });
+  expect(
+    parseDataViewPreferences({
+      layout: "board",
+      hiddenFields: ["a", 1],
+      sortBy: "f",
+      sortDir: "desc",
+      filters: [{ field: "f", op: "exact", value: "x" }, { field: 3 }, null],
+    }),
+  ).toMatchObject({
+    layout: "board",
+    hiddenFields: ["a"],
+    sortBy: "f",
+    sortDir: "desc",
+    filters: [{ field: "f", op: "exact", value: "x" }],
+  });
 });

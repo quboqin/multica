@@ -16,6 +16,8 @@ export {
   parseDataViewPreferences,
   useDataViewPreferences,
   type DataViewPreferences,
+  type DataViewLayout,
+  type DataViewFilter,
 } from "./preferences";
 
 export { refreshDataSource } from "./query";

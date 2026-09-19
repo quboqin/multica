@@ -41,13 +41,31 @@ export interface DocumentDraft {
   version: number;
   attachmentIds: string[];
 }
+export type DocumentTreeFilter = "all" | "favorites" | "recent";
+/** Per-workspace navigator layout: tree filter, project scope, folded pages. */
+export interface DocumentNavigatorPreferences {
+  filter: DocumentTreeFilter;
+  projectId: string;
+  collapsed: string[];
+}
+export const defaultNavigatorPreferences: DocumentNavigatorPreferences = {
+  filter: "all",
+  projectId: "",
+  collapsed: [],
+};
 interface DocumentPreferences {
   drafts: Record<string, DocumentDraft>;
   favorites: Record<string, string[]>;
   recent: Record<string, string[]>;
+  navigator: Record<string, DocumentNavigatorPreferences>;
   setDraft: (key: string, draft: DocumentDraft | null) => void;
   toggleFavorite: (wsId: string, id: string) => void;
   visit: (wsId: string, id: string) => void;
+  setNavigator: (
+    wsId: string,
+    patch: Partial<DocumentNavigatorPreferences>,
+  ) => void;
+  toggleCollapsed: (wsId: string, id: string) => void;
 }
 export const useDocumentPreferences = create<DocumentPreferences>()(
   persist(
@@ -55,6 +73,7 @@ export const useDocumentPreferences = create<DocumentPreferences>()(
       drafts: {},
       favorites: {},
       recent: {},
+      navigator: {},
       setDraft: (key, draft) =>
         set((state) => {
           const drafts = { ...state.drafts };
@@ -84,6 +103,33 @@ export const useDocumentPreferences = create<DocumentPreferences>()(
             ].slice(0, 30),
           },
         })),
+      setNavigator: (wsId, patch) =>
+        set((state) => ({
+          navigator: {
+            ...state.navigator,
+            [wsId]: {
+              ...defaultNavigatorPreferences,
+              ...state.navigator[wsId],
+              ...patch,
+            },
+          },
+        })),
+      toggleCollapsed: (wsId, id) =>
+        set((state) => {
+          const current =
+            state.navigator[wsId] ?? defaultNavigatorPreferences;
+          return {
+            navigator: {
+              ...state.navigator,
+              [wsId]: {
+                ...current,
+                collapsed: current.collapsed.includes(id)
+                  ? current.collapsed.filter((value) => value !== id)
+                  : [...current.collapsed, id],
+              },
+            },
+          };
+        }),
     }),
     {
       name: "cortex-document-preferences",

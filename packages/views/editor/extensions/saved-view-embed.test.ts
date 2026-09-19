@@ -32,3 +32,18 @@ it("round-trips embed references with Mermaid, math, and attachment links withou
   expect(editor.getJSON()).toEqual(json);
   editor.destroy();
 });
+
+it("never serializes the picker-only autoOpen flag", () => {
+  const editor = new Editor({ extensions: [StarterKit, SavedViewEmbed, Markdown] });
+  editor.commands.setContent([
+    { type: "savedViewEmbed", attrs: { viewId: "", autoOpen: true } },
+  ]);
+  expect(editor.getMarkdown().trim()).toBe(":::multica-view pending");
+  expect(editor.getHTML()).not.toContain("autoopen");
+  editor.commands.setContent(editor.getMarkdown(), { contentType: "markdown" });
+  expect(editor.getJSON().content?.[0]?.attrs).toEqual({
+    viewId: "",
+    autoOpen: false,
+  });
+  editor.destroy();
+});

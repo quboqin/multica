@@ -1,22 +1,21 @@
 "use client";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import type { ColumnDef, ColumnSizingState } from "@tanstack/react-table";
+import { Link2, Plus, Save, Search } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import {
   collectionDetailOptions,
-  collectionKeys,
   collectionRecordsOptions,
-  collectionRecordOptions,
   type CollectionField,
-  type CollectionRecord,
   type CollectionQuery,
+  type CollectionRecord,
 } from "@multica/core/collections";
 import {
   calendarDate,
@@ -26,747 +25,789 @@ import {
   parseDataViewPreferences,
   useDataViewPreferences,
   type DataSourceField,
-  type DataSourceFieldKind,
+  type DataViewFilter,
+  type DataViewPreferences,
 } from "@multica/core/data-source";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { issueViewKeys } from "@multica/core/issue-views/queries";
+import { useWorkspacePaths } from "@multica/core/paths";
+import { projectListOptions } from "@multica/core/projects/queries";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import type { IssueView } from "@multica/core/api/schemas";
-import { ISSUE_PROPERTY_TYPES } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import {
-  DataFieldEditor,
-  DataViewCalendar,
-  DataViewGallery,
-  DataViewTable,
-  useFrozenRows,
-} from "../data-view";
-import { useT } from "../i18n";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@multica/ui/components/ui/popover";
+import { Switch } from "@multica/ui/components/ui/switch";
+import { copyText } from "@multica/ui/lib/clipboard";
+import { cn } from "@multica/ui/lib/utils";
+import { CortexNavigator } from "../cortex";
+import { DataViewCalendar, DataViewGallery } from "../data-view";
+import { AppLink, useNavigation } from "../navigation";
+import { useLocale, useT } from "../i18n";
+import { CollectionBoard } from "./collection-board";
+import { CollectionFieldDialog } from "./collection-field-dialog";
+import { CollectionValue } from "./collection-cell";
+import { fieldText, recordValue } from "./collection-fields";
+import { FieldQuota } from "./collection-field-menu";
+import { CollectionRecordPanel } from "./collection-record-panel";
+import { CollectionTable, type CollectionTableActions } from "./collection-table";
+import { CollectionTrash } from "./collection-trash";
+import {
+  DateFieldChip,
+  DisplayPopover,
+  FilterPopover,
+  GroupPopover,
+  LayoutSwitch,
+  SortPopover,
+  filtersToProperties,
+} from "./collection-view-bar";
+import { useCollectionCommands } from "./use-collection-commands";
 
-const capabilities = {
-  layouts: ["table", "calendar", "gallery"],
+const visualCapabilities = {
+  layouts: ["calendar", "gallery"],
   editing: "adapter",
   sideEffects: "none",
-  sorting: "none",
+  sorting: "adapter",
 } as const;
+
+/** Reads a saved view, including filters stored by earlier builds in its query. */
+export function savedViewPreferences(view: IssueView): DataViewPreferences {
+  const prefs = parseDataViewPreferences(view.display);
+  if (prefs.filters.length === 0 && view.query.properties && typeof view.query.properties === "object") {
+    const legacy: DataViewFilter[] = [];
+    for (const [field, values] of Object.entries(view.query.properties)) {
+      const first: unknown = Array.isArray(values) ? values[0] : undefined;
+      if (first === undefined) continue;
+      if (first && typeof first === "object" && "op" in first)
+        legacy.push({
+          field,
+          op: String((first as { op: unknown }).op),
+          value: (first as { value?: unknown }).value ?? "",
+        });
+      else legacy.push({ field, op: "exact", value: Array.isArray(first) ? first[0] : first });
+    }
+    prefs.filters = legacy;
+  }
+  if (!prefs.sortBy && typeof view.query.sort_by === "string") {
+    prefs.sortBy = view.query.sort_by;
+    prefs.sortDir = view.query.sort_dir === "desc" ? "desc" : "asc";
+  }
+  return prefs;
+}
+
 export function CollectionDetailPage({
   id,
   savedView,
 }: {
   id: string;
+  /** Renders one saved view without page chrome (document embeds). */
   savedView?: IssueView;
 }) {
+  const embedded = !!savedView;
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
+  const paths = useWorkspacePaths();
+  const navigation = useNavigation();
   const { t } = useT("issues");
-  const { t: tSettings } = useT("settings");
+  const locale = useLocale();
   const { data, error } = useQuery(collectionDetailOptions(wsId, id));
   const userId = useAuthStore((state) => state.user?.id);
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: projects = [] } = useQuery({
+    ...projectListOptions(wsId),
+    enabled: !embedded && !!wsId,
+  });
   const role = members.find((member) => member.user_id === userId)?.role;
-  const canManageFields =
+  const canManage =
     !!userId &&
-    (data?.collection.created_by === userId ||
-      role === "owner" ||
-      role === "admin");
-  const savedPreferences = useMemo(
-    () =>
-      savedView
-        ? parseDataViewPreferences(savedView.display)
-        : defaultDataViewPreferences,
-    [savedView],
-  );
-  const identity = useMemo(
+    (data?.collection.created_by === userId || role === "owner" || role === "admin");
+  const fieldsRef = useRef<CollectionField[]>([]);
+  fieldsRef.current = data?.fields ?? [];
+  const describeValue = useCallback((fieldId: string, value: unknown) => {
+    const field = fieldsRef.current.find((item) => item.id === fieldId);
+    return (field ? fieldText(field, value) : "") || "—";
+  }, []);
+  const commands = useCollectionCommands(wsId, id, describeValue);
+
+  const viewScope = useMemo(
     () => ({
-      workspaceId: wsId,
-      namespace: "collections",
-      sourceId: savedView?.id ?? id,
+      scope_type: (data?.collection.project_id ? "project" : "workspace") as
+        | "project"
+        | "workspace",
+      scope_id: data?.collection.project_id ?? null,
+      collection_id: id,
     }),
-    [wsId, id, savedView?.id],
+    [data?.collection.project_id, id],
   );
-  const source = dataSourceIdentityKey(identity);
-  const prefs = useDataViewPreferences(
-    (state) => state.bySource[source] ?? savedPreferences,
+  const views = useQuery({
+    queryKey: issueViewKeys.list(wsId, viewScope),
+    queryFn: () => api.listIssueViews(viewScope),
+    enabled: !!data && !embedded,
+  });
+  const [activeViewId, setActiveViewId] = useState<string | null>(null);
+  const activeView =
+    savedView ?? views.data?.find((view) => view.id === activeViewId) ?? null;
+  const baseline = useMemo(
+    () => (activeView ? savedViewPreferences(activeView) : defaultDataViewPreferences),
+    [activeView],
   );
-  const update = useDataViewPreferences((state) => state.update);
-  const [search, setSearch] = useState(
-    typeof savedView?.query.search === "string" ? savedView.query.search : "",
+  const source = dataSourceIdentityKey({
+    workspaceId: wsId,
+    namespace: "collections",
+    sourceId: activeView ? `${activeView.id}:${activeView.revision}` : id,
+  });
+  const stored = useDataViewPreferences((state) => state.bySource[source]);
+  const prefs = useMemo<DataViewPreferences>(
+    () => ({ ...baseline, ...stored }),
+    [baseline, stored],
   );
-  const [savedProperties, setSavedProperties] = useState<
-    CollectionQuery["properties"]
-  >(
-    savedView?.query.properties &&
-      typeof savedView.query.properties === "object"
-      ? Object.fromEntries(
-          Object.entries(savedView.query.properties).filter(([, value]) =>
-            Array.isArray(value),
-          ),
-        )
-      : undefined,
+  const updatePrefs = useDataViewPreferences((state) => state.update);
+  const update = useCallback(
+    (patch: Partial<DataViewPreferences>) =>
+      updatePrefs(source, { ...prefs, ...patch }),
+    [updatePrefs, source, prefs],
   );
-  const [title, setTitle] = useState("");
-  const [fieldName, setFieldName] = useState("");
-  const [fieldType, setFieldType] = useState("text");
-  const [options, setOptions] = useState("");
+  const dirty =
+    !!activeView && !!stored && JSON.stringify(prefs) !== JSON.stringify(baseline);
+
+  const [search, setSearch] = useState("");
+  useEffect(() => {
+    setSearch(typeof activeView?.query.search === "string" ? activeView.query.search : "");
+  }, [activeView]);
   const [anchor, setAnchor] = useState(() => calendarDate(new Date()));
-  const [filterField, setFilterField] = useState("");
-  const [filterOp, setFilterOp] = useState("exact");
-  const [filterValue, setFilterValue] = useState("");
-  const fields = data?.fields ?? [];
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [dialogField, setDialogField] = useState<CollectionField | null | undefined>(undefined);
+  const [selectedRecord, setSelectedRecord] = useState<string | null>(null);
+
+  const allFields = useMemo(
+    () => [...(data?.fields ?? [])].sort((a, b) => a.position - b.position),
+    [data?.fields],
+  );
+  const tableFields = allFields.filter((field) => !prefs.hiddenFields.includes(field.id));
+  const groupField = allFields.find(
+    (field) => field.id === prefs.groupBy && field.type === "select",
+  );
+  const boardGroup = groupField ?? allFields.find((field) => field.type === "select");
   const dateField =
-    fields.find(
-      (field) => field.id === prefs.dateField && field.type === "date",
-    ) ?? fields.find((field) => field.type === "date");
+    allFields.find((field) => field.id === prefs.dateField && field.type === "date") ??
+    allFields.find((field) => field.type === "date");
+  // Cards show a few fields until the view picks its own.
+  const displayedFields = prefs.displayedFields.length
+    ? prefs.displayedFields
+    : allFields
+        .filter((field) => field.id !== boardGroup?.id && field.type !== "url")
+        .slice(0, 3)
+        .map((field) => field.id);
+  const cardPrefs = { ...prefs, displayedFields };
+  const cardFields = allFields.filter(
+    (field) => displayedFields.includes(field.id) && field.id !== boardGroup?.id,
+  );
+  const accentField = allFields.find((field) => field.type === "select");
+
   const query: CollectionQuery = {
-    search,
-    properties: savedProperties,
-    group_by: prefs.layout === "table" ? prefs.groupBy || undefined : undefined,
+    ...(search ? { search } : {}),
+    ...(filtersToProperties(prefs.filters, allFields)
+      ? { properties: filtersToProperties(prefs.filters, allFields) }
+      : {}),
+    ...(prefs.sortBy ? { sort_by: prefs.sortBy, sort_dir: prefs.sortDir } : {}),
   };
-  if (filterField && filterValue) {
-    const field = fields.find((field) => field.id === filterField);
-    query.properties = {
-      [filterField]: [
-        filterOp === "exact"
-          ? field?.type === "number"
-            ? Number(filterValue)
-            : field?.type === "checkbox"
-              ? filterValue === "true"
-              : filterValue
-          : { op: filterOp, value: filterValue },
-      ],
-    };
-  }
+  const visualQuery: CollectionQuery = { ...query };
   if (prefs.layout === "calendar" && dateField) {
     const days = calendarDays(anchor, prefs.period);
-    query.date_field = dateField.id;
-    query.date_start = days[0];
-    query.date_end = days[days.length - 1];
+    visualQuery.date_field = dateField.id;
+    visualQuery.date_start = days[0];
+    visualQuery.date_end = days[days.length - 1];
   }
-  const overview = useInfiniteQuery(collectionRecordsOptions(wsId, id, query));
-  const command = useMutation({
-    mutationFn: (fn: () => Promise<unknown>) => fn(),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: collectionKeys.all(wsId) }),
+  const visual = useInfiniteQuery({
+    ...collectionRecordsOptions(wsId, id, visualQuery),
+    enabled:
+      !!wsId && (prefs.layout === "gallery" || (prefs.layout === "calendar" && !!dateField)),
   });
-  const displayed = (row: CollectionRecord, field: CollectionField) => {
-    const value = row.fields[field.id];
-    if (field.type === "select")
-      return (
-        field.config.options.find((option) => option.id === value)?.name ??
-        value
+  const summary = useInfiniteQuery({
+    ...collectionRecordsOptions(wsId, id, query),
+    enabled: !!wsId && prefs.layout === "table",
+  });
+  const visualRows = visual.data?.pages.flatMap((page) => page.records) ?? [];
+
+  const saveView = useMutation({
+    mutationFn: async ({ name, shared }: { name: string; shared: boolean }) =>
+      api.createIssueView({
+        name,
+        scope_type: viewScope.scope_type,
+        scope_id: viewScope.scope_id ?? undefined,
+        collection_id: id,
+        visibility: shared ? "workspace" : "private",
+        definition_version: 1,
+        query: { ...query },
+        display: { ...prefs },
+      }),
+    onSuccess: async (view) => {
+      await qc.invalidateQueries({ queryKey: issueViewKeys.all(wsId) });
+      if (view) setActiveViewId(view.id);
+    },
+    onError: (cause) => toast.error(cause.message),
+  });
+  const updateView = useMutation({
+    mutationFn: (view: IssueView) =>
+      api.updateIssueView(view.id, {
+        query: { ...query },
+        display: { ...prefs },
+        expected_revision: view.revision,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: issueViewKeys.all(wsId) }),
+    onError: (cause) => toast.error(cause.message),
+  });
+
+  const reorder = useCallback(
+    (activeId: string, overId: string) => {
+      const from = allFields.findIndex((field) => field.id === activeId);
+      const to = allFields.findIndex((field) => field.id === overId);
+      if (from < 0 || to < 0) return;
+      const order = allFields.map((field) => field.id);
+      order.splice(from, 1);
+      order.splice(to, 0, activeId);
+      const byId = new Map(allFields.map((field) => [field.id, field]));
+      const previous = byId.get(order[to - 1] ?? "");
+      const next = byId.get(order[to + 1] ?? "");
+      const position =
+        previous && next
+          ? (previous.position + next.position) / 2
+          : previous
+            ? previous.position + 1
+            : next
+              ? next.position - 1
+              : 0;
+      commands.updateField.mutate(
+        { fieldId: activeId, patch: { position } },
+        { onError: (cause) => toast.error(cause.message) },
       );
-    return value;
-  };
-  const galleryFields: DataSourceField<CollectionRecord>[] = fields
-    .filter((field) => prefs.displayedFields.includes(field.id))
+    },
+    [allFields, commands.updateField],
+  );
+  const tableActions = useMemo<CollectionTableActions>(
+    () => ({
+      canManage,
+      fieldCount: allFields.length,
+      sortBy: prefs.sortBy,
+      sortDir: prefs.sortDir,
+      onSort: (sortBy, sortDir) => update({ sortBy, sortDir }),
+      onGroup: (groupBy) => update({ groupBy }),
+      onFilter: (fieldId) => {
+        const field = allFields.find((item) => item.id === fieldId);
+        if (field && !prefs.filters.some((filter) => filter.field === fieldId))
+          update({
+            filters: [
+              ...prefs.filters,
+              { field: fieldId, op: field.type === "text" || field.type === "url" ? "contains" : "exact", value: "" },
+            ],
+          });
+        setFilterOpen(true);
+      },
+      onHide: (fieldId) =>
+        update({ hiddenFields: [...new Set([...prefs.hiddenFields, fieldId])] }),
+      onEditField: (field) => setDialogField(field),
+      onArchiveField: (field) =>
+        commands.updateField.mutate(
+          { fieldId: field.id, patch: { archived: true } },
+          {
+            onSuccess: () => toast.success(t(($) => $.cortex_table.field_archived, { name: field.name })),
+            onError: (cause) => toast.error(cause.message),
+          },
+        ),
+      onAddField: () => setDialogField(null),
+      onReorderField: reorder,
+      onOpenRecord: setSelectedRecord,
+    }),
+    [canManage, allFields, prefs, update, commands.updateField, reorder, t],
+  );
+
+  const openRow = (row: CollectionRecord) => setSelectedRecord(row.id);
+  const galleryFields: DataSourceField<CollectionRecord>[] = allFields
+    .filter((field) => displayedFields.includes(field.id))
     .map((field) => ({
       id: field.id,
       label: field.name,
-      kind: field.type as DataSourceFieldKind,
-      value: (row) => displayed(row, field),
+      kind: field.type as DataSourceField<CollectionRecord>["kind"],
+      value: (row) => fieldText(field, row.fields[field.id]),
     }));
-  const rows = overview.data?.pages.flatMap((page) => page.records) ?? [];
-  const views = useQuery({
-    queryKey: ["issue-views", wsId, "collection", id],
-    queryFn: () =>
-      api.listIssueViews({
-        scope_type: data?.collection.project_id ? "project" : "workspace",
-        scope_id: data?.collection.project_id,
-        collection_id: id,
-      }),
-    enabled: !!data,
-  });
-  const [viewName, setViewName] = useState("");
-  return (
-    <main className="flex min-h-0 flex-1 flex-col">
-      <header className="space-y-3 border-b p-3">
-        <h1 className="text-body font-medium">
-          {data?.collection.name ?? t(($) => $.cortex.loading)}
-        </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          {(["table", "calendar", "gallery"] as const).map((layout) => (
-            <Button
-              key={layout}
-              variant={prefs.layout === layout ? "secondary" : "outline"}
-              size="sm"
-              onClick={() => update(source, { layout })}
-            >
-              {layout === "table"
-                ? t(($) => $.view.table)
-                : t(($) => $.cortex[layout])}
-            </Button>
-          ))}
-          <Input
-            className="max-w-60"
-            aria-label={t(($) => $.cortex.search_records)}
-            placeholder={t(($) => $.cortex.search_records)}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <select
-            aria-label={t(($) => $.cortex.group_by)}
-            value={prefs.groupBy}
-            onChange={(event) =>
-              update(source, { groupBy: event.target.value })
-            }
-            className="rounded border bg-background p-1"
-          >
-            <option value="">{t(($) => $.cortex.no_group)}</option>
-            {fields
-              .filter((field) => field.type === "select")
-              .map((field) => (
-                <option value={field.id} key={field.id}>
-                  {field.name}
-                </option>
-              ))}
-          </select>
-          <select
-            aria-label={t(($) => $.cortex.field_name)}
-            value={filterField}
-            onChange={(event) => {
-              setSavedProperties(undefined);
-              setFilterField(event.target.value);
-            }}
-            className="rounded border bg-background p-1"
-          >
-            <option value="">—</option>
-            {fields.map((field) => (
-              <option key={field.id} value={field.id}>
-                {field.name}
-              </option>
-            ))}
-          </select>
-          {filterField && (
-            <>
-              <select
-                aria-label={t(($) => $.cortex.filter_operator)}
-                className="rounded border bg-background p-1"
-                value={filterOp}
-                onChange={(event) => setFilterOp(event.target.value)}
-              >
-                {[
-                  "exact",
-                  "contains",
-                  "gt",
-                  "gte",
-                  "lt",
-                  "lte",
-                  "before",
-                  "after",
-                ].map((op) => (
-                  <option key={op}>{op}</option>
-                ))}
-              </select>
-              <Input
-                className="max-w-40"
-                aria-label={t(($) => $.cortex.filter_value)}
-                value={filterValue}
-                onChange={(event) => setFilterValue(event.target.value)}
-              />
-            </>
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Input
-            className="max-w-60"
-            aria-label={t(($) => $.cortex.record_title)}
-            placeholder={t(($) => $.cortex.record_title)}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-          />
-          <Button
-            size="sm"
-            disabled={command.isPending || !title.trim()}
-            onClick={() =>
-              command.mutate(async () => {
-                await api.createCollectionRecord(id, title);
-                setTitle("");
-              })
-            }
-          >
-            {t(($) => $.cortex.add_record)}
-          </Button>
-          {canManageFields && (
-            <>
-              <Input
-                className="max-w-40"
-                aria-label={t(($) => $.cortex.field_name)}
-                placeholder={t(($) => $.cortex.field_name)}
-                value={fieldName}
-                onChange={(event) => setFieldName(event.target.value)}
-              />
-              <select
-                className="rounded border bg-background p-1"
-                aria-label={t(($) => $.cortex.field_type)}
-                value={fieldType}
-                onChange={(event) => setFieldType(event.target.value)}
-              >
-                {ISSUE_PROPERTY_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {tSettings(($) => $.properties.types[type])}
-                  </option>
-                ))}
-              </select>
-              {fieldType.includes("select") && (
-                <Input
-                  className="max-w-60"
-                  aria-label={t(($) => $.cortex.options)}
-                  placeholder={t(($) => $.cortex.options)}
-                  value={options}
-                  onChange={(event) => setOptions(event.target.value)}
+  const project = projects.find((item) => item.id === data?.collection.project_id);
+  const total = summary.data?.pages[0]?.total;
+  const loadedCount = summary.data?.pages.reduce((sum, page) => sum + page.records.length, 0) ?? 0;
+
+  const content = (() => {
+    if (!data) return null;
+    if (prefs.layout === "board") {
+      if (!boardGroup)
+        return (
+          <EmptyHint>
+            {t(($) => $.cortex_table.board_needs_select)}
+          </EmptyHint>
+        );
+      return (
+        <CollectionBoard
+          collectionId={id}
+          groupField={boardGroup}
+          cardFields={cardFields}
+          query={query}
+          commands={commands}
+          onOpenRecord={setSelectedRecord}
+        />
+      );
+    }
+    if (prefs.layout === "calendar") {
+      if (!dateField)
+        return <EmptyHint>{t(($) => $.cortex_table.calendar_needs_date)}</EmptyHint>;
+      return (
+        <DataViewCalendar
+          rows={visualRows}
+          rowId={(row) => row.id}
+          title={(row) => row.title}
+          date={(row) => {
+            const value = row.fields[dateField.id];
+            return typeof value === "string" ? value : null;
+          }}
+          anchor={anchor}
+          period={prefs.period}
+          onAnchorChange={setAnchor}
+          onPeriodChange={(period) => update({ period })}
+          onMoveDate={(row, value) => void commands.setField(row, dateField.id, value)}
+          onOpen={openRow}
+          locale={locale}
+          capabilities={visualCapabilities}
+          color={(row) =>
+            accentField?.config.options.find(
+              (option) => option.id === row.fields[accentField.id],
+            )?.color
+          }
+          toolbar={
+            <DateFieldChip
+              fields={allFields}
+              value={dateField.id}
+              onChange={(fieldId) => update({ dateField: fieldId })}
+            />
+          }
+          labels={{
+            month: t(($) => $.cortex.month),
+            week: t(($) => $.cortex.week),
+            previous: t(($) => $.cortex.previous),
+            next: t(($) => $.cortex.next),
+            date: t(($) => $.cortex.date_field),
+            unscheduled: t(($) => $.cortex.unscheduled),
+            today: t(($) => $.cortex_table.today),
+          }}
+        />
+      );
+    }
+    if (prefs.layout === "gallery")
+      return (
+        <DataViewGallery
+          rows={visualRows}
+          rowId={(row) => row.id}
+          title={(row) => row.title}
+          fields={galleryFields}
+          renderField={(item, row) => {
+            const field = allFields.find((candidate) => candidate.id === item.id);
+            return field ? (
+              <CollectionValue field={field} value={recordValue(row, field)} compact />
+            ) : null;
+          }}
+          capabilities={visualCapabilities}
+          onOpen={openRow}
+          cover={(row) => {
+            const value = row.fields[prefs.coverField];
+            return typeof value === "string" ? value : null;
+          }}
+        />
+      );
+    if (groupField)
+      return (
+        <div className="min-h-0 flex-1 overflow-auto">
+          {[...groupField.config.options.map((option) => option.id), "__none__"].map((key) => {
+            const option = groupField.config.options.find((item) => item.id === key);
+            return (
+              <section key={key} aria-label={option?.name ?? t(($) => $.cortex_table.no_value)}>
+                <h2 className="sticky left-0 flex items-center gap-2 px-4 pb-1 pt-4 text-label font-medium">
+                  <span
+                    className={cn("size-2.5 rounded-full", !option && "border border-muted-foreground")}
+                    style={option?.color ? { backgroundColor: option.color } : undefined}
+                  />
+                  {option?.name ?? t(($) => $.cortex_table.no_value)}
+                  <span className="text-caption font-normal text-muted-foreground tabular-nums">
+                    {summary.data?.pages[0]?.groups.find((group) => group.key === key)?.count ?? 0}
+                  </span>
+                </h2>
+                <CollectionTable
+                  collectionId={id}
+                  fields={tableFields}
+                  query={{ ...query, group_by: groupField.id, group_key: key }}
+                  commands={commands}
+                  actions={tableActions}
+                  selectedRecordId={selectedRecord}
+                  newRecordFields={option ? { [groupField.id]: option.id } : undefined}
                 />
-              )}
-              <Button
-                size="sm"
-                disabled={!fieldName.trim() || command.isPending}
-                onClick={() =>
-                  command.mutate(async () => {
-                    await api.createCollectionField(id, {
-                      name: fieldName,
-                      type: fieldType,
-                      config: fieldType.includes("select")
-                        ? {
-                            options: options
-                              .split(/[,，]/)
-                              .filter(Boolean)
-                              .map((name) => ({
-                                name: name.trim(),
-                                color: "#6b7280",
-                              })),
-                          }
-                        : undefined,
-                    });
-                    setFieldName("");
-                  })
-                }
-              >
-                {t(($) => $.cortex.create_field)}
-              </Button>
-            </>
-          )}
+              </section>
+            );
+          })}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            className="max-w-40"
-            aria-label={t(($) => $.cortex.view_name)}
-            placeholder={t(($) => $.cortex.view_name)}
-            value={viewName}
-            onChange={(event) => setViewName(event.target.value)}
-          />
-          <Button
-            size="sm"
-            disabled={!viewName.trim() || command.isPending}
-            onClick={() =>
-              command.mutate(async () => {
-                await api.createIssueView({
-                  name: viewName,
-                  scope_type: data?.collection.project_id
-                    ? "project"
-                    : "workspace",
-                  scope_id: data?.collection.project_id,
-                  collection_id: id,
-                  visibility: "private",
-                  definition_version: 1,
-                  query: { ...query },
-                  display: { ...prefs },
-                });
-                setViewName("");
-                await views.refetch();
-              })
-            }
-          >
-            {t(($) => $.cortex.save_view)}
-          </Button>
+      );
+    return (
+      <CollectionTable
+        collectionId={id}
+        fields={tableFields}
+        query={query}
+        commands={commands}
+        actions={tableActions}
+        selectedRecordId={selectedRecord}
+      />
+    );
+  })();
+
+  const viewBar = (
+    <div className="flex flex-wrap items-center gap-1 border-b px-4 py-1.5">
+      {!embedded && (
+        <div role="tablist" aria-label={t(($) => $.cortex_table.views)} className="flex items-center gap-0.5">
+          <ViewTab active={!activeView} onClick={() => setActiveViewId(null)}>
+            {t(($) => $.cortex_table.all_records)}
+          </ViewTab>
           {views.data?.map((view) => (
-            <Button
-              size="sm"
-              variant="ghost"
-              key={view.id}
-              onClick={() => {
-                const display = view.display;
-                if (
-                  display.layout === "table" ||
-                  display.layout === "calendar" ||
-                  display.layout === "gallery"
-                )
-                  update(source, {
-                    layout: display.layout,
-                    period: display.period === "week" ? "week" : "month",
-                    dateField:
-                      typeof display.dateField === "string"
-                        ? display.dateField
-                        : "",
-                    coverField:
-                      typeof display.coverField === "string"
-                        ? display.coverField
-                        : "",
-                    displayedFields: Array.isArray(display.displayedFields)
-                      ? display.displayedFields.filter(
-                          (v): v is string => typeof v === "string",
-                        )
-                      : [],
-                    groupBy:
-                      typeof display.groupBy === "string"
-                        ? display.groupBy
-                        : "",
-                  });
-                setSavedProperties(undefined);
-                const filters = view.query.properties;
-                const entry =
-                  filters && typeof filters === "object"
-                    ? Object.entries(filters)[0]
-                    : undefined;
-                const value: unknown =
-                  entry && Array.isArray(entry[1]) ? entry[1][0] : undefined;
-                setFilterField(entry?.[0] ?? "");
-                setFilterOp(
-                  value && typeof value === "object" && "op" in value
-                    ? String(value.op)
-                    : "exact",
-                );
-                setFilterValue(
-                  value && typeof value === "object" && "value" in value
-                    ? String(value.value)
-                    : value == null
-                      ? ""
-                      : String(value),
-                );
-                setSearch(
-                  typeof view.query.search === "string"
-                    ? view.query.search
-                    : "",
-                );
-              }}
-            >
+            <ViewTab key={view.id} active={activeView?.id === view.id} onClick={() => setActiveViewId(view.id)}>
               {view.name}
-            </Button>
+            </ViewTab>
           ))}
+          <SaveViewPopover
+            pending={saveView.isPending}
+            onSave={(name, shared) => saveView.mutateAsync({ name, shared })}
+          />
         </div>
-        {prefs.layout === "calendar" && (
-          <label>
-            {t(($) => $.cortex.date_field)}{" "}
-            <select
-              className="rounded border bg-background p-1"
-              value={dateField?.id ?? ""}
-              onChange={(event) =>
-                update(source, { dateField: event.target.value })
+      )}
+      {!embedded && <span className="mx-1.5 h-4 w-px bg-border" aria-hidden />}
+      <LayoutSwitch layout={prefs.layout} onChange={(layout) => update({ layout })} />
+      <FilterPopover
+        fields={allFields}
+        filters={prefs.filters}
+        onChange={(filters) => update({ filters })}
+        open={filterOpen}
+        onOpenChange={setFilterOpen}
+      />
+      {(prefs.layout === "table" || prefs.layout === "board") && (
+        <GroupPopover
+          fields={allFields}
+          groupBy={prefs.layout === "board" ? (boardGroup?.id ?? "") : prefs.groupBy}
+          onChange={(groupBy) => update({ groupBy })}
+        />
+      )}
+      <SortPopover
+        fields={allFields}
+        sortBy={prefs.sortBy}
+        sortDir={prefs.sortDir}
+        onChange={(sortBy, sortDir) => update({ sortBy, sortDir })}
+      />
+      {prefs.layout !== "calendar" && (
+        <DisplayPopover layout={prefs.layout} fields={allFields} prefs={cardPrefs} onChange={update} />
+      )}
+      <div className="ml-auto flex items-center gap-1.5">
+        {dirty && activeView && (
+          <>
+            <Button variant="ghost" size="xs" onClick={() => updatePrefs(source, baseline)}>
+              {t(($) => $.cortex_table.reset_view)}
+            </Button>
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={updateView.isPending}
+              onClick={() =>
+                updateView.mutate(activeView, {
+                  onSuccess: () => updatePrefs(source, baseline),
+                })
               }
             >
-              <option value="">—</option>
-              {fields
-                .filter((field) => field.type === "date")
-                .map((field) => (
-                  <option key={field.id} value={field.id}>
-                    {field.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-        )}
-        {prefs.layout === "gallery" && (
-          <div className="flex flex-wrap gap-3">
-            <label>
-              {t(($) => $.cortex.cover)}{" "}
-              <select
-                className="rounded border bg-background p-1"
-                value={prefs.coverField}
-                onChange={(event) =>
-                  update(source, { coverField: event.target.value })
-                }
-              >
-                <option value="">—</option>
-                {fields
-                  .filter((field) => field.type === "url")
-                  .map((field) => (
-                    <option key={field.id} value={field.id}>
-                      {field.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            {fields.map((field) => (
-              <label key={field.id}>
-                <input
-                  type="checkbox"
-                  checked={prefs.displayedFields.includes(field.id)}
-                  onChange={(event) =>
-                    update(source, {
-                      displayedFields: event.target.checked
-                        ? [...prefs.displayedFields, field.id]
-                        : prefs.displayedFields.filter((id) => id !== field.id),
-                    })
-                  }
-                />{" "}
-                {field.name}
-              </label>
-            ))}
-          </div>
-        )}
-        {(error || overview.error || command.error) && (
-          <p role="alert">
-            {(error || overview.error || command.error)?.message}
-          </p>
-        )}
-      </header>
-      <div className="min-h-0 flex-1 overflow-auto">
-        {prefs.layout === "table" ? (
-          prefs.groupBy ? (
-            [
-              ...(fields
-                .find((field) => field.id === prefs.groupBy)
-                ?.config.options.map((option) => option.id) ?? []),
-              "__none__",
-            ]
-              .map((key) => ({
-                key,
-                count:
-                  overview.data?.pages[0]?.groups.find(
-                    (group) => group.key === key,
-                  )?.count ?? 0,
-              }))
-              .map((group) => (
-                <section key={group.key}>
-                  <h2 className="px-3 py-2 text-body-sm font-medium">
-                    {fields
-                      .find((field) => field.id === prefs.groupBy)
-                      ?.config.options.find((option) => option.id === group.key)
-                      ?.name ?? "—"}{" "}
-                    · {group.count}
-                  </h2>
-                  <RecordTable
-                    id={id}
-                    fields={fields}
-                    query={{ ...query, group_key: group.key }}
-                  />
-                </section>
-              ))
-          ) : (
-            <RecordTable id={id} fields={fields} query={query} />
-          )
-        ) : prefs.layout === "gallery" ? (
-          <DataViewGallery
-            rows={rows}
-            rowId={(row) => row.id}
-            title={(row) => row.title}
-            fields={galleryFields}
-            capabilities={capabilities}
-            cover={(row) => {
-              const value = row.fields[prefs.coverField];
-              return typeof value === "string" ? value : null;
-            }}
-          />
-        ) : dateField ? (
-          <DataViewCalendar
-            rows={rows}
-            rowId={(row) => row.id}
-            title={(row) => row.title}
-            date={(row) => {
-              const value = row.fields[dateField.id];
-              return typeof value === "string" ? value : null;
-            }}
-            anchor={anchor}
-            period={prefs.period}
-            onAnchorChange={setAnchor}
-            onPeriodChange={(period) => update(source, { period })}
-            onMoveDate={(row, value) =>
-              command.mutate(() =>
-                api.setCollectionRecordField(
-                  id,
-                  row.id,
-                  dateField.id,
-                  value,
-                  row.fields[dateField.id],
-                ),
-              )
-            }
-            capabilities={capabilities}
-            labels={{
-              month: t(($) => $.cortex.month),
-              week: t(($) => $.cortex.week),
-              previous: t(($) => $.cortex.previous),
-              next: t(($) => $.cortex.next),
-              date: t(($) => $.cortex.date_field),
-              unscheduled: t(($) => $.cortex.unscheduled),
-            }}
-          />
-        ) : (
-          <p className="p-4">
-            {t(($) => $.cortex.date_field)}: {t(($) => $.cortex.create_field)}
-          </p>
-        )}
-        {prefs.layout !== "table" && overview.hasNextPage && (
-          <Button
-            className="m-3"
-            variant="outline"
-            disabled={overview.isFetching}
-            onClick={() => void overview.fetchNextPage()}
-          >
-            {t(($) => $.cortex.load_more)}
-          </Button>
+              <Save />
+              {t(($) => $.cortex_table.update_view)}
+            </Button>
+          </>
         )}
       </div>
+    </div>
+  );
+
+  const main = (
+    <main
+      className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col",
+        embedded && "not-prose text-body",
+      )}
+    >
+      {!embedded && (
+        <header className="flex items-center gap-2 border-b px-4 py-2">
+          <nav aria-label={t(($) => $.cortex.breadcrumb)} className="flex min-w-0 flex-1 items-center gap-1.5 text-label">
+            <span className="text-muted-foreground">{t(($) => $.cortex_table.tables)}</span>
+            <span className="text-muted-foreground">/</span>
+            <CollectionName
+              name={data?.collection.name ?? ""}
+              editable={canManage}
+              onRename={(name) => commands.renameCollection.mutate(name)}
+            />
+            {project && (
+              <AppLink
+                href={paths.projectDetail(project.id)}
+                className="ml-1 truncate rounded-sm bg-muted px-1.5 py-px text-caption text-muted-foreground hover:text-foreground"
+              >
+                {t(($) => $.cortex_table.project_chip, { name: project.title })}
+              </AppLink>
+            )}
+          </nav>
+          <label className="relative mr-1 hidden items-center lg:flex">
+            <Search className="pointer-events-none absolute left-2 size-3.5 text-muted-foreground" />
+            <input
+              aria-label={t(($) => $.cortex.search_records)}
+              placeholder={t(($) => $.cortex.search_records)}
+              className="h-7 w-44 rounded-md border bg-transparent pl-7 pr-2 text-label outline-none focus:ring-2 focus:ring-ring/40"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              const url = navigation.getShareableUrl(paths.collectionDetail(id));
+              if (await copyText(url)) toast.success(t(($) => $.cortex_table.link_copied));
+              else toast.error(t(($) => $.cortex_table.link_copy_failed));
+            }}
+          >
+            <Link2 />
+            {t(($) => $.cortex_table.copy_reference)}
+          </Button>
+          <Button
+            size="sm"
+            disabled={commands.createRecord.isPending || !data}
+            onClick={() =>
+              void commands.createRecord
+                .mutateAsync({ title: "" })
+                .then((record) => setSelectedRecord(record.id))
+            }
+          >
+            <Plus />
+            {t(($) => $.cortex_table.new_row)}
+          </Button>
+        </header>
+      )}
+      {viewBar}
+      {(error || visual.error) && (
+        <p role="alert" className="px-4 py-2 text-caption text-destructive">
+          {(error || visual.error)?.message}
+        </p>
+      )}
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto">
+          {content}
+          {(prefs.layout === "calendar" || prefs.layout === "gallery") && visual.hasNextPage && (
+            <Button
+              className="m-4 self-start"
+              variant="outline"
+              size="sm"
+              disabled={visual.isFetching}
+              onClick={() => void visual.fetchNextPage()}
+            >
+              {t(($) => $.cortex.load_more)}
+            </Button>
+          )}
+        </div>
+        {selectedRecord && (
+          <CollectionRecordPanel
+            key={selectedRecord}
+            wsId={wsId}
+            collectionId={id}
+            recordId={selectedRecord}
+            fields={allFields}
+            commands={commands}
+            onClose={() => setSelectedRecord(null)}
+          />
+        )}
+      </div>
+      {!embedded && (
+        <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t py-1.5 pl-4 pr-16 text-caption text-muted-foreground">
+          {prefs.layout === "table" && total !== undefined && (
+            <span className="tabular-nums">
+              {t(($) => $.cortex_table.row_count, { count: total, loaded: loadedCount })}
+            </span>
+          )}
+          <Popover>
+            <PopoverTrigger
+              render={
+                <button type="button" className="rounded-sm px-1 hover:bg-accent hover:text-foreground" />
+              }
+            >
+              {t(($) => $.cortex_table.fields_used, { count: allFields.length, max: 50 })}
+            </PopoverTrigger>
+            <PopoverContent side="top" align="start" className="w-72 p-1">
+              <FieldQuota count={allFields.length} />
+              {canManage && (
+                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialogField(null)}>
+                  <Plus />
+                  {t(($) => $.cortex_table.new_field)}
+                </Button>
+              )}
+            </PopoverContent>
+          </Popover>
+          <span className="ml-auto" />
+          <CollectionTrash wsId={wsId} collectionId={id} commands={commands} />
+        </footer>
+      )}
+      <CollectionFieldDialog
+        open={dialogField !== undefined}
+        onOpenChange={(open) => !open && setDialogField(undefined)}
+        field={dialogField}
+        commands={commands}
+      />
     </main>
+  );
+
+  if (embedded) return main;
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1">
+      <div className="hidden md:flex">
+        <CortexNavigator activeCollectionId={id} />
+      </div>
+      {main}
+    </div>
   );
 }
 
-function RecordTable({
-  id,
-  fields,
-  query,
-}: {
-  id: string;
-  fields: CollectionField[];
-  query: CollectionQuery;
-}) {
-  const wsId = useWorkspaceId();
-  const qc = useQueryClient();
-  const { t } = useT("issues");
-  const pages = useInfiniteQuery(collectionRecordsOptions(wsId, id, query));
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const [editing, setEditing] = useState<string | null>(null);
-  const focused = useQuery(
-    collectionRecordOptions(wsId, id, editing?.split(":")[0] ?? null),
-  );
-  const [sizing, setSizing] = useState<ColumnSizingState>({ title: 260 });
-  const write = useCallback(
-    async (action: () => Promise<unknown>) => {
-      try {
-        return await action();
-      } finally {
-        await qc.invalidateQueries({ queryKey: collectionKeys.all(wsId) });
-      }
-    },
-    [qc, wsId],
-  );
-  const columns = useMemo<ColumnDef<CollectionRecord>[]>(
-    () => [
-      {
-        id: "title",
-        header: t(($) => $.cortex.record_title),
-        accessorKey: "title",
-        cell: ({ row }) => (
-          <DataFieldEditor
-            labels={{
-              current: t(($) => $.cortex.current_value),
-              retry: t(($) => $.cortex.retry_field),
-              discard: t(($) => $.cortex.discard_field),
-            }}
-            label={`${t(($) => $.cortex.record_title)}: ${row.original.title}`}
-            onEditingChange={(active) =>
-              setEditing(active ? `${row.original.id}:title` : null)
-            }
-            kind="text"
-            value={row.original.title}
-            save={(value, base) =>
-              write(() =>
-                api.updateCollectionRecord(
-                  id,
-                  row.original.id,
-                  String(value ?? ""),
-                  String(base ?? ""),
-                ),
-              )
-            }
-          />
-        ),
-      },
-      ...fields.map((field) => ({
-        id: field.id,
-        header: field.name,
-        accessorFn: (row: CollectionRecord) => row.fields[field.id],
-        cell: ({ row }: { row: { original: CollectionRecord } }) => (
-          <DataFieldEditor
-            labels={{
-              current: t(($) => $.cortex.current_value),
-              retry: t(($) => $.cortex.retry_field),
-              discard: t(($) => $.cortex.discard_field),
-            }}
-            label={`${field.name}: ${row.original.title}`}
-            onEditingChange={(active) =>
-              setEditing(active ? `${row.original.id}:${field.id}` : null)
-            }
-            kind={
-              ISSUE_PROPERTY_TYPES.includes(field.type as never)
-                ? (field.type as DataSourceFieldKind)
-                : "readonly"
-            }
-            value={row.original.fields[field.id]}
-            options={
-              field.type.includes("actor")
-                ? members.map((member) => ({
-                    id: `member:${member.user_id}`,
-                    label: member.name,
-                  }))
-                : field.config.options.map((option) => ({
-                    id: option.id,
-                    label: option.name,
-                  }))
-            }
-            save={(value, base) =>
-              write(() =>
-                api.setCollectionRecordField(
-                  id,
-                  row.original.id,
-                  field.id,
-                  value,
-                  base,
-                ),
-              )
-            }
-          />
-        ),
-      })),
-    ],
-    [fields, id, members, t, write],
-  );
-  const loaded = pages.data?.pages.flatMap((page) => page.records) ?? [];
-  const rows = useFrozenRows(
-    {
-      workspaceId: wsId,
-      namespace: "collection",
-      sourceId: `${id}:${query.group_key ?? ""}`,
-    },
-    loaded,
-    editing,
-    (snapshot) => {
-      const byId = new Map(loaded.map((row) => [row.id, row]));
-      if (focused.data) {
-        const visible = byId.get(focused.data.id);
-        if (!visible || visible.revision <= focused.data.revision)
-          byId.set(focused.data.id, focused.data);
-      }
-      return snapshot.map((row) => byId.get(row.id) ?? row);
-    },
-  );
+function EmptyHint({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-48">
-      <DataViewTable
-        sourceIdentity={{
-          workspaceId: wsId,
-          namespace: "collection",
-          sourceId: `${id}:${query.group_key ?? ""}`,
-        }}
-        rows={rows}
-        rowId={(row) => row.id}
-        columns={columns}
-        visibleColumnIds={["title", ...fields.map((field) => field.id)]}
-        columnSizing={sizing}
-        onColumnSizingChange={setSizing}
-        onReorderColumn={() => undefined}
-        capabilities={capabilities}
-      />
-      {pages.error && <p role="alert">{pages.error.message}</p>}
-      {pages.hasNextPage && (
-        <Button
-          className="m-3"
-          variant="outline"
-          disabled={pages.isFetching}
-          onClick={() => void pages.fetchNextPage()}
-        >
-          {t(($) => $.cortex.load_more)}
-        </Button>
-      )}
+    <div className="m-auto max-w-sm p-8 text-center text-label text-muted-foreground">
+      {children}
     </div>
+  );
+}
+
+function ViewTab({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "h-7 max-w-40 truncate rounded-md px-2.5 text-label text-muted-foreground hover:bg-accent hover:text-foreground",
+        active && "bg-accent font-medium text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SaveViewPopover({
+  pending,
+  onSave,
+}: {
+  pending: boolean;
+  onSave: (name: string, shared: boolean) => Promise<unknown>;
+}) {
+  const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [shared, setShared] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={
+          <Button variant="ghost" size="icon-xs" aria-label={t(($) => $.cortex.save_view)} />
+        }
+      >
+        <Plus />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 space-y-3 p-3">
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!name.trim()) return;
+            void onSave(name.trim(), shared).then(() => {
+              setName("");
+              setOpen(false);
+            });
+          }}
+        >
+          <Input
+            autoFocus
+            aria-label={t(($) => $.cortex.view_name)}
+            placeholder={t(($) => $.cortex.view_name)}
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
+          <label className="flex items-center justify-between gap-2 text-label">
+            {t(($) => $.cortex_table.share_view)}
+            <Switch checked={shared} onCheckedChange={setShared} />
+          </label>
+          <Button type="submit" size="sm" className="w-full" disabled={!name.trim() || pending}>
+            {t(($) => $.cortex.save_view)}
+          </Button>
+        </form>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function CollectionName({
+  name,
+  editable,
+  onRename,
+}: {
+  name: string;
+  editable: boolean;
+  onRename: (name: string) => void;
+}) {
+  const { t } = useT("issues");
+  const [draft, setDraft] = useState<string | null>(null);
+  if (draft !== null)
+    return (
+      <input
+        autoFocus
+        aria-label={t(($) => $.cortex_table.rename_table)}
+        className="min-w-0 rounded-xs bg-background px-1 font-medium outline-none ring-2 ring-ring/40"
+        value={draft}
+        maxLength={80}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (draft.trim() && draft.trim() !== name) onRename(draft.trim());
+          setDraft(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") setDraft(null);
+        }}
+      />
+    );
+  return (
+    <h1 className="min-w-0 truncate font-medium">
+      {editable ? (
+        <button
+          type="button"
+          className="rounded-xs px-1 hover:bg-accent"
+          aria-label={t(($) => $.cortex_table.rename_table)}
+          onClick={() => setDraft(name)}
+        >
+          {name}
+        </button>
+      ) : (
+        name
+      )}
+    </h1>
   );
 }
 
@@ -778,12 +819,8 @@ export function EmbeddedCollectionView({
   view: IssueView;
 }) {
   return (
-    <div className="flex h-[420px] min-h-0 overflow-auto">
-      <CollectionDetailPage
-        key={`${view.id}:${view.revision}`}
-        id={id}
-        savedView={view}
-      />
+    <div className="flex h-[420px] min-h-0 overflow-hidden">
+      <CollectionDetailPage key={`${view.id}:${view.revision}`} id={id} savedView={view} />
     </div>
   );
 }
