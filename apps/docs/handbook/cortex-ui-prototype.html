@@ -206,6 +206,9 @@ main{max-width:1520px;margin:0 auto;padding:26px 24px 90px}
 .app{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:660px;position:relative}
 .app.r{grid-template-columns:250px minmax(0,1fr) 320px}
 .app.narrow-side{grid-template-columns:230px minmax(0,1fr)}
+/* 文档 / 表格：侧栏不在原地展开，各自在侧栏右侧新增一列 */
+.app.sub{grid-template-columns:232px 232px minmax(0,1fr)}
+.app.sub.r{grid-template-columns:232px 232px minmax(0,1fr) 300px}
 
 /* ---- sidebar ---- */
 .side{background:var(--bg-app);border-right:1px solid var(--border);display:flex;flex-direction:column;font-size:var(--text-label)}
@@ -238,6 +241,13 @@ main{max-width:1520px;margin:0 auto;padding:26px 24px 90px}
 .nl.new::after{content:"NEW";font-family:var(--mono);font-size:var(--text-micro);letter-spacing:.04em;
   background:var(--cyan-soft);color:var(--cyan);border-radius:4px;padding:1px 4px;margin-left:auto}
 .twist{width:14px;height:14px;display:grid;place-items:center;color:var(--text-3);flex:none;margin-left:-4px}
+
+/* ---- second column (文档树 / 表格列表，二者各占一列，不混排) ---- */
+.subnav{background:var(--bg-app);border-right:1px solid var(--border);display:flex;flex-direction:column;min-width:0;font-size:var(--text-label)}
+.subnav .search{margin:0}
+.subnav .sgroup:first-child{margin-top:4px}
+.app.sub .bcol{width:auto;flex:1 1 0;min-width:180px}
+.sgroup .add + .add{margin-left:0}
 
 /* ---- main column ---- */
 .mainc{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
@@ -491,6 +501,56 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 .pop .pi .r{margin-left:auto;font-size:var(--text-micro);color:var(--text-3);font-family:var(--mono)}
 .pop .sep{height:1px;background:var(--border);margin:4px 0}
 .pop .quota{padding:8px 11px;font-size:var(--text-micro);color:var(--text-3);background:var(--surface-2);border-top:1px solid var(--border)}
+
+/* navigator rows: actions take no room until the row is hovered or focused */
+.nl.hov{background:var(--surface-2);color:var(--text)}
+.nl .acts{margin-left:auto;display:flex;align-items:center;gap:1px;color:var(--text-3);flex:none}
+.nl .acts .ab{width:20px;height:20px;border-radius:var(--r-sm);display:grid;place-items:center}
+.nl .acts .ab.on{background:var(--surface-3);color:var(--text)}
+.pop.mini{width:172px;padding:4px}
+.pop.mini .pi{border-radius:var(--r-sm);padding:6px 9px}
+.pop .pi.dang.on{background:var(--red-soft);color:var(--red)}
+.confirm{width:min(100%,340px);background:var(--surface);border:1px solid var(--border-2);border-radius:var(--r);
+  box-shadow:var(--sh-3);font-size:var(--text-label);overflow:hidden}
+.confirm .cfm-body{padding:14px 16px}
+.confirm .cfm-body b{display:block;font-size:var(--text-body);margin-bottom:5px;color:var(--text)}
+.confirm .cfm-body p{margin:0;color:var(--text-2)}
+.confirm .cfm-foot{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border);background:var(--surface-2)}
+.btn.dangr{background:var(--red-soft);color:var(--red);border-color:transparent}
+/* layouts without column headers: the empty state and Display manage fields */
+.emptyhint{position:absolute;left:0;right:0;top:150px;display:flex;flex-direction:column;align-items:center;gap:10px;
+  color:var(--text-2);font-size:var(--text-label);text-align:center;padding:0 16px}
+.pop .pi .ed{margin-left:auto;color:var(--text-3);display:grid;place-items:center;width:20px;height:20px;border-radius:var(--r-sm)}
+.pop .pi .ed.on{background:var(--surface-3);color:var(--text)}
+.pop .ptitle{padding:8px 11px 4px;font-size:var(--text-micro);color:var(--text-3)}
+
+/* field panel: add / edit a field, anchored under the header cell it belongs to */
+.fstage{position:relative;min-height:532px;background:var(--bg)}
+.fstage table.dt{min-width:0}
+.fstage table.dt th.add .thin{justify-content:flex-start;color:var(--text-3)}
+.fstage table.dt th.add.hl .thin{color:var(--accent)}
+.fpanel{position:absolute;z-index:36;width:292px;background:var(--surface);border:1px solid var(--border-2);
+  border-radius:var(--r);box-shadow:var(--sh-3);padding:12px;font-size:var(--text-label)}
+.fpanel .flabel{font-size:var(--text-caption);color:var(--text-2);font-weight:550;margin:0 0 5px}
+.fpanel .flabel + .finput,.fpanel .flabel + .sel-box{margin-bottom:11px}
+.fpanel .finput{border:1px solid var(--accent);border-radius:var(--r-sm);padding:7px 10px;background:var(--surface);
+  color:var(--text-3);box-shadow:0 0 0 3px var(--accent-soft)}
+.fpanel .finput.filled{color:var(--text)}
+.fpanel .fopt{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.fpanel .fopt .dot{width:14px;height:14px;border-radius:99px;flex:none}
+.fpanel .fopt .nm{flex:1;min-width:0;border:1px solid var(--border);border-radius:var(--r-sm);padding:4.5px 9px;background:var(--surface)}
+.fpanel .fopt .rm{color:var(--text-3);display:grid;place-items:center}
+.fpanel .fadd{display:inline-flex;align-items:center;gap:6px;color:var(--text-2);padding:4px 2px}
+.fpanel .fhint{font-size:var(--text-micro);color:var(--text-3);margin:-6px 0 11px}
+.fpanel .fwarn{font-size:var(--text-micro);color:var(--warning-text);margin:4px 0 0}
+.fpanel .ffoot{display:flex;align-items:center;gap:8px;margin-top:12px;padding-top:11px;border-top:1px solid var(--border)}
+.fpanel .ffoot .q{font-size:var(--text-micro);color:var(--text-3)}
+.fpanel .ffoot .sp{margin-left:auto;display:flex;gap:8px}
+.ftypes{position:absolute;z-index:37;width:168px;background:var(--surface);border:1px solid var(--border-2);
+  border-radius:var(--r);box-shadow:var(--sh-3);padding:4px;font-size:var(--text-label)}
+.ftypes .pi{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:var(--r-sm);color:var(--text-2)}
+.ftypes .pi.act{background:var(--surface-3);color:var(--text);font-weight:550}
+.ftypes .pi .ck{margin-left:auto;color:var(--accent)}
 .bar{display:block;height:4px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin-top:5px}
 .bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
 
@@ -621,10 +681,13 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 @media (max-width:1180px){
   .app.r{grid-template-columns:250px minmax(0,1fr)}
   .app.r .right{display:none}
+  /* 侧栏在 xl 以下自动收起，第二列保留 */
+  .app.sub,.app.sub.r{grid-template-columns:232px minmax(0,1fr)}
+  .app.sub .side{display:none}
 }
 @media (max-width:860px){
-  .app,.app.r,.app.narrow-side{grid-template-columns:minmax(0,1fr)}
-  .side{display:none}
+  .app,.app.r,.app.narrow-side,.app.sub,.app.sub.r{grid-template-columns:minmax(0,1fr)}
+  .side,.subnav{display:none}
   main{padding:18px 14px 60px}
   .chrome-in{padding:10px 14px}
   .kwrap{grid-template-columns:minmax(0,1fr)}
@@ -687,6 +750,9 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   <symbol id="i-run" viewBox="0 0 24 24"><path d="m8 5.5 10 6.5-10 6.5z"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4.5 21 19H3z"/><path d="M12 10v4M12 16.6v.1"/></symbol>
   <symbol id="i-back" viewBox="0 0 24 24"><path d="M20 12H4m0 0 5-5m-5 5 5 5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4.5 7h15M9.5 7V4.8h5V7M6.5 7l.8 11.2a1.8 1.8 0 0 0 1.8 1.6h5.8a1.8 1.8 0 0 0 1.8-1.6L17.5 7M10 11v5M14 11v5"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="m4.5 19.5 1-4.2L16.2 4.6a1.8 1.8 0 0 1 2.6 0l.6.6a1.8 1.8 0 0 1 0 2.6L8.7 18.5z"/><path d="m14.5 6.3 3.2 3.2"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 4 2.4 5 5.4.7-4 3.8 1 5.4-4.8-2.6-4.8 2.6 1-5.4-4-3.8 5.4-.7z"/></symbol>
   <symbol id="i-arch" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4" rx="1.2"/><path d="M5.5 8.5v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9M10 12.5h4"/></symbol>
 </svg>
 
@@ -708,6 +774,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 
 <main id="main" tabindex="-1"><section class="screen on" id="s-sync" role="tabpanel"><div class="screen-head"><h2>S10 · 当前主线下的交互边界</h2><p>以下示例数据均为虚构，不代表工作区真实用量或执行。新对象与跨源视图仍是产品提案。</p></div><div class="sync-body" id="main-sync"><div class="sync-note"><strong>2026-09-18 · v0.4 main 评审稿</strong><br>
 当前源码基线为 <code>9e7e529b7fcba26ff4de10b089faa5a368b5a297</code>。本稿已更新状态模型、导航、设计 token 与键盘交互；旧稿的 <code>dcc2d5825</code> / <code>3dcfdaea4</code> 仅保留为历史来源。产品方案和示例性能指标不代表已实现或已验收。<br>
+<strong>2026-09-20 修订：</strong>文档与表格不在侧栏内展开，改为各自在侧栏右侧新增一列，两者不混排（规则见 S1，S2–S6 画面已更新）。<br>
 文档位于 <code>apps/docs/handbook</code>，可独立离线阅读；该目录尚未接入文档站发布。Web / Desktop 是一期交付范围，Mobile 单独立项与验收。配套 <a href="cortex-prd.html#main-sync">PRD 当前契约</a> 与 <a href="multica-architecture-handbook.html#main-sync">架构当前契约</a>。</div>
 <div class="sync-grid">
 <article class="sync-card"><h3>文档讨论 · 请求留在线程里</h3><span class="sync-pill">映射 S2 / AC-17</span><div class="sync-thread"><strong>架构讨论</strong><p>成员：请复核数据模型。</p><span class="sync-pill">架构智能体 · 运行中</span><p>结果与执行记录在本线程展示。</p></div><div class="sync-thread"><strong>发布讨论</strong><p>成员：请核对回退步骤。</p><span class="sync-pill">同一智能体 · 排队中</span><p>等待它完成本任务上的当前执行。</p></div><p>回复未获回应时由用户明确选择接手者；不显示“5 分钟后自动转给负责人”。</p></article>
@@ -755,10 +822,10 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 
         <div class="sgroup">工作</div>
         <nav class="nav">
-          <div class="nl act"><svg aria-hidden="true" class="i"><use href="#i-issue"/></svg>任务<span class="cnt">128</span></div>
+          <div class="nl act" data-nav="issues"><svg aria-hidden="true" class="i"><use href="#i-issue"/></svg>任务<span class="cnt">128</span></div>
           <div class="nl"><svg aria-hidden="true" class="i"><use href="#i-board"/></svg>项目<span class="cnt">4</span></div>
-          <div class="nl new"><svg aria-hidden="true" class="i"><use href="#i-doc"/></svg>文档</div>
-          <div class="nl new"><svg aria-hidden="true" class="i"><use href="#i-table"/></svg>表格</div>
+          <div class="nl new" data-nav="docs"><svg aria-hidden="true" class="i"><use href="#i-doc"/></svg>文档</div>
+          <div class="nl new" data-nav="tables"><svg aria-hidden="true" class="i"><use href="#i-table"/></svg>表格</div>
           <div class="nl"><svg aria-hidden="true" class="i"><use href="#i-run"/></svg>自动化</div>
           <div class="nl new"><svg aria-hidden="true" class="i"><use href="#i-flow"/></svg>工作流</div>
         </nav>
@@ -837,6 +904,13 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       main 把工作对象和 AI 团队分组，把统计与设置放在底部。提案沿用这个结构，跨对象入口继续走搜索（⌘K）与固定。
       当前固定区支持视图、issue、项目（<code>app-sidebar.tsx</code> 的 pin 逻辑）；新增文档与表格仍需扩展对象类型、路由与访问校验，不能仅凭视觉复用视为已支持。
     </div>
+    <div class="note">
+      <h4>文档与表格：侧栏不展开，各开一列</h4>
+      侧栏里「文档」「表格」各只有一个入口，不在侧栏内就地展开成树或列表。点击后在侧栏右侧新增一列：
+      文档页是 <b>文档树</b>（搜索、筛选、新建、拖拽调序），表格页是 <b>表格列表</b>（搜索、新建、记录数）。
+      两列互不混排 —— 文档页不出现表格列表，表格页不出现文档树（见 S2–S6）。
+      侧栏在 <code>xl</code> 以下自动收起时第二列保留，列顶的按钮可重新打开侧栏；<code>md</code> 以下只容纳一列：文档 / 表格首页显示这一列，打开具体对象后由内容取代。
+    </div>
     <div class="note ok">
       <h4>共享视图栏是 <span class="fr">FR-002</span> 的验收面</h4>
       右上角的 <span class="srcbadge">DataSource: issue</span> 在原型里是显式可见的，正式版应移除。它在这里的作用是让评审者一眼确认：
@@ -871,33 +945,30 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
     <h2>S2 · 文档：正文里嵌一个活着的看板</h2>
     <p>文档是 <code>kind=doc</code> 的 issue <span class="fr">FR-011</span>，因此天然带评论、mention、附件、agent 可寻址性与全文检索。
       Web / Desktop 正文复用现有 TipTap 基础能力 <span class="fr">FR-014</span>，新增对象、引用扩展与编辑冲突保护另行实现。
-      正文中央的 <b>内嵌活视图块</b> <span class="fr">FR-032</span> 是本次提案的新扩展，静态示意不提供写回。</p>
+      正文中央的 <b>内嵌活视图块</b> <span class="fr">FR-032</span> 是本次提案的新扩展，静态示意不提供写回。
+      侧栏右侧的第二列只放文档树；表格列表在表格页自己的第二列（S4）。</p>
   </div>
 
-  <div class="frame"><div class="app r">
-    <aside class="side">
-      <div class="side-top">
-        <div class="ws"><span class="av">C</span><b>Cortex</b><svg aria-hidden="true" class="i sm chev"><use href="#i-chevd"/></svg></div>
-        <div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
-      </div>
+  <div class="frame"><div class="app sub r">
+    <aside class="side" data-app-side="docs"></aside>
+    <aside class="subnav" aria-label="文档" style="position:relative">
+      <div class="side-top"><div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索</div></div>
       <div class="side-scroll">
-        <div class="sgroup">文档 <span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></div>
+        <div class="sgroup">文档 <span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-filter"/></svg></span><span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></div>
         <nav class="nav">
           <div class="nl"><span class="twist"><svg aria-hidden="true" class="i sm"><use href="#i-chevd"/></svg></span><svg aria-hidden="true" class="i sm"><use href="#i-doc"/></svg>产品</div>
           <div class="nl sub act"><span class="twist"><svg aria-hidden="true" class="i sm"><use href="#i-chevd"/></svg></span>Cortex 产品规格</div>
           <div class="nl sub2">集合层数据模型</div>
           <div class="nl sub2">引用与嵌入</div>
           <div class="nl sub2">知识库接入</div>
-          <div class="nl sub"><span class="twist"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span>竞品分析</div>
+          <div class="nl sub hov"><span class="twist"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span>竞品分析<span class="acts"><span class="ab" aria-label="收藏"><svg aria-hidden="true" class="i sm"><use href="#i-star"/></svg></span><span class="ab" aria-label="添加子页"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span><span class="ab on" aria-label="更多操作"><svg aria-hidden="true" class="i sm"><use href="#i-more"/></svg></span></span></div>
           <div class="nl"><span class="twist"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span><svg aria-hidden="true" class="i sm"><use href="#i-doc"/></svg>工程</div>
           <div class="nl"><span class="twist"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span><svg aria-hidden="true" class="i sm"><use href="#i-doc"/></svg>会议纪要</div>
         </nav>
-        <div class="sgroup">表格</div>
-        <nav class="nav">
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
-        </nav>
+      </div>
+      <!-- row menu of the hovered document -->
+      <div class="pop mini" style="left:54px;top:282px" role="menu" aria-label="「竞品分析」的更多操作">
+        <div class="pi dang on"><svg aria-hidden="true" class="i sm"><use href="#i-trash"/></svg>删除文档</div>
       </div>
     </aside>
 
@@ -1076,13 +1147,12 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       <b>这一步是产品分叉点：默认给「活视图」还是「静态快照」。</b></p>
   </div>
 
-  <div class="frame"><div class="app narrow-side" style="min-height:600px">
-    <aside class="side">
-      <div class="side-top">
-        <div class="ws"><span class="av">C</span><b>Cortex</b><svg aria-hidden="true" class="i sm chev"><use href="#i-chevd"/></svg></div>
-      </div>
+  <div class="frame"><div class="app sub" style="min-height:600px">
+    <aside class="side" data-app-side="docs"></aside>
+    <aside class="subnav" aria-label="文档">
+      <div class="side-top"><div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索</div></div>
       <div class="side-scroll">
-        <div class="sgroup">文档</div>
+        <div class="sgroup">文档 <span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-filter"/></svg></span><span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></div>
         <nav class="nav">
           <div class="nl act"><svg aria-hidden="true" class="i sm"><use href="#i-doc"/></svg>2026 Q3 规划</div>
           <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-doc"/></svg>Cortex 产品规格</div>
@@ -1235,28 +1305,26 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
     <h2>S4 · 多维表格：同一个视图栏，DataSource 换成 collection</h2>
     <p>本屏与 S1 使用同一套拟议视图栏交互契约；共享组件仍待实现。集合能力由 <span class="srcbadge">DataSource: collection</span> 声明。
       字段目录是 <b>每表独立</b> 的 <span class="fr">FR-022</span>，这是与现状最关键的一处分道：
-      现有 <code>issue_property</code> 是 workspace 全局、上限 20 条（<code>server/migrations/191_issue_properties.up.sql</code> 明确写了这个上限），一张业务表就能吃光全局配额。</p>
+      现有 <code>issue_property</code> 是 workspace 全局、上限 20 条（<code>server/migrations/191_issue_properties.up.sql</code> 明确写了这个上限），一张业务表就能吃光全局配额。
+      侧栏右侧的第二列只放表格列表；文档树在文档页自己的第二列（S2）。</p>
   </div>
 
-  <div class="frame"><div class="app" style="min-height:600px">
-    <aside class="side">
-      <div class="side-top">
-        <div class="ws"><span class="av">C</span><b>Cortex</b><svg aria-hidden="true" class="i sm chev"><use href="#i-chevd"/></svg></div>
-        <div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
-      </div>
+  <div class="frame"><div class="app sub" style="min-height:600px">
+    <aside class="side" data-app-side="tables"></aside>
+    <aside class="subnav" aria-label="表格" style="position:relative">
+      <div class="side-top"><div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索</div></div>
       <div class="side-scroll">
         <div class="sgroup">表格 <span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></div>
         <nav class="nav">
           <div class="nl act"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
+          <div class="nl hov"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单<span class="acts"><span class="ab on" aria-label="更多操作"><svg aria-hidden="true" class="i sm"><use href="#i-more"/></svg></span></span></div>
           <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
           <div class="nl" style="color:var(--text-3)"><svg aria-hidden="true" class="i sm"><use href="#i-arch"/></svg>已归档<span class="cnt">2</span></div>
         </nav>
-        <div class="sgroup">工作区</div>
-        <nav class="nav">
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>任务</div>
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-doc"/></svg>文档</div>
-        </nav>
+      </div>
+      <!-- row menu of the hovered table -->
+      <div class="pop mini" style="left:54px;top:150px" role="menu" aria-label="「客户名单」的更多操作">
+        <div class="pi dang on"><svg aria-hidden="true" class="i sm"><use href="#i-trash"/></svg>删除表格</div>
       </div>
     </aside>
 
@@ -1395,8 +1463,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       <!-- field menu -->
       <div class="pop" style="left:262px;top:150px">
         <div class="ph"><svg class="i sm" aria-hidden="true"><use href="#i-tag"/></svg><input aria-label="字段名称（静态示意）" name="illustrated-field-name" autocomplete="off" value="状态" readonly></div>
-        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-tag"/></svg>字段类型<span class="r">单选</span></div>
-        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-more"/></svg>编辑选项<span class="r">4 项</span></div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-gear"/></svg>修改字段<span class="r">单选 · 4 项</span></div>
         <div class="sep"></div>
         <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-sort"/></svg>升序 / 降序</div>
         <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-group"/></svg>按此字段分组</div>
@@ -1412,7 +1479,199 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
     </div>
   </div></div>
 
+  <div class="grid2" style="margin-top:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr))">
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-plus"/></svg>新建表后：表头 <code>+</code> 添加字段 <span class="badge b-accent" style="margin-left:auto">FR-022</span>
+      </div>
+      <div class="fstage">
+        <table class="dt">
+          <thead><tr><th class="c-first" style="width:190px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-text"/></svg>名称</div></th><th class="add hl"><div class="thin"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建字段</div></th></tr></thead>
+          <tbody>
+            <tr><td class="c-first" style="color:var(--text-3)">未命名</td><td></td></tr>
+            <tr><td class="c-first">&nbsp;</td><td></td></tr>
+            <tr><td class="c-first">&nbsp;</td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="addrow"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建行</div>
+
+        <div class="fpanel" style="left:190px;top:36px" role="dialog" aria-label="新建字段">
+          <div class="flabel">名称</div>
+          <div class="finput">输入字段名称</div>
+          <div class="flabel">字段类型</div>
+          <div class="sel-box" style="border-color:var(--border-2)"><svg aria-hidden="true" class="i sm"><use href="#i-text"/></svg>文本<span class="sp"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span></div>
+          <div class="ffoot"><span class="q">字段 0 / 50</span><span class="sp"><button class="btn">取消</button><button class="btn pri">创建字段</button></span></div>
+        </div>
+      <div class="ftypes" style="left:488px;top:100px" aria-label="字段类型列表">
+        <div class="pi act"><svg aria-hidden="true" class="i sm"><use href="#i-text"/></svg>文本<span class="ck"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg></span></div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-hash"/></svg>数字</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-tag"/></svg>单选</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-list"/></svg>多选</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-cal"/></svg>日期</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg>勾选</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-link"/></svg>链接</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-user"/></svg>成员</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-user"/></svg>成员（多选）</div>
+      </div>
+      </div>
+    </div>
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-gear"/></svg>修改字段：表头菜单 → 修改字段 <span class="badge b-gray" style="margin-left:auto">同一个面板</span>
+      </div>
+      <div class="fstage">
+        <table class="dt">
+          <thead><tr><th class="c-first" style="width:150px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-text"/></svg>名称</div></th><th class="hl" style="width:110px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-tag"/></svg>状态</div></th><th style="width:110px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-cal"/></svg>目标日期</div></th><th class="add"><div class="thin" aria-label="新建字段"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></div></th></tr></thead>
+          <tbody>
+            <tr><td class="c-first">内嵌活视图块</td><td><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></td><td>2026-09-30</td><td></td></tr>
+            <tr><td class="c-first">自定义状态目录</td><td><span class="cellchip" style="background:var(--success-soft);color:var(--success-text)">已上线</span></td><td>2026-08-12</td><td></td></tr>
+            <tr><td class="c-first">记录级权限</td><td><span class="cellchip" style="background:var(--neutral-soft);color:var(--muted-foreground)">待评估</span></td><td style="color:var(--text-3)">—</td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="addrow"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建行</div>
+
+        <div class="fpanel" style="left:150px;top:36px" role="dialog" aria-label="修改字段">
+          <div class="flabel">名称</div>
+          <div class="finput filled">状态</div>
+          <div class="flabel">字段类型</div>
+          <div class="sel-box"><svg aria-hidden="true" class="i sm"><use href="#i-tag"/></svg>单选<span class="sp"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span></div>
+          <div class="fhint">只列出不会丢失数据的转换；要换成其他类型请新建字段。</div>
+          <div class="flabel">选项</div>
+          <div class="fopt"><span class="dot" style="background:var(--text-3)"></span><span class="nm">待评估</span><span class="rm"><svg aria-hidden="true" class="i sm"><use href="#i-x"/></svg></span></div>
+          <div class="fopt"><span class="dot" style="background:var(--warning-text)"></span><span class="nm">已排期</span><span class="rm"><svg aria-hidden="true" class="i sm"><use href="#i-x"/></svg></span></div>
+          <div class="fopt"><span class="dot" style="background:var(--success-text)"></span><span class="nm">已上线</span><span class="rm"><svg aria-hidden="true" class="i sm"><use href="#i-x"/></svg></span></div>
+          <div class="fadd"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>添加选项</div>
+          <div class="fwarn">保存后，使用了「二期」的记录会清除该值。</div>
+          <div class="ffoot"><span class="q">字段 2 / 50</span><span class="sp"><button class="btn">取消</button><button class="btn pri">保存</button></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr))">
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-text"/></svg>首列（记录标题）：表头菜单 → 修改字段，只能改名 <span class="badge b-gray" style="margin-left:auto">同一个面板</span>
+      </div>
+      <div class="fstage" style="min-height:330px">
+        <table class="dt">
+          <thead><tr><th class="c-first hl" style="width:190px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-text"/></svg>名称<svg aria-hidden="true" class="i sm" style="margin-left:auto"><use href="#i-chevd"/></svg></div></th><th style="width:110px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-text"/></svg>性别</div></th><th class="add"><div class="thin" aria-label="新建字段"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></div></th></tr></thead>
+          <tbody>
+            <tr><td class="c-first">张三</td><td>男</td><td></td></tr>
+            <tr><td class="c-first">李四</td><td>女</td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="addrow"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建行</div>
+
+        <div class="fpanel" style="left:0;top:36px" role="dialog" aria-label="修改字段">
+          <div class="flabel">名称</div>
+          <div class="finput filled">客户</div>
+          <div class="flabel">字段类型</div>
+          <div class="sel-box" style="opacity:.55"><svg aria-hidden="true" class="i sm"><use href="#i-text"/></svg>文本<span class="sp"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span></div>
+          <div class="fhint">此列是每条记录的标题，类型固定为文本。</div>
+          <div class="ffoot"><span class="sp"><button class="btn">取消</button><button class="btn pri">保存</button></span></div>
+        </div>
+        <div class="pop" style="left:312px;top:36px;width:200px" role="menu" aria-label="首列的表头菜单">
+          <div class="ph"><svg class="i sm" aria-hidden="true"><use href="#i-text"/></svg><span>名称</span></div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-pencil"/></svg>修改字段<span class="r">文本</span></div>
+          <div class="sep"></div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-sort"/></svg>升序</div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-sort"/></svg>降序</div>
+        </div>
+      </div>
+    </div>
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-board"/></svg>没有表头的布局：空状态给出缺的字段，「显示」里管理字段 <span class="badge b-accent" style="margin-left:auto">看板 / 日历 / 画廊</span>
+      </div>
+      <div class="fstage" style="min-height:330px">
+        <div class="viewbar" style="border-bottom:1px solid var(--border)">
+          <div class="layouts">
+            <button class="lay" aria-label="表格布局"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg></button>
+            <button class="lay act" aria-label="看板布局"><svg aria-hidden="true" class="i sm"><use href="#i-board"/></svg></button>
+            <button class="lay" aria-label="日历布局"><svg aria-hidden="true" class="i sm"><use href="#i-cal"/></svg></button>
+            <button class="lay" aria-label="画廊布局"><svg aria-hidden="true" class="i sm"><use href="#i-gal"/></svg></button>
+          </div>
+          <button class="chip"><svg aria-hidden="true" class="i sm"><use href="#i-filter"/></svg>过滤</button>
+          <button class="chip"><svg aria-hidden="true" class="i sm"><use href="#i-group"/></svg>分组</button>
+          <button class="chip set"><svg aria-hidden="true" class="i sm"><use href="#i-eye"/></svg>显示 <b>1/2</b></button>
+        </div>
+        <div class="emptyhint">
+          <span>添加一个单选字段即可使用看板布局。</span>
+          <button class="btn"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建字段</button>
+          <span style="font-size:var(--text-micro);color:var(--text-3)">面板打开时类型已选好「单选」；日历的空状态同理预选「日期」</span>
+        </div>
+        <div class="pop" style="right:14px;top:44px;width:214px" aria-label="显示">
+          <div class="ptitle">卡片上显示</div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-text"/></svg>名称<span class="r" title="始终显示，不可勾选"><svg aria-hidden="true" class="i sm" style="opacity:.4"><use href="#i-check"/></svg></span><span class="ed" style="margin-left:6px" aria-label="修改字段「名称」"><svg aria-hidden="true" class="i sm"><use href="#i-pencil"/></svg></span></div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-text"/></svg>备注<span class="ed on" aria-label="修改字段「备注」"><svg aria-hidden="true" class="i sm"><use href="#i-pencil"/></svg></span></div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-hash"/></svg>预算<span class="ed" aria-label="修改字段「预算」"><svg aria-hidden="true" class="i sm"><use href="#i-pencil"/></svg></span></div>
+          <div class="sep"></div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建字段</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr))">
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--red)"><use href="#i-trash"/></svg>列表里删除：行尾「···」→ 删除 → 确认框 <span class="badge b-gray" style="margin-left:auto">文档树 / 表格列表</span>
+      </div>
+      <div style="display:grid;gap:14px;padding:18px;background:var(--bg);justify-items:center">
+        <div class="confirm" role="alertdialog" aria-label="删除文档">
+          <div class="cfm-body"><b>删除「竞品分析」？</b><p>文档及其评论将被永久删除。</p><p style="margin-top:4px">它的 2 个子页会移到根层级。</p></div>
+          <div class="cfm-foot"><button class="btn">取消</button><button class="btn dangr">删除</button></div>
+        </div>
+        <div class="confirm" role="alertdialog" aria-label="删除表格">
+          <div class="cfm-body"><b>删除「客户名单」？</b><p>表格及其记录将对工作区所有成员移除，此操作不可撤销。</p></div>
+          <div class="cfm-foot"><button class="btn">取消</button><button class="btn dangr">删除中…</button></div>
+        </div>
+      </div>
+    </div>
+    <div class="note warn" style="margin:0">
+      <h4>列表里的删除：藏在「···」里，确认后才执行</h4>
+      文档树和表格列表的每一行，悬停或键盘聚焦时才出现行内操作（文档：收藏 / 添加子页 / ···；表格：记录数让位给 ···），
+      平时不占宽度，窄列里的标题才放得下；触屏设备没有悬停，始终显示。菜单打开时触发按钮保持可见。
+      <br><br>「删除」是菜单里唯一的红色项，点击后弹确认框：标题写出对象名，正文只写后果 ——
+      文档的子页 <b>不会一起删</b>，服务端把它们移到根层级，所以有子页时多写一行；
+      表格的删除在服务端是归档（<code>archived_at</code>），但目前没有恢复入口，确认框如实写「不可撤销」，
+      左栏的「已归档」与恢复仍是提案，做出来以后再改文案。
+      <br><br>确认框在服务端返回前保持打开并禁用按钮（「删除中…」）；失败时保留对话框并提示错误；
+      删的是当前打开的那一项，成功后回到文档 / 表格首页。
+      <b>权限：</b>文档与任务一致，成员都可删；表格只有创建者和 workspace 的 owner / admin 能看到「···」，与服务端判权一致。
+    </div>
+  </div>
+
   <div class="grid2">
+    <div class="note ok">
+      <h4>添加 / 修改字段用同一个面板，锚在表头上</h4>
+      参考飞书多维表格：表头最后一格是 <code>+</code>，紧跟在最后一个字段后面（还没有字段时直接写成「+ 新建字段」）；点它在正下方弹出字段面板 ——
+      <b>名称</b>、<b>字段类型</b>（类型列表从面板侧面展开），单选 / 多选再多一段 <b>选项</b>（颜色、名称、增删），底部是配额与 <b>取消 / 创建字段</b>。
+      Enter 提交，Esc 或点面板外取消，保存失败时面板不关并显示服务端错误。
+      修改字段从表头菜单的「修改字段」进入同一个面板，锚在那一列表头下，主按钮为 <b>保存</b>；类型只列安全转换，删除选项会在保存前提示将清空哪些记录。
+      新建的表只有「名称」一列（记录标题，不可删、不算字段配额），因此 <code>+</code> 必须一眼可见，不再用居中弹窗。
+      <br><br><b>本期不做：</b>默认值、字段捷径、AI 字段、关联 / 查找引用 —— 服务端暂无对应能力，面板里不放占位控件。
+    </div>
+    <div class="note ok">
+      <h4>首列是记录标题：能改名，别的都不能动</h4>
+      每张表的第一列显示记录标题（<code>record.title</code>），它不是字段目录里的字段：不能隐藏、归档、分组、换类型，也不占字段配额。
+      但列名必须能改 —— 「名称」对客户表、设备表都不贴切。表头与其他列一样是菜单：<b>修改字段</b>（右侧标「文本」）、升序、降序；
+      「修改字段」打开同一个面板，锚在首列下：名称可改，类型下拉禁用并写明原因，没有配额行。
+      <br><br><b>整个表头格都是菜单的点击区</b>，不只是左侧那几个字：首列很宽而列名很短，只认文字的话，点在空白处毫无反应，
+      用户会以为这一列不能改。悬停时整格变色并在右端出现下拉箭头；拖动手柄和列宽分隔线照旧。
+      「显示」的字段列表也把首列排在第一行（始终显示，不可勾选），右侧同样有铅笔 —— 改首列不必依赖表头。
+      <br><br>列名存在表上（<code>collection.title_name</code>）。留空或改回默认名 = 不存，继续跟随界面语言显示「名称 / Name」；
+      排序菜单里的首列也用这个名字。只有表格管理者（创建者、owner、admin）能看到「修改字段」。
+    </div>
+    <div class="note ok">
+      <h4>没有表头的布局，也要能加 / 改字段</h4>
+      布局是浏览器里记住的偏好：一张表上次停在「看板」，下次打开还是看板。看板、日历、画廊都没有表头，
+      于是表头上的 <code>+</code> 和列菜单都不在了 —— 没有单选字段的看板只剩一句「请添加单选字段」，用户无处下手。
+      <br><br>两处补齐：<b>① 空状态给出缺的那个字段</b> —— 「新建字段」按钮直接打开字段面板，类型预选为单选（看板）或日期（日历）；
+      <b>② 「显示」就是字段配置</b> —— 每个字段右侧一支铅笔打开修改面板，列表底部「+ 新建字段」，面板锚在「显示」按钮下。
+      日历没有可显隐的内容，管理者看到的是同一个入口、名为「字段」的纯列表。非管理者看不到这些入口。
+    </div>
     <div class="note ok">
       <h4>字段菜单底部那行配额说明是有意加的</h4>
       现有实现里，字段目录是 workspace 全局、活跃定义上限 20（<code>191_issue_properties.up.sql</code> 的注释与 handler 校验）。
@@ -1460,15 +1719,16 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       且必须 <b>issue 与 collection 双源验收</b> —— 只在其中一边能跑就说明没接在共享引擎上。</p>
   </div>
 
-  <div class="frame"><div class="app narrow-side" style="min-height:560px">
-    <aside class="side">
-      <div class="side-top"><div class="ws"><span class="av">C</span><b>Cortex</b><svg aria-hidden="true" class="i sm chev"><use href="#i-chevd"/></svg></div></div>
+  <div class="frame"><div class="app sub" style="min-height:560px">
+    <aside class="side" data-app-side="tables"></aside>
+    <aside class="subnav" aria-label="表格">
+      <div class="side-top"><div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索</div></div>
       <div class="side-scroll">
-        <div class="sgroup">表格</div>
+        <div class="sgroup">表格 <span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></div>
         <nav class="nav">
-          <div class="nl act"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池</div>
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单</div>
-          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>设备台账</div>
+          <div class="nl act"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
+          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
+          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
         </nav>
       </div>
     </aside>
@@ -1591,12 +1851,17 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       本屏的设计答案是：把缺失的能力换成一条明确的升级路径 —— relation 到 issue。</p>
   </div>
 
-  <div class="frame"><div class="app narrow-side" style="min-height:800px;position:relative">
-    <aside class="side">
-      <div class="side-top"><div class="ws"><span class="av">C</span><b>Cortex</b><svg aria-hidden="true" class="i sm chev"><use href="#i-chevd"/></svg></div></div>
+  <div class="frame"><div class="app sub" style="min-height:800px;position:relative">
+    <aside class="side" data-app-side="tables"></aside>
+    <aside class="subnav" aria-label="表格">
+      <div class="side-top"><div class="search"><svg aria-hidden="true" class="i sm"><use href="#i-search"/></svg>搜索</div></div>
       <div class="side-scroll">
-        <div class="sgroup">表格</div>
-        <nav class="nav"><div class="nl act"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池</div><div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单</div></nav>
+        <div class="sgroup">表格 <span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></div>
+        <nav class="nav">
+          <div class="nl act"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
+          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
+          <div class="nl"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
+        </nav>
       </div>
     </aside>
     <div class="mainc" style="filter:saturate(.5) opacity(.68)">
@@ -2259,6 +2524,16 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
     var next = e.key === "Home" ? 0 : e.key === "End" ? screenIds.length - 1 :
       (cur + (e.key === "ArrowRight" ? 1 : -1) + screenIds.length) % screenIds.length;
     show(screenIds[next], true);
+  });
+
+  // 文档 / 表格 screens keep S1's sidebar as it is: only the active entry moves,
+  // and the object list opens in a second column instead of inside the sidebar.
+  var appSide = document.querySelector("#s-ia .side");
+  document.querySelectorAll(".side[data-app-side]").forEach(function(slot){
+    slot.innerHTML = appSide.innerHTML;
+    slot.querySelectorAll(".nl").forEach(function(item){
+      item.classList.toggle("act", item.dataset.nav === slot.dataset.appSide);
+    });
   });
 
   // Product actions in the frames are illustrations, not working controls.
