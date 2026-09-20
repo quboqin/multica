@@ -740,6 +740,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   <symbol id="i-lane" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="6" rx="1.6"/><rect x="3.5" y="13.5" width="17" height="6" rx="1.6"/><path d="M9.5 4.5v6M9.5 13.5v6"/></symbol>
   <symbol id="i-cal" viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></symbol>
   <symbol id="i-gal" viewBox="0 0 24 24"><rect x="4" y="4.5" width="7" height="7" rx="1.4"/><rect x="13" y="4.5" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></symbol>
+  <symbol id="i-rel" viewBox="0 0 24 24"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></symbol>
   <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.4-2.4a4 4 0 0 0-5.7-5.7l-1.3 1.3"/><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.4 2.4a4 4 0 0 0 5.7 5.7l1.3-1.3"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
@@ -1370,8 +1371,8 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
               <th style="width:96px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-tag"/></svg>优先级</div></th>
               <th style="width:120px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-user"/></svg>负责人</div></th>
               <th style="width:118px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-cal"/></svg>目标日期</div></th>
-              <th style="width:180px"><div class="thin"><svg aria-hidden="true" class="i sm ftype" style="color:var(--info-text)"><use href="#i-link"/></svg>关联任务</div></th>
-              <th style="width:130px"><div class="thin"><svg aria-hidden="true" class="i sm ftype" style="color:var(--info-text)"><use href="#i-link"/></svg>提出客户</div></th>
+              <th style="width:180px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-rel"/></svg>关联任务</div></th>
+              <th style="width:130px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-rel"/></svg>提出客户</div></th>
               <th style="width:80px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-check"/></svg>已上线</div></th>
               <th style="width:44px"><div class="thin" style="color:var(--text-3)"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></div></th>
             </tr></thead>
@@ -1382,7 +1383,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
                 <td><span class="badge b-p0">P0</span></td>
                 <td><span class="av s a1">QQ</span></td>
                 <td>2026-09-30</td>
-                <td><span class="rel"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>MAGI-31</span> <span class="rel"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>MAGI-60</span></td>
+                <td><span class="rel"><span class="sdot prog c-prog" style="width:10px;height:10px"></span>MAGI-31</span> <span class="rel"><span class="sdot c-todo" style="width:10px;height:10px"></span>MAGI-60</span></td>
                 <td><span class="rel coll">明远科技</span></td>
                 <td><span class="cb"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg></span></td><td></td>
               </tr>
@@ -1392,7 +1393,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
                 <td><span class="badge b-p0">P0</span></td>
                 <td><span class="av s a4">LZ</span></td>
                 <td>2026-10-15</td>
-                <td><span class="rel"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>MAGI-33</span></td>
+                <td><span class="rel"><span class="sdot c-todo" style="width:10px;height:10px"></span>MAGI-33</span></td>
                 <td><span class="rel coll">明远科技</span></td>
                 <td><span class="cb"></span></td><td></td>
               </tr>
@@ -1402,7 +1403,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
                 <td><span class="badge b-p0">P0</span></td>
                 <td><span class="av s a3">bu</span></td>
                 <td>2026-08-12</td>
-                <td><span class="rel"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>MAGI-08</span></td>
+                <td><span class="rel"><span class="sdot done c-done" style="width:10px;height:10px"></span>MAGI-08</span></td>
                 <td><span class="rel coll">内部</span></td>
                 <td><span class="cb on"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg></span></td><td></td>
               </tr>
@@ -1442,7 +1443,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
                 <td><span class="badge b-p2">P2</span></td>
                 <td style="color:var(--text-3)">—</td>
                 <td style="color:var(--text-3)">—</td>
-                <td><span class="rel" style="opacity:.55;text-decoration:line-through"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>已删除</span></td>
+                <td><span class="rel" style="background:var(--gray-soft);color:var(--text-3);text-decoration:line-through">已删除</span></td>
                 <td><span class="rel coll">星阑</span></td>
                 <td><span class="cb"></span></td><td></td>
               </tr>
@@ -1512,6 +1513,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
         <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-link"/></svg>链接</div>
         <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-user"/></svg>成员</div>
         <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-user"/></svg>成员（多选）</div>
+        <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-rel"/></svg>关联</div>
       </div>
       </div>
     </div>
@@ -1616,6 +1618,66 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   <div class="grid2" style="margin-top:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr))">
     <div class="frame" style="box-shadow:var(--sh-1)">
       <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-rel"/></svg>关联字段：类型选「关联」，再选关联到哪里 <span class="badge b-accent" style="margin-left:auto">FR-028</span>
+      </div>
+      <div class="fstage" style="min-height:430px">
+        <table class="dt">
+          <thead><tr><th class="c-first" style="width:150px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-text"/></svg>名称</div></th><th style="width:96px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-tag"/></svg>状态</div></th><th class="add hl"><div class="thin" aria-label="新建字段"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></div></th></tr></thead>
+          <tbody>
+            <tr><td class="c-first">内嵌活视图块</td><td><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></td><td></td></tr>
+            <tr><td class="c-first">记录级权限</td><td><span class="cellchip" style="background:var(--neutral-soft);color:var(--muted-foreground)">待评估</span></td><td></td></tr>
+          </tbody>
+        </table>
+        <div class="addrow"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建行</div>
+
+        <div class="fpanel" style="left:246px;top:36px" role="dialog" aria-label="新建字段">
+          <div class="flabel">名称</div>
+          <div class="finput filled">关联任务</div>
+          <div class="flabel">字段类型</div>
+          <div class="sel-box"><svg aria-hidden="true" class="i sm"><use href="#i-rel"/></svg>关联<span class="sp"><svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></span></div>
+          <div class="flabel">关联到</div>
+          <div class="sel-box" style="border-color:var(--border-2);margin-bottom:5px"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>任务<span class="sp"><svg aria-hidden="true" class="i sm"><use href="#i-chevd"/></svg></span></div>
+          <div class="fhint">关联对象创建后不能更改。</div>
+          <div class="ffoot"><span class="q">字段 1 / 50</span><span class="sp"><button class="btn">取消</button><button class="btn pri">创建字段</button></span></div>
+        </div>
+        <div class="pop mini" style="left:546px;top:236px;width:156px;z-index:37" role="listbox" aria-label="关联到">
+          <div class="pi act"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>任务<span class="r"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg></span></div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>需求池</div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>客户名单</div>
+          <div class="pi"><svg aria-hidden="true" class="i sm"><use href="#i-table"/></svg>设备台账</div>
+        </div>
+      </div>
+    </div>
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-search"/></svg>关联单元格：点开是搜索，已关联的排在上面，点一下取消 <span class="badge b-gray" style="margin-left:auto">多选式，不自动关闭</span>
+      </div>
+      <div class="fstage" style="min-height:430px">
+        <table class="dt">
+          <thead><tr><th class="c-first" style="width:170px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-text"/></svg>名称</div></th><th style="width:200px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-rel"/></svg>关联任务</div></th><th style="width:120px"><div class="thin"><svg aria-hidden="true" class="i sm ftype"><use href="#i-rel"/></svg>提出客户</div></th></tr></thead>
+          <tbody>
+            <tr><td class="c-first">记录级权限</td><td><span class="rel" style="background:var(--gray-soft);color:var(--text-3);text-decoration:line-through">已删除</span></td><td><span class="rel coll">星阑</span></td></tr>
+            <tr><td class="c-first">relation 桥接到 issue</td><td><span class="rel"><span class="sdot c-todo" style="width:10px;height:10px"></span>MAGI-33</span></td><td style="color:var(--text-3)">—</td></tr>
+            <tr class="sel"><td class="c-first">内嵌活视图块</td><td style="background:var(--surface-2)"><span class="rel"><span class="sdot c-todo" style="width:10px;height:10px"></span>MAGI-60</span> <span class="rel"><span class="sdot prog c-prog" style="width:10px;height:10px"></span>MAGI-31</span></td><td><span class="rel coll">明远科技</span></td></tr>
+          </tbody>
+        </table>
+        <div class="addrow"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg>新建行</div>
+
+        <div class="pop" style="left:246px;top:144px;width:300px" aria-label="关联任务">
+          <div class="ph"><input value="" placeholder="搜索任务…" aria-label="搜索任务" readonly></div>
+          <div class="ptitle">已关联</div>
+          <div class="pi"><span class="sdot c-todo" style="width:11px;height:11px"></span><span style="color:var(--text-3)">MAGI-60</span>calendar 布局<span class="r"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg></span></div>
+          <div class="pi"><span class="sdot prog c-prog" style="width:11px;height:11px"></span><span style="color:var(--text-3)">MAGI-31</span>集合层数据模型<span class="r"><svg aria-hidden="true" class="i sm"><use href="#i-check"/></svg></span></div>
+          <div class="ptitle">任务</div>
+          <div style="padding:12px 11px 14px;text-align:center;color:var(--text-3)">输入关键词搜索任务</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr))">
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
         <svg aria-hidden="true" class="i sm" style="color:var(--red)"><use href="#i-trash"/></svg>列表里删除：行尾「···」→ 删除 → 确认框 <span class="badge b-gray" style="margin-left:auto">文档树 / 表格列表</span>
       </div>
       <div style="display:grid;gap:14px;padding:18px;background:var(--bg);justify-items:center">
@@ -1651,7 +1713,8 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       Enter 提交，Esc 或点面板外取消，保存失败时面板不关并显示服务端错误。
       修改字段从表头菜单的「修改字段」进入同一个面板，锚在那一列表头下，主按钮为 <b>保存</b>；类型只列安全转换，删除选项会在保存前提示将清空哪些记录。
       新建的表只有「名称」一列（记录标题，不可删、不算字段配额），因此 <code>+</code> 必须一眼可见，不再用居中弹窗。
-      <br><br><b>本期不做：</b>默认值、字段捷径、AI 字段、关联 / 查找引用 —— 服务端暂无对应能力，面板里不放占位控件。
+      <br><br><b>本期不做：</b>默认值、字段捷径、AI 字段、查找引用（lookup / rollup）—— 服务端暂无对应能力，面板里不放占位控件。
+      「关联」已在 <span class="fr">FR-028</span> 做出来，见上方「关联字段」两屏。
     </div>
     <div class="note ok">
       <h4>首列是记录标题：能改名，别的都不能动</h4>
@@ -1681,10 +1744,23 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
     </div>
     <div class="note">
       <h4>两种 relation 在视觉上必须可区分</h4>
-      「关联任务」指向 issue（<code>record_link.to_type='issue'</code>），用蓝色带 issue 图标的 chip；
+      「关联任务」指向 issue（<code>record_link.to_type='issue'</code>），用蓝色 chip，前面带这条任务的<b>状态图标</b>——
+      需求表里最常问的就是「关联的任务做到哪了」，状态比一个固定的 issue 图标有用；
       「提出客户」指向另一张表，用中性灰 chip <span class="fr">FR-028</span>。
       理由：指向 issue 的关联会把用户带出数据世界、进入有状态与负责人的工作世界，这是一次上下文切换，值得一个独立的视觉信号。
-      最后一行故意留了一个失效关联（<code>已删除</code> 删除线）—— 关联边保留但标记失效，不静默消失。
+      最后一行故意留了一个失效关联（<code>已删除</code> 删除线）—— 关联边保留但标记失效，不静默消失；失效的关联仍可在选择器里点掉。
+    </div>
+    <div class="note ok">
+      <h4>关联字段：值不在行里，在 <code>record_link</code> 里</h4>
+      关联是第十种字段类型，只有表格有（任务的自定义属性没有）。新建时在「字段类型」下多一项<b>关联到</b>：「任务」或本工作区的某张表（包括自己）。
+      <b>关联对象创建后不能改</b> —— 改了以后已有的关联会指向错的东西；要换就新建字段，面板里直接写明。类型也不与其他类型互转。
+      <br><br>单元格点开是一个搜索框：未输入时上面「已关联」逐条列出（点一下取消关联），下面是可选目标（点一下关联）；
+      <b>输入后整个列表只剩匹配项</b>，已关联的带勾、再点取消 —— 这样回车永远落在匹配项上，不会误取消排在最前的那条关联。像多选一样不自动关闭，一格最多 50 条；
+      表格里一格只占一行，放不下的 chip 被裁掉，完整列表在行详情里。
+      任务要输入关键词才搜（与现有的任务选择器一致，含已关闭的任务）；表格则先列出最新的 50 行，输入后按标题过滤。自关联时不列出这一行自己。
+      <br><br>关联的值不写进 <code>record.fields</code>，每条关联是 <code>record_link</code> 里的一行（<span class="fr">D-3</span>：rollup 以后不用改表）。
+      因此这一列<b>暂不支持排序 / 分组 / 过滤</b>，表头菜单与「排序」「过滤」列表里都不出现它；看板卡片与画廊照常显示 chip。
+      读表时服务端一次查出整页的关联并带上目标当前的标题 / 编号 / 状态；目标没了（任务被删、记录进回收站、目标表被删）就标 <code>missing</code>。
     </div>
     <div class="note stop">
       <h4>本轮修正：这一列只能放人，不能放 agent</h4>
@@ -1761,7 +1837,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
           </div>
           <div class="bcol">
             <h4><span class="sdot prog c-prog"></span>已排期<span class="cnt">2</span><span class="add"><svg aria-hidden="true" class="i sm"><use href="#i-plus"/></svg></span></h4>
-            <div class="bcard"><div class="t">内嵌活视图块</div><div class="f"><span class="badge b-p0">P0</span><span class="av s a1">QQ</span><span class="rel"><svg aria-hidden="true" class="i sm"><use href="#i-issue"/></svg>MAGI-31</span></div></div>
+            <div class="bcard"><div class="t">内嵌活视图块</div><div class="f"><span class="badge b-p0">P0</span><span class="av s a1">QQ</span><span class="rel"><span class="sdot prog c-prog" style="width:10px;height:10px"></span>MAGI-31</span></div></div>
             <div class="bcard"><div class="t">relation 桥接到 issue</div><div class="f"><span class="badge b-p0">P0</span><span class="av s a2">bu</span></div></div>
           </div>
           <div class="bcol">
@@ -1900,31 +1976,93 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 
         <div class="divider"></div>
 
-        <div style="font-size:var(--text-caption);color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:9px">
-          关联任务 <span style="text-transform:none;letter-spacing:0;font-weight:400">· relation → issue</span>
+        <div style="font-size:var(--text-label);color:var(--text-2);display:flex;align-items:center;gap:7px;margin-bottom:8px">
+          <svg aria-hidden="true" class="i sm"><use href="#i-rel"/></svg>关联任务
         </div>
-        <div class="rcard" style="background:var(--bg-app)">
-          <div style="display:flex;align-items:center;gap:8px"><span class="sdot prog c-prog"></span><b style="font-weight:550">MAGI-31</b> Cortex 产品规格 · 集合层数据模型</div>
-          <div class="m"><span class="av s a2">QQ</span>进行中 · 3 条评论</div>
+        <div class="rcard" style="background:var(--bg-app);display:flex;align-items:center;gap:8px">
+          <span class="sdot prog c-prog"></span><b style="font-weight:550;color:var(--text-3)">MAGI-31</b><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Cortex 产品规格 · 集合层数据模型</span>
+          <svg aria-hidden="true" class="i sm" style="color:var(--text-3)" aria-label="取消关联"><use href="#i-x"/></svg>
         </div>
-        <div class="rcard" style="background:var(--bg-app)">
-          <div style="display:flex;align-items:center;gap:8px"><span class="sdot c-todo"></span><b style="font-weight:550">MAGI-60</b> calendar 布局</div>
-          <div class="m"><span class="av s a5">WM</span>待办</div>
+        <div class="rcard" style="background:var(--bg-app);display:flex;align-items:center;gap:8px">
+          <span class="sdot c-todo"></span><b style="font-weight:550;color:var(--text-3)">MAGI-60</b><span style="flex:1">calendar 布局</span>
         </div>
         <button class="btn" style="width:100%;justify-content:center;margin-top:4px"><svg aria-hidden="true" class="i sm"><use href="#i-link"/></svg>关联已有任务</button>
 
+        <div style="font-size:var(--text-label);color:var(--text-2);display:flex;align-items:center;gap:7px;margin:16px 0 8px">
+          <svg aria-hidden="true" class="i sm"><use href="#i-rel"/></svg>提出客户
+        </div>
+        <div class="rcard" style="background:var(--bg-app)">明远科技</div>
+        <button class="btn" style="width:100%;justify-content:center;margin-top:4px"><svg aria-hidden="true" class="i sm"><use href="#i-link"/></svg>关联记录</button>
+
         <div class="note stop" style="margin-top:16px;font-size:var(--text-label)">
           <h4 style="font-size:var(--text-label)"><svg aria-hidden="true" class="i sm"><use href="#i-warn"/></svg>这一行没有评论区</h4>
-          record 是纯数据，不承载讨论、不进收件箱、agent 不能直接被 <span class="mention">@</span> 到某一行。
-          需要讨论、要指派、要 agent 接手的行，请
-          <b style="color:var(--accent);cursor:pointer">转为任务 →</b>
-          （新建一个 issue 并自动建立 relation，原行保留）。
+          record 是纯数据：不承载讨论、不进收件箱，智能体不能被 <span class="mention">@</span> 到某一行。
+          需要讨论、指派或交给智能体处理时，请把这一行转为任务。
+          <div style="margin-top:9px"><button class="btn">转为任务 <svg aria-hidden="true" class="i sm"><use href="#i-chevr"/></svg></button></div>
         </div>
       </div>
     </aside>
   </div></div>
 
+  <div class="grid2" style="margin-top:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,480px),1fr))">
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-issue"/></svg>转为任务：确认标题 → 新建任务并关联，原行保留 <span class="badge b-accent" style="margin-left:auto">FR-02A</span>
+      </div>
+      <div style="display:grid;gap:14px;padding:18px;background:var(--bg);justify-items:center">
+        <div class="confirm" role="dialog" aria-label="转为任务" style="width:min(100%,400px)">
+          <div class="cfm-body">
+            <b>转为任务</b>
+            <p>新建一个任务并从这条记录关联过去，原记录保留在表格中。</p>
+            <div style="font-size:var(--text-caption);color:var(--text-2);font-weight:550;margin:12px 0 5px">任务标题</div>
+            <div style="border:1px solid var(--accent);border-radius:var(--r-sm);padding:7px 10px;background:var(--surface)">内嵌活视图块</div>
+            <p style="margin-top:9px;font-size:var(--text-caption);color:var(--text-3)">表格会新增「关联任务」字段来保存这条关联。</p>
+          </div>
+          <div class="cfm-foot"><button class="btn">取消</button><button class="btn pri">创建任务</button></div>
+        </div>
+        <span style="font-size:var(--text-micro);color:var(--text-3);text-align:center;max-width:400px">
+          最后那行只在这张表还没有「关联到任务」的字段时出现；已有时用第一个这样的字段，不再多说。
+          非管理者遇到没有该字段的表：按钮禁用，改写「这张表还没有关联任务的字段，需要表格创建者或工作区管理员先添加。」
+        </span>
+      </div>
+    </div>
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:var(--text-label);font-weight:600">
+        <svg aria-hidden="true" class="i sm" style="color:var(--cyan)"><use href="#i-table"/></svg>任务侧：反向引用，以及删除前的提示 <span class="badge b-accent" style="margin-left:auto">AC-8</span>
+      </div>
+      <div style="display:grid;gap:14px;padding:18px;background:var(--bg);justify-items:center">
+        <div style="width:min(100%,300px);background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;font-size:var(--text-caption)">
+          <div style="color:var(--text-3);margin-bottom:8px">任务详情 · 右侧栏</div>
+          <div style="font-weight:600;margin-bottom:6px">关联记录 <span style="color:var(--text-3);font-weight:400">2</span> <svg aria-hidden="true" class="i sm" style="vertical-align:-2px;color:var(--text-3)"><use href="#i-chevd"/></svg></div>
+          <div style="display:flex;align-items:center;gap:6px;padding:5px 0"><svg aria-hidden="true" class="i sm" style="color:var(--text-3)"><use href="#i-table"/></svg><span style="color:var(--text-3)">需求池</span>内嵌活视图块</div>
+          <div style="display:flex;align-items:center;gap:6px;padding:5px 0"><svg aria-hidden="true" class="i sm" style="color:var(--text-3)"><use href="#i-table"/></svg><span style="color:var(--text-3)">Bug 台账</span>导出后日期错位</div>
+        </div>
+        <div class="confirm" role="alertdialog" aria-label="删除任务">
+          <div class="cfm-body"><b>删除任务</b><p>将永久删除该任务及其所有评论。此操作不可撤销。</p><p style="margin-top:4px">有 2 条表格记录关联了该任务，删除后这些关联会显示为「已删除」。</p></div>
+          <div class="cfm-foot"><button class="btn">取消</button><button class="btn dangr">删除</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="grid2">
+    <div class="note ok">
+      <h4>「转为任务」怎么落地</h4>
+      点按钮弹一个小对话框：标题预填这一行的标题、可改，确认后<b>先保证有关联字段、再建任务、最后关联</b> ——
+      顺序不能反：任务建好了却关联不上，是最不容易被发现的失败。任务建在表格所属的项目里（表格不属于项目则不带项目），
+      走的是普通的新建任务接口，编号、通知、订阅都和手动新建一致。成功后提示「已创建 MAGI-72 并关联到这条记录」，带「打开」。
+      <br><br>关联写在这张表<b>第一个「关联到任务」的字段</b>里；没有的话，管理者（创建者、owner、admin）转换时自动新增一个名为「关联任务」的字段，
+      对话框里提前说明；非管理者不能改表结构，按钮禁用并说明找谁。<b>原行保留</b>，行详情里立刻多出这条任务。
+      同名任务被服务端判重（409）时，错误留在对话框里，输入不丢。
+    </div>
+    <div class="note ok">
+      <h4>反向引用：任务知道哪些行指向它</h4>
+      任务详情右侧栏多一节「关联记录」，列出所有通过关联字段指向这条任务的行：<b>表名 + 行标题</b>，点击打开那张表并直接展开该行详情
+      （地址带 <code>?record=</code>，别的表的关联、分享出去的链接也用它）。没有任何行指向它时整节不出现 —— 绝大多数任务都没有，不该多一个空标题。
+      只列读者还能打开的来源：行在回收站、表已删除、关联字段已归档的都不算。指向「记录」的关联同理，在被指向那一行的详情里显示「被以下记录引用」。
+      <br><br><b>删除任务前提示</b>（<span class="fr">AC-8</span>）：确认框多一行「有 N 条表格记录关联了该任务，删除后这些关联会显示为「已删除」」；
+      没有关联时不出现。删除后关联边不动，表里那一格变成删除线的「已删除」，可以在选择器里点掉。批量删除的确认框暂未加这行。
+    </div>
     <div class="note stop">
       <h4>那块红色说明是产品设计，不是占位文案</h4>
       <span class="fr">Q-4</span> 已经写明：一旦给 record 加评论，它就在滑回 issue，方案 C 的分界会失守。

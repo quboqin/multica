@@ -61,6 +61,22 @@ P1 的段落软锁、版本历史和实时协同编辑也不在本轮。
 - 需要执行迁移并重建后端：`make down && make up`。
 - 验证（2026-09-20，隔离环境）：`@multica/views` 全套 445 个文件中 440 个通过；失败的 8 个用例里，5 个在 `issues/surface/`（基线提交上同样失败，与本次无关），另 2 个文件在满载下超时、单独重跑 154 个用例全部通过。`collections/`、`cortex/`、`documents/` 与 locale parity 全部通过；core 的 `collections`、`api` 共 426 个用例通过；core / views 的 `tsc --noEmit` 与 eslint 无错误。Go：`go build ./...`、`go vet`（handler、db）、`go test ./internal/handler -run 'Collection|Record|Document'`、`go test ./cmd/migrate` 通过，数据库已应用迁移 510。新增的三段 e2e 步骤用同样的定位器、经真实页面组件对真实 API 走通（字段创建 201、`title_name` PATCH 200 且刷新后保留、非法列名 400 留在面板里、文档 DELETE 204 且子页 `parent_issue_id` 为空、表格归档后 GET 404）；**Playwright 的 `e2e/cortex-g1.spec.ts` 本身尚未通过 Next 前端执行**，请在本机运行 `make env-exec ARGS='-- pnpm exec playwright test e2e/cortex-g1.spec.ts --workers=1'`。
 
+## 2026-09-20：FR-028 关联字段、`record_link` 与「转为任务」
+
+范围：FR-028（relation 字段、关联边落表、反向引用）、FR-02A 里“关联 / 新建任务出口”、AC-8、7.4 的“目标 issue 被删除”降级、D-3。界面对照原型 S4 的两屏“关联字段”与 S6。
+
+- **数据模型。** 新表 `record_link(id, workspace_id, collection_id, from_record_id, from_field_id, to_type, to_id, created_at)`，`to_type ∈ {issue, record}`，无外键；工作区删除时一并清理（`DeleteWorkspace` 与删除清单测试已登记）。关联的值**只**存在这张表里，不写进 `record.fields`：目标一侧才能反查，rollup 以后也不用改表（D-3）。`collection_field.type` 的 CHECK 加上 `relation`（任务的自定义属性类型表不变，relation 只有表格有）。迁移 511～515：建表、三个 `CONCURRENTLY` 索引（`id` 唯一、边唯一 `(from_record_id, from_field_id, to_type, to_id)`、反查 `(workspace_id, to_type, to_id)`，各自单文件并登记了失败清理）、放宽类型约束（`NOT VALID`，新集合是旧集合的超集）。515 的回滚会先归档 relation 字段，因为 511 的回滚会删掉所有边。
+- **字段定义。** `config.relation = {"to_type":"issue"}` 或 `{"to_type":"record","collection_id":"…"}`；目标表必须是本工作区未归档的表，可以是自己。**目标创建后不可改**（PATCH 带 `config` 返回 400），类型也不与其他类型互转；改名、调序、归档照常。
+- **读。** 每条记录的响应多一个 `links`：`{ [fieldId]: [{id,to_type,to_id,title,identifier?,status?,collection_id?,missing}] }`。列表接口在同一个只读快照里用一条查询取回整页的边并带上目标当前的标题 / 编号 / 状态，不是逐行查。目标不在了（任务被删、记录进回收站、目标表被归档）→ `missing: true`、标题为空，**边保留**（7.4）。没有关联的记录返回 `links: {}`，旧服务端不返回该字段时客户端 schema 缺省为空。
+- **写。** `POST /api/collections/{c}/records/{r}/links {field_id,to_id}`（201；同一条边重复提交返回 200 且不变）与 `DELETE …/links/{linkId}`（重复删除也是 200），都返回更新后的记录并发 `record:updated`。任何能编辑这一行的成员都能关联，不要求字段管理权限。目标按字段自己的定义校验：只能是本工作区的任务（`kind=task`）或目标表里未删除的记录，不能关联自己；一格最多 50 条。写入在记录行锁后串行，判重与上限不会竞争；成功后 `record.revision` 加一。relation 字段不接受值写入（`PUT …/fields/{f}` 与建行时的 `fields` 都返回 400）。
+- **反向引用。** `GET /api/issues/{id}/record-links`（id 或编号）与 `GET /api/collections/{c}/records/{r}/backlinks`，返回 `{links:[{collection_id,collection_name,record_id,record_title,field_id,field_name}]}`，只含读者还能打开的来源（行未删除、表未归档、字段未归档），最多 200 条。
+- **界面。** 字段面板：类型列表末尾新增「关联」，选中后出现「关联到」（任务 / 各表），并写明创建后不可改；编辑时两项都禁用。单元格：蓝色 chip = 任务（带状态图标和编号），灰色 chip = 记录，删除线「已删除」= 失效；点开是搜索框：未输入时「已关联」在上（点击取消）、可选目标在下（点击关联）；输入后整个列表只剩匹配项，已关联的带勾、再点取消 —— 回车因此总是落在匹配项上，不会误取消排在最前的关联；不自动关闭。搜索结果来自服务端、晚于按键到达，所以共享的 `PropertyPicker` 改为“输入后等到列表里出现匹配项再定位高亮”（在内存里过滤的选择器第一次渲染就有匹配项，行为不变）。表格里关联格只占一行，放不下的 chip 被裁掉，完整列表在行详情。任务需输入关键词才搜（含已关闭），表格先列最新 50 行。看板卡片和画廊同样显示 chip。**关联列暂不支持排序 / 分组 / 过滤**，表头菜单和「排序」「过滤」列表里不出现。
+- **行详情与「转为任务」。** 关联字段在行详情里各占一节：每条是可点击的行（任务：状态 + 编号 + 标题），可取消关联，底部「关联已有任务 / 关联记录」。“这一行没有评论区”的说明里多了真正的出口「转为任务」：对话框确认标题 → **先保证有关联到任务的字段，再建任务，最后关联**（任务建好却关联不上是最难发现的失败）。任务走普通的 `POST /api/issues`，建在表格所属项目里；关联写进本表第一个关联到任务的字段，没有时由管理者转换自动新增「关联任务」字段（对话框提前说明），非管理者则禁用并说明找谁。关联失败时提示“已创建但关联失败”。
+- **任务侧。** 任务详情右侧栏新增「关联记录」一节（没有时整节不出现），每行“表名 + 行标题”，点击打开 `…/collections/{c}?record={r}` —— 表格页现在读取 `?record=` 并直接展开该行详情。删除任务的确认框在有记录指向它时多一行提示（AC-8）；批量删除的确认框暂未加。任务被删除或状态变化时，实时事件会刷新表格查询，关联格随之更新。
+- **未做：** 关联列的排序 / 过滤 / 分组、lookup / rollup、双向关联字段（目标表自动出现反向列）、批量删除任务时的提示、智能体经 CLI 读写关联（FR-036）。
+- 需要执行迁移并重建后端：`make down && make up`。
+- 验证（2026-09-20，隔离环境）：Go `go build ./...`、`go vet`（handler、fields、migrate、server）、`go test ./internal/handler`（整包）与 `go test ./cmd/migrate` 通过；数据库已应用迁移 515，另在一次性数据库上把 511～515 逐个回滚、再连续执行两遍 up（幂等、回滚后 relation 字段被归档且类型被拒）。新增 `collection_link_test.go` 覆盖：字段定义与不可变目标、AC-8 全流程（关联 → 任务侧反查 → 删任务后 `missing` → 取消关联）、表到表与自关联、回收站 / 归档对正反两个方向的影响、跨工作区 / 文档 / 非 relation 字段 / 不存在的行被拒、普通成员可关联、50 条上限。前端：`@multica/core` 全套 161 个文件 1,964 个用例通过（含 schema 与 `ApiClient` 的畸形响应测试）；`@multica/views` 全套（最后一次改动之后重跑）448 个文件中 445 个、5,329 个用例通过，失败的 5 个用例都在 `issues/surface/`（基线提交上同样失败，与本次无关）。core / views 的 `tsc --noEmit` 与 eslint 无错误。用真实页面组件对真实 API 走通了整条链路（建两个关联字段 201、从格子里关联两个任务和一条客户记录、行详情、转为任务、任务侧「关联记录」点回该行、删除确认框的提示、删除后格子显示「已删除」且可点掉），中英文界面各一遍，无页面错误。**`e2e/cortex-g1.spec.ts` 新增的用例尚未通过 Next 前端执行**，请在本机运行 `make env-exec ARGS='-- pnpm exec playwright test e2e/cortex-g1.spec.ts --workers=1'`。
+
 ## 本地测试环境
 
 - 环境：`multica-703`；独立数据库：`multica_multica_703`。
