@@ -13,6 +13,7 @@
   "delete_issue": {
     "title": "删除任务",
     "description": "将永久删除该任务及其所有评论。此操作不可撤销。",
+    "linked_records_other": "有 {{count}} 条表格记录关联了该任务，删除后这些关联会显示为「已删除」。",
     "cancel": "取消",
     "confirm": "删除",
     "deleting": "删除中...",

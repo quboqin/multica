@@ -437,6 +437,135 @@ test.describe("Cortex G1 P0", () => {
     ).toBe(404);
   });
 
+  // FR-028 / AC-8: a row links to the issue that implements it, the issue
+  // lists the row, and deleting the issue leaves a link that says so.
+  test("a relation links a record to issues, the issue links back, and a deleted issue stays visible", async ({
+    page,
+  }) => {
+    const suffix = Date.now();
+    const collection = await api.createCollection(`G1 relations ${suffix}`);
+    const recordTitle = `Embed live views ${suffix}`;
+    const record = (
+      await api.cortexRequest(
+        `/api/collections/${collection.id}/records`,
+        "POST",
+        { title: recordTitle },
+      )
+    ).body;
+    const existing = await api.createIssue(`Build the embed block ${suffix}`);
+    await page.goto(`/${slug}/collections/${collection.id}`);
+
+    // A relation names what it links to when it is created.
+    await page
+      .locator("thead")
+      .getByRole("button", { name: "New field", exact: true })
+      .click();
+    const fieldPanel = page.getByRole("dialog", { name: "New field", exact: true });
+    await fieldPanel.getByLabel("Name", { exact: true }).fill("Implementation");
+    await fieldPanel.getByRole("combobox", { name: "Field type" }).click();
+    await page.getByRole("option", { name: "Relation", exact: true }).click();
+    await expect(
+      fieldPanel.getByRole("combobox", { name: "Link to" }),
+    ).toContainText("Issues");
+    const fieldCreated = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/api/collections/${collection.id}/fields`),
+    );
+    await fieldPanel.getByRole("button", { name: "Create field", exact: true }).click();
+    const field = await (await fieldCreated).json();
+    expect(field.config.relation).toEqual({ to_type: "issue" });
+    await expect(fieldPanel).toBeHidden();
+
+    // Link an existing issue from the cell.
+    const cell = page.getByRole("button", {
+      name: `Implementation: ${recordTitle}`,
+      exact: true,
+    });
+    await cell.click();
+    await page.getByPlaceholder("Search Issues…").fill(`embed block ${suffix}`);
+    const linked = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/records/${record.id}/links`),
+    );
+    await page
+      .getByRole("button", { name: new RegExp(`Build the embed block ${suffix}`) })
+      .click();
+    expect((await linked).status()).toBe(201);
+    await page.keyboard.press("Escape");
+    await expect(cell).toContainText(existing.identifier);
+
+    // The record's panel is the way out to discussion: convert it to an issue.
+    await page.getByRole("row", { name: new RegExp(recordTitle) }).hover();
+    await page
+      .getByRole("button", { name: `Open ${recordTitle}`, exact: true })
+      .click();
+    const panel = page.getByRole("complementary", { name: "Record details" });
+    const relation = panel.getByRole("region", { name: "Implementation" });
+    await expect(
+      relation.getByRole("link", { name: new RegExp(existing.identifier) }),
+    ).toBeVisible();
+    await panel.getByRole("button", { name: "Convert to issue" }).click();
+    const dialog = page.getByRole("dialog", { name: "Convert to issue" });
+    await expect(dialog.getByLabel("Issue title")).toHaveValue(recordTitle);
+    const issueCreated = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/api/issues"),
+    );
+    await dialog.getByRole("button", { name: "Create issue", exact: true }).click();
+    const converted = await (await issueCreated).json();
+    await expect(dialog).toBeHidden();
+    await expect(
+      relation.getByRole("link", { name: new RegExp(converted.identifier) }),
+    ).toBeVisible();
+
+    try {
+      // The issue side lists the record, and the link opens it.
+      await relation
+        .getByRole("link", { name: new RegExp(converted.identifier) })
+        .click();
+      await expect(page).toHaveURL(new RegExp(`/${slug}/issues/`));
+      const back = page.getByRole("link", { name: new RegExp(recordTitle) });
+      await expect(back).toBeVisible();
+      await back.click();
+      await expect(page).toHaveURL(
+        new RegExp(`/collections/${collection.id}\\?record=${record.id}`),
+      );
+      await expect(
+        page
+          .getByRole("complementary", { name: "Record details" })
+          .getByLabel("Record title"),
+      ).toHaveValue(recordTitle);
+
+      // Deleting a linked issue says which records point at it first.
+      await page.goto(`/${slug}/issues/${existing.id}`);
+      await expect(
+        page.getByRole("button", { name: /Linked records/ }),
+      ).toBeVisible();
+      const links = await api.cortexRequest(
+        `/api/issues/${existing.id}/record-links`,
+      );
+      expect(links.body.links).toHaveLength(1);
+      expect(links.body.links[0].record_id).toBe(record.id);
+    } finally {
+      await api.deleteIssue(converted.id);
+    }
+
+    // The edge survives its issue and the cell says what happened.
+    await api.deleteIssue(existing.id);
+    await page.goto(`/${slug}/collections/${collection.id}`);
+    await expect(cell).toContainText("Deleted");
+    const after = (
+      await api.cortexRequest(
+        `/api/collections/${collection.id}/records?record_id=${record.id}`,
+      )
+    ).body.records[0].links[field.id];
+    expect(after).toHaveLength(2);
+    expect(after.every((link: { missing: boolean }) => link.missing)).toBe(true);
+  });
+
   test("a cell edit that loses a conflict keeps the user's value until they choose to overwrite", async ({
     page,
   }) => {

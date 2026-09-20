@@ -175,6 +175,49 @@ export function useCollectionCommands(
     [qc, wsId, collectionId, enqueue, refresh],
   );
 
+  // Relation cells are edges with their own endpoints, not values. The server
+  // answers with the record as it now stands; only its links and revision are
+  // taken from that, so a value edit still in flight on the same row keeps its
+  // optimistic state.
+  const applyLinks = useCallback(
+    (updated: CollectionRecord) => {
+      patchCachedRecord(qc, wsId, collectionId, updated.id, (current) => ({
+        ...current,
+        links: updated.links,
+        revision: Math.max(current.revision, updated.revision),
+      }));
+      // The other side lists what points at it.
+      void qc.invalidateQueries({ queryKey: collectionKeys.backlinks(wsId) });
+    },
+    [qc, wsId, collectionId],
+  );
+  // Both resolve to whether the write landed; a failure has already been shown.
+  const linkWrite = useCallback(
+    (key: string, write: () => Promise<CollectionRecord>) =>
+      enqueue(key, () => write().then(applyLinks))
+        .then(() => true)
+        .catch((error: unknown) => {
+          toast.error(errorMessage(error));
+          void refresh();
+          return false;
+        }),
+    [enqueue, applyLinks, refresh],
+  );
+  const linkRecord = useCallback(
+    (recordId: string, fieldId: string, toId: string) =>
+      linkWrite(`${recordId}:${fieldId}`, () =>
+        api.linkCollectionRecord(collectionId, recordId, fieldId, toId),
+      ),
+    [collectionId, linkWrite],
+  );
+  const unlinkRecord = useCallback(
+    (recordId: string, fieldId: string, linkId: string) =>
+      linkWrite(`${recordId}:${fieldId}`, () =>
+        api.unlinkCollectionRecord(collectionId, recordId, linkId),
+      ),
+    [collectionId, linkWrite],
+  );
+
   const createRecord = useMutation({
     mutationFn: ({
       title,
@@ -234,6 +277,8 @@ export function useCollectionCommands(
   return {
     setField,
     setTitle,
+    linkRecord,
+    unlinkRecord,
     createRecord,
     deleteRecord,
     restoreRecord,

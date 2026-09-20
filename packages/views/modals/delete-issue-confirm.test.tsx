@@ -1,5 +1,7 @@
+import type { ReactElement } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render as renderBare, screen, fireEvent, waitFor } from "@testing-library/react";
 import { DeleteIssueConfirmModal } from "./delete-issue-confirm";
 import { NavigationProvider } from "../navigation";
 import type { NavigationAdapter } from "../navigation";
@@ -8,6 +10,18 @@ const mockDelete = vi.fn().mockResolvedValue(undefined);
 vi.mock("@multica/core/issues/mutations", () => ({
   useDeleteIssue: () => ({ mutateAsync: mockDelete }),
 }));
+
+// The modal asks which table records link to the issue it is about to delete.
+const api = vi.hoisted(() => ({ listIssueRecordLinks: vi.fn() }));
+vi.mock("@multica/core/api", () => ({ api }));
+vi.mock("@multica/core/paths", () => ({
+  useCurrentWorkspace: () => ({ id: "ws-1", slug: "acme" }),
+}));
+
+function render(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderBare(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -21,6 +35,7 @@ vi.mock("../i18n", () => ({
           title: "Delete issue?",
           description: "This cannot be undone.",
           hint: "Sub-issues are deleted too.",
+          linked_records: "Records link to this issue.",
           cancel: "Cancel",
           confirm: "Delete",
           deleting: "Deleting...",
@@ -64,6 +79,32 @@ async function deleteWith(
 describe("DeleteIssueConfirmModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    api.listIssueRecordLinks.mockResolvedValue([]);
+  });
+
+  // AC-8: deleting an issue that table records link to says so first. The
+  // links stay behind and read as deleted, which is worth knowing beforehand.
+  it("mentions the table records that link to the issue", async () => {
+    api.listIssueRecordLinks.mockResolvedValue([
+      { id: "l1", collection_id: "c1", collection_name: "Requirements", record_id: "r1", record_title: "Row", field_id: "f1", field_name: "Issues" },
+    ]);
+    render(
+      <NavigationProvider value={makeAdapter()}>
+        <DeleteIssueConfirmModal onClose={vi.fn()} data={{ issueId: "issue-1" }} />
+      </NavigationProvider>,
+    );
+    expect(await screen.findByText("Records link to this issue.")).toBeInTheDocument();
+    expect(api.listIssueRecordLinks).toHaveBeenCalledWith("issue-1", expect.anything());
+  });
+
+  it("says nothing about records when none link to the issue", async () => {
+    render(
+      <NavigationProvider value={makeAdapter()}>
+        <DeleteIssueConfirmModal onClose={vi.fn()} data={{ issueId: "issue-1" }} />
+      </NavigationProvider>,
+    );
+    await waitFor(() => expect(api.listIssueRecordLinks).toHaveBeenCalled());
+    expect(screen.queryByText("Records link to this issue.")).not.toBeInTheDocument();
   });
 
   // The bug this guards (GH #5995): deleting from an issue opened out of My

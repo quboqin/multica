@@ -110,11 +110,15 @@ export function PropertyPicker({
   const pendingSearchHighlight = useRef(false);
   useEffect(() => {
     if (!pendingSearchHighlight.current) return;
-    pendingSearchHighlight.current = false;
     const items = getItems();
     // -1 when the query matches nothing (only the empty row is left), which
     // leaves Enter inert instead of clearing the field.
-    setHighlightedIndex(items.findIndex((item) => !isEmptyItem(item)));
+    const firstMatch = items.findIndex((item) => !isEmptyItem(item));
+    // A picker that searches a server renders its matches a moment after the
+    // keystroke. The flag therefore stays up until there is a match to land
+    // on; a list filtered in memory has its matches on this first pass.
+    if (firstMatch >= 0) pendingSearchHighlight.current = false;
+    setHighlightedIndex(firstMatch);
   }, [children, getItems]);
 
   // Apply/remove highlight class via DOM when index changes

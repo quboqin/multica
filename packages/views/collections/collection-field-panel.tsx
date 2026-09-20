@@ -1,9 +1,11 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { GripVertical, Plus, X } from "lucide-react";
-import type { CollectionField } from "@multica/core/collections";
-import { ISSUE_PROPERTY_TYPES } from "@multica/core/types";
+import { GripVertical, ListTodo, Plus, Table2, X } from "lucide-react";
+import type {
+  CollectionField,
+  CollectionFieldInput,
+} from "@multica/core/collections";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -17,10 +19,12 @@ import {
 } from "@multica/ui/components/ui/select";
 import { ColorPicker, COLOR_PICKER_PRESETS } from "../common/color-picker";
 import { useT } from "../i18n";
-import { PropertyTypeLabel } from "../settings/components/properties-tab";
 import {
+  COLLECTION_FIELD_TYPES,
   FieldTypeIcon,
+  FieldTypeLabel,
   MAX_COLLECTION_FIELDS,
+  RELATION_TYPE,
   fieldHasOptions,
   safeFieldConversions,
 } from "./collection-fields";
@@ -34,6 +38,14 @@ interface OptionDraft {
 
 const presetColor = (index: number) =>
   COLOR_PICKER_PRESETS[index % COLOR_PICKER_PRESETS.length] ?? "#6b7280";
+
+/** What a relation field can point at, besides workspace tasks. */
+export interface RelationTable {
+  id: string;
+  name: string;
+}
+/** The "link to" choice that means workspace tasks rather than a table. */
+const TASKS = "issue";
 
 /** What the panel edits. */
 export type FieldPanelTarget =
@@ -57,6 +69,7 @@ export function CollectionFieldPanel({
   anchor,
   target,
   fieldCount,
+  tables = [],
   commands,
 }: {
   open: boolean;
@@ -64,6 +77,8 @@ export function CollectionFieldPanel({
   anchor: Element | null;
   target: FieldPanelTarget;
   fieldCount: number;
+  /** Tables a relation field may point at, this one included. */
+  tables?: RelationTable[];
   commands: CollectionCommands;
 }) {
   const { t } = useT("issues");
@@ -84,6 +99,7 @@ export function CollectionFieldPanel({
         <FieldForm
           target={target}
           fieldCount={fieldCount}
+          tables={tables}
           commands={commands}
           onClose={() => onOpenChange(false)}
         />
@@ -95,11 +111,13 @@ export function CollectionFieldPanel({
 function FieldForm({
   target,
   fieldCount,
+  tables,
   commands,
   onClose,
 }: {
   target: FieldPanelTarget;
   fieldCount: number;
+  tables: RelationTable[];
   commands: CollectionCommands;
   onClose: () => void;
 }) {
@@ -124,6 +142,13 @@ function FieldForm({
         ? [{ name: "", color: presetColor(0) }]
         : [],
   );
+  // What a relation points at. It is chosen once: the server refuses to move
+  // an existing relation, whose links would then aim at the wrong kind of thing.
+  const [linkTo, setLinkTo] = useState(() => {
+    const relation = field?.config.relation;
+    if (!relation || relation.to_type === TASKS) return TASKS;
+    return relation.collection_id;
+  });
   const [error, setError] = useState<string | null>(null);
   const optionList = useRef<HTMLDivElement>(null);
 
@@ -133,8 +158,30 @@ function FieldForm({
     ? ["text"]
     : field
       ? [field.type, ...safeFieldConversions(field.type)]
-      : [...ISSUE_PROPERTY_TYPES];
+      : [...COLLECTION_FIELD_TYPES];
   const showOptions = fieldHasOptions(type);
+  const showLinkTo = type === RELATION_TYPE;
+  const linkChoices = [
+    { value: TASKS, name: t(($) => $.cortex_table.relation_tasks) },
+    ...tables.map((table) => ({ value: table.id, name: table.name })),
+    // The table an existing relation points at may since have been deleted.
+    ...(linkTo !== TASKS && !tables.some((table) => table.id === linkTo)
+      ? [{ value: linkTo, name: t(($) => $.cortex_table.relation_table_deleted) }]
+      : []),
+  ].map((choice) => ({
+    value: choice.value,
+    // Issues are not one more table: the glyph says so before the name does.
+    label: (
+      <>
+        {choice.value === TASKS ? (
+          <ListTodo aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : (
+          <Table2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        )}
+        <span className="truncate">{choice.name}</span>
+      </>
+    ),
+  }));
   const valid = options.filter((option) => option.name.trim());
   const removed = field
     ? field.config.options.filter(
@@ -175,6 +222,14 @@ function FieldForm({
           })),
         }
       : undefined;
+    const relation: CollectionFieldInput["config"] = showLinkTo
+      ? {
+          relation:
+            linkTo === TASKS
+              ? { to_type: "issue" }
+              : { to_type: "record", collection_id: linkTo },
+        }
+      : undefined;
     try {
       if (target.kind === "title") {
         // The default label is not stored, so it keeps following the language.
@@ -195,6 +250,7 @@ function FieldForm({
           name: name.trim(),
           type,
           ...(config ? { config } : {}),
+          ...(relation ? { config: relation } : {}),
         });
       }
       onClose();
@@ -237,7 +293,7 @@ function FieldForm({
             label: (
               <>
                 <FieldTypeIcon type={value} />
-                <PropertyTypeLabel type={value} />
+                <FieldTypeLabel type={value} />
               </>
             ),
           }))}
@@ -267,7 +323,7 @@ function FieldForm({
             {typeChoices.map((value) => (
               <SelectItem key={value} value={value}>
                 <FieldTypeIcon type={value} />
-                <PropertyTypeLabel type={value} />
+                <FieldTypeLabel type={value} />
               </SelectItem>
             ))}
           </SelectContent>
@@ -282,6 +338,34 @@ function FieldForm({
           </p>
         )}
       </div>
+      {showLinkTo && (
+        <div className="space-y-1.5">
+          <Label>{t(($) => $.cortex_table.relation_link_to)}</Label>
+          <Select
+            items={linkChoices}
+            value={linkTo}
+            disabled={!!field}
+            onValueChange={(value) => value && setLinkTo(value)}
+          >
+            <SelectTrigger
+              aria-label={t(($) => $.cortex_table.relation_link_to)}
+              className="w-full"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} className="max-h-72">
+              {linkChoices.map((choice) => (
+                <SelectItem key={choice.value} value={choice.value}>
+                  {choice.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-caption text-muted-foreground">
+            {t(($) => $.cortex_table.relation_target_fixed)}
+          </p>
+        </div>
+      )}
       {showOptions && (
         <div className="space-y-1.5" ref={optionList}>
           <Label>{t(($) => $.cortex_table.options)}</Label>

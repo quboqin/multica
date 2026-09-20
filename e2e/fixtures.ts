@@ -333,7 +333,7 @@ export class TestApiClient {
     if(this.createdCollectionIds.length>0&&this.workspaceId){
       const client=new pg.Client(DATABASE_URL);await client.connect();
       try {await client.query("BEGIN");
-        for(const table of ["record","collection_field"]){await client.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])`,[this.workspaceId,this.createdCollectionIds]);}
+        for(const table of ["record_link","record","collection_field"]){await client.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])`,[this.workspaceId,this.createdCollectionIds]);}
         await client.query("DELETE FROM issue_view WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
         await client.query("DELETE FROM collection WHERE workspace_id=$1 AND id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
         await client.query("COMMIT");

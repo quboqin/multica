@@ -94,6 +94,7 @@ import { collectThreadParticipants, collectThreadReplies, deriveThreadResolution
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { QuickActionsSection } from "./quick-actions-section";
+import { LinkedRecordsSection } from "./linked-records-section";
 import { PluginPanelSection } from "../../plugins";
 import { PullRequestList } from "./pull-request-list";
 import { useGitHubSettings } from "@multica/core/github";
@@ -2558,6 +2559,10 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           </div>}
         </div>
       )}
+
+      {/* Table records that link to this task through a relation field.
+          Self-contained, and renders nothing when there are none. */}
+      <LinkedRecordsSection issueId={issue.id} />
 
       {/* Pull requests — hidden when the workspace disables the PR sidebar
           (or the GitHub master switch is off). Backend data is kept either

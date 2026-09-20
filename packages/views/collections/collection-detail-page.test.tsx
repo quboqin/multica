@@ -67,14 +67,18 @@ const field = (id: string, name: string, type: string): CollectionField => ({
   },
 });
 
+let lastAdapter: NavigationAdapter;
+
 function mount({
   layout,
   fields,
   role = "owner",
+  search = "",
 }: {
   layout: DataViewLayout;
   fields: CollectionField[];
   role?: string;
+  search?: string;
 }) {
   api.getCollection.mockResolvedValue({
     collection: {
@@ -103,11 +107,12 @@ function mount({
     replace: vi.fn(),
     back: vi.fn(),
     pathname: "/acme/collections/c-1",
-    searchParams: new URLSearchParams(),
+    searchParams: new URLSearchParams(search),
     hash: "",
     getShareableUrl: (path) => path,
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  lastAdapter = adapter;
   return renderWithI18n(
     <NavigationProvider value={adapter}>
       <QueryClientProvider client={client}>
@@ -213,5 +218,50 @@ describe("fields in layouts without column headers", () => {
     await screen.findByRole("menuitemcheckbox", { name: "Notes" });
     expect(screen.queryByRole("button", { name: "Edit field Notes" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit field Name" })).not.toBeInTheDocument();
+  });
+});
+
+// A task's linked records, and a relation to another table, link to one record.
+describe("a link to one record", () => {
+  it("opens the table with that record's panel showing", async () => {
+    api.listCollectionRecords.mockImplementation(async (_id: string, query: { record_id?: string }) => ({
+      records: query.record_id
+        ? [
+            {
+              id: query.record_id,
+              workspace_id: "ws-1",
+              collection_id: "c-1",
+              title: "Embed live views",
+              fields: {},
+              links: {},
+              revision: 1,
+              created_at: "2026-09-20T00:00:00Z",
+            },
+          ]
+        : [],
+      total: 0,
+      groups: [],
+      next_cursor: null,
+    }));
+    mount({ layout: "table", fields: [field("notes", "Notes", "text")], search: "record=r-7" });
+    const panel = await screen.findByRole("complementary", { name: "Record details" });
+    expect(await within(panel).findByDisplayValue("Embed live views")).toBeInTheDocument();
+    expect(api.listCollectionRecords).toHaveBeenCalledWith(
+      "c-1",
+      { record_id: "r-7" },
+      null,
+      expect.anything(),
+      "ws-1",
+    );
+    // Closing it takes the record out of the address as well.
+    await userEvent.setup().click(within(panel).getByRole("button", { name: "Close" }));
+    expect(lastAdapter.replace).toHaveBeenCalledWith("/acme/collections/c-1");
+    expect(screen.queryByRole("complementary", { name: "Record details" })).not.toBeInTheDocument();
+  });
+
+  it("shows no panel without one", async () => {
+    mount({ layout: "table", fields: [field("notes", "Notes", "text")] });
+    await screen.findByRole("button", { name: "Notes" });
+    expect(screen.queryByRole("complementary", { name: "Record details" })).not.toBeInTheDocument();
   });
 });

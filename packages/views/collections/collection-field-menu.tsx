@@ -17,9 +17,9 @@ import {
   DropdownMenuSeparator,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useT } from "../i18n";
-import { PropertyTypeLabel } from "../settings/components/properties-tab";
 import {
   FieldTypeIcon,
+  FieldTypeLabel,
   ISSUE_PROPERTY_QUOTA,
   MAX_COLLECTION_FIELDS,
   fieldHasOptions,
@@ -79,7 +79,7 @@ export function CollectionTitleMenu({
             <Pencil />
             <span className="flex-1">{t(($) => $.cortex_table.edit_field)}</span>
             <span className="text-caption text-muted-foreground">
-              <PropertyTypeLabel type="text" />
+              <FieldTypeLabel type="text" />
             </span>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
@@ -100,7 +100,8 @@ export function CollectionTitleMenu({
 /**
  * Menu behind a column header: "Edit field" for managers (it opens the field
  * panel under this column), then the view actions (sort, group, filter, hide)
- * everyone can use. Archiving keeps the stored values; it only removes the
+ * everyone can use. A field the record query cannot read — a relation — leaves
+ * sort and filter out. Archiving keeps the stored values; it only removes the
  * definition from the table.
  */
 export function CollectionFieldMenu({
@@ -118,9 +119,9 @@ export function CollectionFieldMenu({
   fieldCount: number;
   canManage: boolean;
   onEdit: () => void;
-  onSort: (direction: "asc" | "desc") => void;
+  onSort?: (direction: "asc" | "desc") => void;
   onGroup?: () => void;
-  onFilter: () => void;
+  onFilter?: () => void;
   onHide: () => void;
   onArchive: () => void;
 }) {
@@ -140,7 +141,7 @@ export function CollectionFieldMenu({
             <Pencil />
             <span className="flex-1">{t(($) => $.cortex_table.edit_field)}</span>
             <span className="text-caption text-muted-foreground">
-              <PropertyTypeLabel type={field.type} />
+              <FieldTypeLabel type={field.type} />
               {fieldHasOptions(field.type) &&
                 ` · ${t(($) => $.cortex_table.option_count, {
                   count: field.config.options.length,
@@ -150,25 +151,31 @@ export function CollectionFieldMenu({
           <DropdownMenuSeparator />
         </>
       )}
-      <DropdownMenuItem onClick={() => onSort("asc")}>
-        <ArrowUp />
-        {t(($) => $.cortex_table.sort_ascending)}
-      </DropdownMenuItem>
-      <DropdownMenuItem onClick={() => onSort("desc")}>
-        <ArrowDown />
-        {t(($) => $.cortex_table.sort_descending)}
-      </DropdownMenuItem>
+      {onSort && (
+        <>
+          <DropdownMenuItem onClick={() => onSort("asc")}>
+            <ArrowUp />
+            {t(($) => $.cortex_table.sort_ascending)}
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => onSort("desc")}>
+            <ArrowDown />
+            {t(($) => $.cortex_table.sort_descending)}
+          </DropdownMenuItem>
+        </>
+      )}
       {onGroup && (
         <DropdownMenuItem onClick={onGroup}>
           <Group />
           {t(($) => $.cortex_table.group_by_field)}
         </DropdownMenuItem>
       )}
-      <DropdownMenuItem onClick={onFilter}>
-        <Filter />
-        {t(($) => $.cortex_table.filter_by_field)}
-      </DropdownMenuItem>
-      <DropdownMenuSeparator />
+      {onFilter && (
+        <DropdownMenuItem onClick={onFilter}>
+          <Filter />
+          {t(($) => $.cortex_table.filter_by_field)}
+        </DropdownMenuItem>
+      )}
+      {(onSort || onGroup || onFilter) && <DropdownMenuSeparator />}
       <DropdownMenuItem onClick={onHide}>
         <EyeOff />
         {t(($) => $.cortex_table.hide_in_view)}

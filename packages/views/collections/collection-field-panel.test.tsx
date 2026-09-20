@@ -172,6 +172,70 @@ describe("field panel", () => {
     expect(commands.renameTitleColumn.mutateAsync).not.toHaveBeenCalled();
   });
 
+  it("creates a relation to issues, or to one of the tables", async () => {
+    const user = userEvent.setup();
+    const tables = [
+      { id: "c-1", name: "Requirements" },
+      { id: "c-2", name: "Customers" },
+    ];
+    for (const [choice, relation] of [
+      [null, { to_type: "issue" }],
+      ["Customers", { to_type: "record", collection_id: "c-2" }],
+    ] as const) {
+      const commands = commandsWith();
+      const { unmount } = renderWithI18n(
+        <CollectionFieldPanel open anchor={null} target={{ kind: "new" }} fieldCount={0} tables={tables} commands={commands} onOpenChange={vi.fn()} />,
+      );
+      await user.type(screen.getByLabelText("Name"), "Linked");
+      // Only a relation asks what it links to.
+      expect(screen.queryByRole("combobox", { name: "Link to" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("combobox", { name: "Field type" }));
+      await user.click(await screen.findByRole("option", { name: "Relation" }));
+      const linkTo = await screen.findByRole("combobox", { name: "Link to" });
+      expect(linkTo).toHaveTextContent("Issues");
+      if (choice) {
+        await user.click(linkTo);
+        await user.click(await screen.findByRole("option", { name: choice }));
+      }
+      await user.click(screen.getByRole("button", { name: "Create field" }));
+      await waitFor(() =>
+        expect(commands.createField.mutateAsync).toHaveBeenCalledWith({
+          name: "Linked",
+          type: "relation",
+          config: { relation },
+        }),
+      );
+      unmount();
+    }
+  });
+
+  it("renames a relation but never moves its target", async () => {
+    const commands = commandsWith();
+    const relation: CollectionField = {
+      id: "customer",
+      name: "Customer",
+      type: "relation",
+      position: 0,
+      config: { options: [], relation: { to_type: "record", collection_id: "c-2" } },
+    };
+    renderWithI18n(
+      <CollectionFieldPanel open anchor={null} target={{ kind: "field", field: relation }} fieldCount={1} tables={[{ id: "c-2", name: "Customers" }]} commands={commands} onOpenChange={vi.fn()} />,
+    );
+    expect(screen.getByRole("combobox", { name: "Field type" })).toBeDisabled();
+    const linkTo = screen.getByRole("combobox", { name: "Link to" });
+    expect(linkTo).toBeDisabled();
+    expect(linkTo).toHaveTextContent("Customers");
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Client" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // No config goes out: the server refuses any on a relation.
+    await waitFor(() =>
+      expect(commands.updateField.mutateAsync).toHaveBeenCalledWith({
+        fieldId: "customer",
+        patch: { name: "Client" },
+      }),
+    );
+  });
+
   it("keeps the panel open with the server error when saving fails", async () => {
     const commands = commandsWith({
       createField: {

@@ -12,6 +12,7 @@ import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
 import {
   collectionDetailOptions,
+  collectionListOptions,
   collectionRecordsOptions,
   type CollectionField,
   type CollectionQuery,
@@ -53,8 +54,8 @@ import {
   CollectionFieldPanel,
   type FieldPanelTarget,
 } from "./collection-field-panel";
-import { CollectionValue } from "./collection-cell";
-import { fieldText, recordValue } from "./collection-fields";
+import { RecordValue } from "./collection-cell";
+import { fieldText, isRelation, linkLabel, recordLinks } from "./collection-fields";
 import { FieldQuota } from "./collection-field-menu";
 import { CollectionRecordPanel } from "./collection-record-panel";
 import { CollectionTable, type CollectionTableActions } from "./collection-table";
@@ -199,7 +200,24 @@ export function CollectionDetailPage({
   );
   const [quotaOpen, setQuotaOpen] = useState(false);
   const quotaTrigger = useRef<HTMLButtonElement>(null);
-  const [selectedRecord, setSelectedRecord] = useState<string | null>(null);
+  // A link to one record — from a task's linked records, or from another
+  // table's relation — opens this table with that record's panel showing.
+  const linkedRecord = embedded ? null : navigation.searchParams.get("record");
+  const [selectedRecord, setSelectedRecord] = useState<string | null>(linkedRecord);
+  useEffect(() => {
+    if (linkedRecord) setSelectedRecord(linkedRecord);
+  }, [linkedRecord]);
+  const closeRecord = () => {
+    setSelectedRecord(null);
+    // The address stops naming a record nobody is looking at, so a reload or
+    // a copied link does not reopen it.
+    if (linkedRecord) navigation.replace(navigation.pathname);
+  };
+  // Tables a relation field can point at. Only managers open the field panel.
+  const { data: tables = [] } = useQuery({
+    ...collectionListOptions(wsId),
+    enabled: !!wsId && canManage,
+  });
 
   const allFields = useMemo(
     () => [...(data?.fields ?? [])].sort((a, b) => a.position - b.position),
@@ -375,7 +393,13 @@ export function CollectionDetailPage({
       id: field.id,
       label: field.name,
       kind: field.type as DataSourceField<CollectionRecord>["kind"],
-      value: (row) => fieldText(field, row.fields[field.id]),
+      value: (row) =>
+        isRelation(field)
+          ? recordLinks(row, field)
+              .filter((link) => !link.missing)
+              .map(linkLabel)
+              .join(", ")
+          : fieldText(field, row.fields[field.id]),
     }));
   const project = projects.find((item) => item.id === data?.collection.project_id);
   const total = summary.data?.pages[0]?.total;
@@ -474,9 +498,7 @@ export function CollectionDetailPage({
           fields={galleryFields}
           renderField={(item, row) => {
             const field = allFields.find((candidate) => candidate.id === item.id);
-            return field ? (
-              <CollectionValue field={field} value={recordValue(row, field)} compact />
-            ) : null;
+            return field ? <RecordValue record={row} field={field} compact /> : null;
           }}
           capabilities={visualCapabilities}
           onOpen={openRow}
@@ -707,10 +729,12 @@ export function CollectionDetailPage({
             key={selectedRecord}
             wsId={wsId}
             collectionId={id}
+            projectId={data?.collection.project_id ?? null}
             recordId={selectedRecord}
             fields={allFields}
+            canManage={canManage}
             commands={commands}
-            onClose={() => setSelectedRecord(null)}
+            onClose={closeRecord}
           />
         )}
       </div>
@@ -761,6 +785,7 @@ export function CollectionDetailPage({
         anchor={fieldPanel.anchor}
         target={fieldPanel.target}
         fieldCount={allFields.length}
+        tables={tables}
         commands={commands}
       />
     </main>

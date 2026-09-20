@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  ArrowUpRight,
   AtSign,
   Calendar,
   CheckSquare,
@@ -15,14 +16,32 @@ import {
 import type {
   CollectionField,
   CollectionRecord,
+  RecordLink,
 } from "@multica/core/collections";
-import type { IssueProperty, IssuePropertyValue } from "@multica/core/types";
+import {
+  ISSUE_PROPERTY_TYPES,
+  type IssueProperty,
+  type IssuePropertyValue,
+} from "@multica/core/types";
 import { cn } from "@multica/ui/lib/utils";
+import { useT } from "../i18n";
+import { PropertyTypeLabel } from "../settings/components/properties-tab";
 
 /** Collections may hold at most this many active fields (server enforced). */
 export const MAX_COLLECTION_FIELDS = 50;
 /** The workspace issue-property quota a collection field does not consume. */
 export const ISSUE_PROPERTY_QUOTA = 20;
+
+/** A relation's cells are links to tasks or to another table's records. */
+export const RELATION_TYPE = "relation";
+/**
+ * Types a table field can have: the task-property catalog plus relation, which
+ * only tables have.
+ */
+export const COLLECTION_FIELD_TYPES: readonly string[] = [
+  ...ISSUE_PROPERTY_TYPES,
+  RELATION_TYPE,
+];
 
 const TYPE_ICONS: Record<string, LucideIcon> = {
   text: Type,
@@ -34,6 +53,7 @@ const TYPE_ICONS: Record<string, LucideIcon> = {
   url: Link2,
   actor: AtSign,
   multi_actor: Users,
+  relation: ArrowUpRight,
 };
 
 export function FieldTypeIcon({
@@ -50,6 +70,44 @@ export function FieldTypeIcon({
       className={cn("size-3.5 shrink-0 text-muted-foreground", className)}
     />
   );
+}
+
+/** Name of a field type; relation is the one the task-property catalog lacks. */
+export function FieldTypeLabel({ type }: { type: string }) {
+  const { t } = useT("issues");
+  if (type === RELATION_TYPE) return <>{t(($) => $.cortex_table.type_relation)}</>;
+  return <PropertyTypeLabel type={type} />;
+}
+
+export function isRelation(field: CollectionField): boolean {
+  return field.type === RELATION_TYPE;
+}
+
+/** True when the relation points at workspace tasks rather than at a table. */
+export function relatesToTasks(field: CollectionField): boolean {
+  return isRelation(field) && field.config.relation?.to_type === "issue";
+}
+
+/**
+ * Relation cells are not sortable, groupable or filterable yet: their values
+ * live in their own table, outside the record's value bag the queries read.
+ */
+export function fieldIsQueryable(field: CollectionField): boolean {
+  return !isRelation(field);
+}
+
+const NO_LINKS: RecordLink[] = [];
+/** The links of one relation cell. */
+export function recordLinks(
+  record: CollectionRecord,
+  field: CollectionField,
+): RecordLink[] {
+  return record.links[field.id] ?? NO_LINKS;
+}
+
+/** What a link is called in a chip: the task's identifier or the record's title. */
+export function linkLabel(link: RecordLink): string {
+  return link.to_type === "issue" ? link.identifier : link.title;
 }
 
 export function fieldHasOptions(type: string): boolean {

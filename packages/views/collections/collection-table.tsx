@@ -24,7 +24,7 @@ import { DataViewColumnHeader, DataViewTable, useFrozenRows } from "../data-view
 import { useT } from "../i18n";
 import { CollectionFieldEditor } from "./collection-cell";
 import { CollectionFieldMenu, CollectionTitleMenu } from "./collection-field-menu";
-import { FieldTypeIcon } from "./collection-fields";
+import { FieldTypeIcon, fieldIsQueryable, isRelation } from "./collection-fields";
 import type { CollectionCommands } from "./use-collection-commands";
 
 export const tableCapabilities = {
@@ -176,7 +176,12 @@ export function CollectionTable({
     };
     const fieldColumns = fields.map<ColumnDef<CollectionRecord>>((field) => ({
       id: field.id,
-      size: field.type === "checkbox" ? 100 : field.type === "multi_select" || field.type === "multi_actor" ? 200 : 150,
+      size:
+        field.type === "checkbox"
+          ? 100
+          : field.type === "multi_select" || field.type === "multi_actor" || isRelation(field)
+            ? 200
+            : 150,
       header: () => (
         <div
           ref={(node) => {
@@ -191,7 +196,7 @@ export function CollectionTable({
             fillCell
             label={field.name}
             icon={<FieldTypeIcon type={field.type} />}
-            sortField={field.id}
+            sortField={fieldIsQueryable(field) ? field.id : undefined}
             sortBy={actions.sortBy}
             sortDirection={actions.sortDir}
             onSort={(id, direction) => actions.onSort(id, direction)}
@@ -210,13 +215,21 @@ export function CollectionTable({
                     headers.current.get(field.id)?.closest("th") ?? null,
                   )
                 }
-                onSort={(direction) => actions.onSort(field.id, direction)}
+                onSort={
+                  fieldIsQueryable(field)
+                    ? (direction) => actions.onSort(field.id, direction)
+                    : undefined
+                }
                 onGroup={
                   field.type === "select"
                     ? () => actions.onGroup(field.id)
                     : undefined
                 }
-                onFilter={() => actions.onFilter(field.id)}
+                onFilter={
+                  fieldIsQueryable(field)
+                    ? () => actions.onFilter(field.id)
+                    : undefined
+                }
                 onHide={() => actions.onHide(field.id)}
                 onArchive={() => actions.onArchiveField(field)}
               />
@@ -236,6 +249,7 @@ export function CollectionTable({
               onChange={(value) =>
                 void commands.setField(row.original, field.id, value)
               }
+              relation={{ link: commands.linkRecord, unlink: commands.unlinkRecord }}
               className={cn(field.type !== "checkbox" && "px-4")}
             />
           </div>

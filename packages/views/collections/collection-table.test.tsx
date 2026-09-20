@@ -183,6 +183,35 @@ describe("field entry points", () => {
     expect(screen.getByRole("menuitem", { name: "Ascending" })).toBeInTheDocument();
   });
 
+  it("leaves sort, group and filter out of a relation column's menu", async () => {
+    const user = userEvent.setup();
+    const relation: CollectionField = {
+      id: "tasks",
+      name: "Implementation",
+      type: "relation",
+      position: 1,
+      config: { options: [], relation: { to_type: "issue", collection_id: "" } },
+    };
+    const tableActions = actions({ fieldCount: 1 });
+    withQuery(
+      <CollectionTable
+        collectionId="c-1"
+        titleName="Name"
+        fields={[relation]}
+        query={{}}
+        commands={commands}
+        actions={tableActions}
+        selectedRecordId={null}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: "Implementation" }));
+    // Its cells are links in their own table; the record query cannot read them.
+    expect(await screen.findByRole("menuitem", { name: /Edit field/ })).toHaveTextContent("Relation");
+    expect(screen.queryByRole("menuitem", { name: /Ascending|Descending|Filter|Group/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Hide in this view" }));
+    expect(tableActions.onHide).toHaveBeenCalledWith("tasks");
+  });
+
   it("opens one Edit field entry from the column menu", () => {
     const onEdit = vi.fn();
     renderWithI18n(

@@ -12,7 +12,14 @@ import { cn } from "@multica/ui/lib/utils";
 import { useLocale } from "../i18n";
 import { ActorPropertyDisplay } from "../issues/components/pickers/actor-property-picker";
 import { CustomPropertyValueInput } from "../issues/components/pickers/custom-property-picker";
-import { OptionChip, fieldAsProperty, recordValue } from "./collection-fields";
+import {
+  OptionChip,
+  fieldAsProperty,
+  isRelation,
+  recordLinks,
+  recordValue,
+} from "./collection-fields";
+import { RelationChips, RelationEditor } from "./collection-relation";
 
 const empty = <span className="text-muted-foreground/60">—</span>;
 
@@ -79,6 +86,43 @@ export function CollectionValue({
 }
 
 /**
+ * Read-only rendering of one cell of a record. A relation's content is its
+ * links rather than an entry in the value bag, so cards and cells that only
+ * display go through here instead of reading `record.fields` themselves.
+ */
+export function RecordValue({
+  record,
+  field,
+  compact = false,
+}: {
+  record: CollectionRecord;
+  field: CollectionField;
+  compact?: boolean;
+}) {
+  if (isRelation(field))
+    return <RelationChips links={recordLinks(record, field)} compact={compact} />;
+  return (
+    <CollectionValue field={field} value={recordValue(record, field)} compact={compact} />
+  );
+}
+
+/** Whether a record has anything to show for a field. */
+export function hasRecordValue(
+  record: CollectionRecord,
+  field: CollectionField,
+): boolean {
+  return isRelation(field)
+    ? recordLinks(record, field).length > 0
+    : recordValue(record, field) !== undefined;
+}
+
+/** How a relation cell writes: one edge at a time, never as a value. */
+export interface RelationActions {
+  link: (recordId: string, fieldId: string, toId: string) => Promise<unknown>;
+  unlink: (recordId: string, fieldId: string, linkId: string) => Promise<unknown>;
+}
+
+/**
  * Editable value for one record field. Every type edits in place: pickers for
  * option and member fields (multi-select stays open while toggling), a
  * calendar for dates, an input popover for text-like values and a direct
@@ -88,6 +132,7 @@ export function CollectionFieldEditor({
   record,
   field,
   onChange,
+  relation,
   open,
   onOpenChange,
   readOnly = false,
@@ -96,6 +141,8 @@ export function CollectionFieldEditor({
   record: CollectionRecord;
   field: CollectionField;
   onChange: (value: unknown) => void;
+  /** Required for relation fields to be editable; without it they only display. */
+  relation?: RelationActions;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   readOnly?: boolean;
@@ -103,6 +150,36 @@ export function CollectionFieldEditor({
 }) {
   const value = recordValue(record, field);
   const label = `${field.name}: ${record.title}`;
+  if (isRelation(field)) {
+    const chips = <RelationChips links={recordLinks(record, field)} />;
+    if (readOnly || !relation)
+      return (
+        <div className={cn("flex h-full min-w-0 items-center px-2", className)}>
+          {chips}
+        </div>
+      );
+    return (
+      <RelationEditor
+        record={record}
+        field={field}
+        open={open}
+        onOpenChange={onOpenChange}
+        onLink={(toId) => relation.link(record.id, field.id, toId)}
+        onUnlink={(linkId) => relation.unlink(record.id, field.id, linkId)}
+        trigger={chips}
+        triggerRender={
+          <button
+            type="button"
+            aria-label={label}
+            className={cn(
+              "flex h-full min-h-8 w-full min-w-0 items-center overflow-hidden px-2 text-left text-label outline-none hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring/50 data-[popup-open]:bg-accent/40",
+              className,
+            )}
+          />
+        }
+      />
+    );
+  }
   if (field.type === "checkbox") {
     return (
       <div className={cn("flex h-full items-center px-2", className)}>

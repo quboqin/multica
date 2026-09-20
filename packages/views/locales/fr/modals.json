@@ -13,6 +13,8 @@
   "delete_issue": {
     "title": "Supprimer la tâche",
     "description": "Cette tâche et tous ses commentaires seront définitivement supprimés. Cette action est irréversible.",
+    "linked_records_one": "{{count}} enregistrement de table est lié à cette tâche. Son lien s’affichera comme supprimé.",
+    "linked_records_other": "{{count}} enregistrements de table sont liés à cette tâche. Leurs liens s’afficheront comme supprimés.",
     "cancel": "Annuler",
     "confirm": "Supprimer",
     "deleting": "Suppression...",

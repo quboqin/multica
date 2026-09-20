@@ -43,7 +43,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
-import { FieldTypeIcon, OptionChip } from "./collection-fields";
+import { FieldTypeIcon, OptionChip, fieldIsQueryable } from "./collection-fields";
 
 const LAYOUTS: { layout: DataViewLayout; icon: typeof Table2 }[] = [
   { layout: "table", icon: Table2 },
@@ -282,7 +282,8 @@ export function FilterPopover({
 }) {
   const { t } = useT("issues");
   const filterable = fields.filter(
-    (field) => field.type !== "actor" && field.type !== "multi_actor",
+    (field) =>
+      field.type !== "actor" && field.type !== "multi_actor" && fieldIsQueryable(field),
   );
   const unused = filterable.filter(
     (field) => !filters.some((filter) => filter.field === field.id),
@@ -439,7 +440,8 @@ export function SortPopover({
 }) {
   const { t } = useT("issues");
   const sortable = fields.filter(
-    (field) => field.type !== "multi_actor" && field.type !== "actor",
+    (field) =>
+      field.type !== "multi_actor" && field.type !== "actor" && fieldIsQueryable(field),
   );
   const name =
     sortBy === "title"

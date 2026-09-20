@@ -13,8 +13,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
-import { CollectionValue } from "./collection-cell";
-import { recordValue } from "./collection-fields";
+import { RecordValue, hasRecordValue } from "./collection-cell";
 import type { CollectionCommands } from "./use-collection-commands";
 
 const NONE = "__none__";
@@ -206,17 +205,15 @@ function BoardColumn({
                 </span>
               )}
             </button>
-            {cardFields.some((field) => recordValue(record, field) !== undefined) && (
+            {cardFields.some((field) => hasRecordValue(record, field)) && (
               <div className="flex flex-wrap items-center gap-1.5 text-caption">
-                {cardFields.map((field) => {
-                  const fieldValue = recordValue(record, field);
-                  if (fieldValue === undefined) return null;
-                  return (
+                {cardFields.map((field) =>
+                  hasRecordValue(record, field) ? (
                     <span key={field.id} className="inline-flex max-w-full items-center" title={field.name}>
-                      <CollectionValue field={field} value={fieldValue} compact />
+                      <RecordValue record={record} field={field} compact />
                     </span>
-                  );
-                })}
+                  ) : null,
+                )}
               </div>
             )}
           </article>
