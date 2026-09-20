@@ -34,6 +34,60 @@ type PropertyOption struct {
 
 type PropertyConfig struct {
 	Options []PropertyOption `json:"options,omitempty"`
+	// Relation is set only on collection relation fields. Issue properties
+	// never carry it: their type whitelist has no relation.
+	Relation *RelationConfig `json:"relation,omitempty"`
+}
+
+// TypeRelation is the collection-only field type whose values are edges in
+// record_link rather than entries in a record's value bag.
+const TypeRelation = "relation"
+
+// Relation targets, stored as record_link.to_type.
+const (
+	RelationToIssue  = "issue"
+	RelationToRecord = "record"
+)
+
+// RelationConfig names what a relation field points at: workspace tasks, or
+// the records of one collection.
+type RelationConfig struct {
+	ToType       string `json:"to_type"`
+	CollectionID string `json:"collection_id,omitempty"`
+}
+
+// ParseRelationConfig reads a stored relation field's target.
+func ParseRelationConfig(raw []byte) (RelationConfig, bool) {
+	cfg := parsePropertyConfig(raw)
+	if cfg.Relation == nil {
+		return RelationConfig{}, false
+	}
+	return *cfg.Relation, true
+}
+
+// ValidateRelationConfig canonicalizes a new relation field's target. Whether
+// the named collection exists is the caller's check; this one is syntax only.
+func ValidateRelationConfig(cfg *PropertyConfig) (RelationConfig, error) {
+	if cfg == nil || cfg.Relation == nil {
+		return RelationConfig{}, errors.New("relation fields require a target: config.relation.to_type must be \"issue\" or \"record\"")
+	}
+	if len(cfg.Options) > 0 {
+		return RelationConfig{}, fmt.Errorf("type %q does not accept options", TypeRelation)
+	}
+	switch cfg.Relation.ToType {
+	case RelationToIssue:
+		if strings.TrimSpace(cfg.Relation.CollectionID) != "" {
+			return RelationConfig{}, errors.New("a relation to tasks does not take a collection_id")
+		}
+		return RelationConfig{ToType: RelationToIssue}, nil
+	case RelationToRecord:
+		id, err := uuid.Parse(strings.TrimSpace(cfg.Relation.CollectionID))
+		if err != nil {
+			return RelationConfig{}, errors.New("a relation to records requires config.relation.collection_id")
+		}
+		return RelationConfig{ToType: RelationToRecord, CollectionID: id.String()}, nil
+	}
+	return RelationConfig{}, fmt.Errorf("unknown relation target %q; valid targets: %s, %s", cfg.Relation.ToType, RelationToIssue, RelationToRecord)
 }
 
 func parsePropertyConfig(raw []byte) PropertyConfig {
@@ -48,6 +102,9 @@ func parsePropertyConfig(raw []byte) PropertyConfig {
 }
 
 func ValidateConfig(propType string, cfg *PropertyConfig, validateLabelName func(string) (string, error), normalizeColor func(string) (string, error)) ([]byte, error) {
+	if cfg != nil && cfg.Relation != nil {
+		return nil, fmt.Errorf("type %q does not accept a relation target", propType)
+	}
 	if !propertyTypeHasOptions(propType) {
 		if cfg != nil && len(cfg.Options) > 0 {
 			return nil, fmt.Errorf("type %q does not accept options", propType)
@@ -306,6 +363,10 @@ func ValidateValue(def Definition, raw json.RawMessage) ([]byte, error) {
 			out[i] = ref.String()
 		}
 		return json.Marshal(out)
+	case TypeRelation:
+		// A relation has no entry in the value bag; its edges have their own
+		// write path and their own table.
+		return nil, errors.New("a relation field is edited through record links, not as a value")
 	default:
 		return nil, fmt.Errorf("unsupported property type %q", def.Type)
 	}

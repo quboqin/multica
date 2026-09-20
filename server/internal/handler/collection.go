@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/fields"
+	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -158,11 +160,16 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 400, err.Error())
 		return
 	}
-	if err = validatePropertyType(req.Type); err != nil {
+	if err = validateCollectionFieldType(req.Type); err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}
-	config, err := fields.ValidateConfig(req.Type, req.Config, validateLabelName, normalizeColor)
+	var config []byte
+	if req.Type == fields.TypeRelation {
+		config, err = h.relationFieldConfig(r.Context(), collection, req.Config)
+	} else {
+		config, err = fields.ValidateConfig(req.Type, req.Config, validateLabelName, normalizeColor)
+	}
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return
@@ -271,6 +278,12 @@ func (h *Handler) SetCollectionRecordField(w http.ResponseWriter, r *http.Reques
 		writeError(w, 404, "field not found")
 		return
 	}
+	// Clearing takes the same path as setting, so relations are turned away
+	// before either: their cells are edges, not entries in the value bag.
+	if definition.Type == fields.TypeRelation {
+		writeError(w, 400, "a relation field is edited through record links, not as a value")
+		return
+	}
 	var req struct {
 		Value         json.RawMessage `json:"value"`
 		ExpectedValue json.RawMessage `json:"expected_value"`
@@ -315,6 +328,12 @@ func (h *Handler) SetCollectionRecordField(w http.ResponseWriter, r *http.Reques
 }
 func (h *Handler) respondCollectionRecord(w http.ResponseWriter, r *http.Request, record db.Record, status int) {
 	response := collectionRecordResponse(record)
+	// The write has already happened, so a failed link read must not turn it
+	// into an error. The payload goes out without "links" and the client's next
+	// read brings them back.
+	if err := h.attachRecordLinks(r.Context(), h.Queries, record.WorkspaceID, []pgtype.UUID{record.ID}, []map[string]any{response}); err != nil {
+		slog.Warn("read record links failed", append(logger.RequestAttrs(r), "error", err, "record_id", uuidToString(record.ID))...)
+	}
 	user, _ := requireUserID(w, r)
 	actorType, actorID := h.resolveActor(r, user, uuidToString(record.WorkspaceID))
 	h.publish("record:updated", uuidToString(record.WorkspaceID), actorType, actorID, map[string]any{"collection_id": uuidToString(record.CollectionID), "record": response})
@@ -500,6 +519,7 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	}
 	defer rows.Close()
 	records := []map[string]any{}
+	recordIDs := []pgtype.UUID{}
 	cursors := []recordCursor{}
 	for rows.Next() {
 		var record db.Record
@@ -508,6 +528,7 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		records = append(records, collectionRecordResponse(record))
+		recordIDs = append(recordIDs, record.ID)
 		cursors = append(cursors, recordCursor{Fingerprint: fingerprint, CreatedAt: record.CreatedAt.Time.Format(time.RFC3339Nano), ID: uuidToString(record.ID)})
 	}
 	if rows.Err() != nil {
@@ -517,6 +538,12 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	more := len(records) > limit
 	if more {
 		records = records[:limit]
+		recordIDs = recordIDs[:limit]
+	}
+	// Relation cells read from the same snapshot as the rows they belong to.
+	if err = h.attachRecordLinks(r.Context(), h.Queries.WithTx(tx), collection.WorkspaceID, recordIDs, records); err != nil {
+		writeError(w, 500, "failed to read record links")
+		return
 	}
 	var next *string
 	if more {

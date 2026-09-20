@@ -1897,6 +1897,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/records/{recordID}", h.DeleteCollectionRecord)
 					r.Post("/records/{recordID}/restore", h.RestoreCollectionRecord)
 					r.Put("/records/{recordID}/fields/{fieldID}", h.SetCollectionRecordField)
+					// Relation fields: edges are written one at a time, and a
+					// record can list what points at it.
+					r.Post("/records/{recordID}/links", h.CreateCollectionRecordLink)
+					r.Delete("/records/{recordID}/links/{linkID}", h.DeleteCollectionRecordLink)
+					r.Get("/records/{recordID}/backlinks", h.ListCollectionRecordBacklinks)
 				})
 			})
 			// Documents share issue authorization and comments, but have explicit lifecycle commands.
@@ -1955,6 +1960,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/properties/{propertyId}", h.SetIssueProperty)
 					r.Delete("/properties/{propertyId}", h.DeleteIssueProperty)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Get("/record-links", h.ListIssueRecordLinks)
 				})
 			})
 

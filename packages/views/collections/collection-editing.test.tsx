@@ -81,6 +81,7 @@ beforeEach(() => {
     collection_id: "c-1",
     title: "Row",
     fields: {},
+    links: {},
     revision: 1,
     created_at: "2026-09-19T00:00:00Z",
   };

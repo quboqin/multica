@@ -1033,6 +1033,9 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) {
         refreshDocuments();
+        // Relation cells show the status of the tasks they link to. Only a
+        // status change is worth a refetch: agents update issues constantly.
+        if (payload.status_changed) refreshCollections();
         onIssueUpdated(qc, wsId, issue, {
           assigneeChanged: payload.assignee_changed,
           statusChanged: payload.status_changed,
@@ -1061,6 +1064,8 @@ export function useRealtimeSync(
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
         refreshDocuments();
+        // A record that linked to this task now shows the link as deleted.
+        refreshCollections();
         void onInboxIssueDeleted(qc, wsId, issue_id);
       }
     });

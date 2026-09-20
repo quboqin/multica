@@ -1293,6 +1293,17 @@ type Record struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type RecordLink struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	CollectionID pgtype.UUID        `json:"collection_id"`
+	FromRecordID pgtype.UUID        `json:"from_record_id"`
+	FromFieldID  pgtype.UUID        `json:"from_field_id"`
+	ToType       string             `json:"to_type"`
+	ToID         pgtype.UUID        `json:"to_id"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type RuntimeProfile struct {
 	ID             pgtype.UUID        `json:"id"`
 	WorkspaceID    pgtype.UUID        `json:"workspace_id"`

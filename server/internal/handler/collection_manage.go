@@ -151,10 +151,16 @@ func (h *Handler) UpdateCollectionField(w http.ResponseWriter, r *http.Request) 
 	if req.Position != nil {
 		params.Position = pgtype.Float8{Float64: *req.Position, Valid: true}
 	}
+	// A relation names its target once. Pointing it elsewhere would leave its
+	// existing edges aimed at the wrong kind of thing.
+	if existing.Type == fields.TypeRelation && req.Config != nil {
+		writeError(w, 400, "a relation field's target cannot change; create a new field instead")
+		return
+	}
 	targetType := existing.Type
 	conversion := ""
 	if req.Type != nil && *req.Type != existing.Type {
-		if err = validatePropertyType(*req.Type); err != nil {
+		if err = validateCollectionFieldType(*req.Type); err != nil {
 			writeError(w, 400, err.Error())
 			return
 		}

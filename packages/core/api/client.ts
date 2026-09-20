@@ -1,4 +1,4 @@
-import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, type CollectionFieldPatch, type CollectionPatch, type CollectionQuery } from "../collections";
+import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, RecordBacklinksSchema, type CollectionFieldInput, type CollectionFieldPatch, type CollectionPatch, type CollectionQuery, type RecordBacklink } from "../collections";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
@@ -1419,14 +1419,7 @@ export class ApiClient {
     if (!result) throw new Error("Invalid collection response");
     return result;
   }
-  async createCollectionField(
-    id: string,
-    field: {
-      name: string;
-      type: string;
-      config?: { options: { name: string; color: string }[] };
-    },
-  ) {
+  async createCollectionField(id: string, field: CollectionFieldInput) {
     const raw = await this.fetch<unknown>(`/api/collections/${id}/fields`, {
       method: "POST",
       body: JSON.stringify(field),
@@ -1575,6 +1568,65 @@ export class ApiClient {
       { value, expected_value: expected ?? null },
       "PUT",
     );
+  }
+  /** Adds one edge to a relation cell. Linking the same target twice is a no-op. */
+  async linkCollectionRecord(
+    id: string,
+    recordId: string,
+    fieldId: string,
+    toId: string,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/links`,
+      { field_id: fieldId, to_id: toId },
+      "POST",
+    );
+  }
+  async unlinkCollectionRecord(id: string, recordId: string, linkId: string) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/links/${linkId}`,
+      undefined,
+      "DELETE",
+    );
+  }
+  /** Records whose relation fields point at this task. */
+  async listIssueRecordLinks(
+    issueId: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ): Promise<RecordBacklink[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${encodeURIComponent(issueId)}/record-links`,
+      {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      },
+    );
+    return parseWithFallback(raw, RecordBacklinksSchema, { links: [] as RecordBacklink[] }, {
+      endpoint: "GET /api/issues/:id/record-links",
+    }).links;
+  }
+  /** Records whose relation fields point at this record. */
+  async listCollectionRecordBacklinks(
+    id: string,
+    recordId: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ): Promise<RecordBacklink[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/records/${recordId}/backlinks`,
+      {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      },
+    );
+    return parseWithFallback(raw, RecordBacklinksSchema, { links: [] as RecordBacklink[] }, {
+      endpoint: "GET /api/collections/:id/records/:recordId/backlinks",
+    }).links;
   }
   private async collectionRecordCommand(
     id: string,

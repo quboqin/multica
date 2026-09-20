@@ -136,6 +136,9 @@ cleared_installations AS (
 cleared_document_publications AS (
     DELETE FROM document_publication WHERE workspace_id = $1
 ),
+cleared_record_links AS (
+    DELETE FROM record_link WHERE workspace_id = $1
+),
 cleared_collection_records AS (
     DELETE FROM record WHERE workspace_id = $1
 ),
