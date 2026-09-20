@@ -3,7 +3,13 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
-import { ArrowDown, ArrowUp, EyeOff, GripVertical } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  EyeOff,
+  GripVertical,
+} from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import {
   DropdownMenu,
@@ -29,6 +35,7 @@ export function DataViewColumnHeader<SortKey extends string>({
   icon,
   menuContent,
   menuClassName,
+  fillCell = false,
 }: {
   columnKey: string;
   reorderable: boolean;
@@ -47,6 +54,13 @@ export function DataViewColumnHeader<SortKey extends string>({
   /** Replaces the default sort / hide items with a source-specific menu. */
   menuContent?: ReactNode;
   menuClassName?: string;
+  /**
+   * Makes the whole header cell open the menu instead of the label alone, and
+   * shows a chevron on hover to say so. For tables whose columns are managed
+   * from this menu: a short label in a wide column is otherwise a small target
+   * that looks like plain text.
+   */
+  fillCell?: boolean;
 }) {
   const {
     attributes,
@@ -128,7 +142,16 @@ export function DataViewColumnHeader<SortKey extends string>({
         </button>
       )}
       <DropdownMenu>
-        <DropdownMenuTrigger className="flex min-w-0 items-center gap-1 rounded-xs px-1.5 py-1 hover:bg-accent">
+        <DropdownMenuTrigger
+          className={cn(
+            "flex min-w-0 items-center gap-1 rounded-xs px-1.5 py-1 hover:bg-accent",
+            // Grows through the cell's own padding to its edges; the label
+            // stays where it was. The resize handle still sits on top.
+            fillCell &&
+              "-my-2 -mr-4 flex-1 rounded-none py-3 pr-5.5 data-popup-open:bg-accent",
+            fillCell && !reorderable && "-ml-4 pl-5.5",
+          )}
+        >
           {icon}
           <span className="truncate">{label}</span>
           {active &&
@@ -137,6 +160,12 @@ export function DataViewColumnHeader<SortKey extends string>({
             ) : (
               <ArrowDown className="size-3 shrink-0" />
             ))}
+          {fillCell && (
+            <ChevronDown
+              aria-hidden
+              className="ml-auto size-3 shrink-0 opacity-0 group-hover/header:opacity-100 group-focus-within/header:opacity-100 group-has-data-popup-open/header:opacity-100"
+            />
+          )}
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="start"

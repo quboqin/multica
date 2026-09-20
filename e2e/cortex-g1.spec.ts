@@ -164,6 +164,15 @@ test.describe("Cortex G1 P0", () => {
     await expect(
       page.getByRole("button", { name: "Rename Calendar record", exact: true }),
     ).toBeVisible();
+    // Tables open a column of their own, without the document tree.
+    await expect(
+      page
+        .getByRole("complementary", { name: "Tables", exact: true })
+        .getByRole("link", { name: collection.name }),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(
+      page.getByRole("complementary", { name: "Documents", exact: true }),
+    ).toHaveCount(0);
     await expect(page.locator("[data-source-identity]")).toHaveAttribute(
       "data-source-identity",
       /collection/,
@@ -195,6 +204,237 @@ test.describe("Cortex G1 P0", () => {
     await expect(
       page.getByRole("tab", { name: "My gallery", exact: true }),
     ).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("a new table gets its fields from the header plus and edits them from the column menu", async ({
+    page,
+  }) => {
+    const collection = await api.createCollection(
+      `G1 fields ${Date.now()}`,
+    );
+    await page.goto(`/${slug}/collections/${collection.id}`);
+    // With no fields yet the "+" cell spells the action out, right after Name.
+    const add = page
+      .locator("thead")
+      .getByRole("button", { name: "New field", exact: true });
+    await expect(add).toHaveText("New field");
+    await add.click();
+    const panel = page.getByRole("dialog", { name: "New field", exact: true });
+    await panel.getByLabel("Name", { exact: true }).fill("Stage");
+    await panel.getByRole("combobox", { name: "Field type" }).click();
+    await page.getByRole("option", { name: "Select", exact: true }).click();
+    await panel.getByLabel("Option 1", { exact: true }).fill("Backlog");
+    await panel.getByLabel("Option 1", { exact: true }).press("Enter");
+    await panel.getByLabel("Option 2", { exact: true }).fill("Doing");
+    const created = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(`/api/collections/${collection.id}/fields`),
+    );
+    await panel.getByRole("button", { name: "Create field", exact: true }).click();
+    expect((await created).status()).toBe(201);
+    await expect(panel).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "Stage", exact: true }),
+    ).toBeVisible();
+    // Once the table has a field the cell shrinks to a plus.
+    await expect(add).toHaveText("");
+
+    // A duplicate name keeps the panel open with the server's answer.
+    await add.click();
+    await panel.getByLabel("Name", { exact: true }).fill("Stage");
+    await panel.getByLabel("Name", { exact: true }).press("Enter");
+    await expect(panel.getByRole("alert")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).toBeHidden();
+
+    await page.getByRole("button", { name: "Stage", exact: true }).click();
+    await page.getByRole("menuitem", { name: /Edit field/ }).click();
+    const edit = page.getByRole("dialog", { name: "Edit field", exact: true });
+    await expect(edit.getByLabel("Name", { exact: true })).toHaveValue("Stage");
+    // An existing field only converts where its values survive.
+    await edit.getByRole("combobox", { name: "Field type" }).click();
+    await expect(page.getByRole("option")).toHaveText([
+      "Select",
+      "Multi-select",
+    ]);
+    await page.keyboard.press("Escape");
+    await edit.getByLabel("Name", { exact: true }).fill("Phase");
+    await edit
+      .getByRole("button", { name: "Remove Backlog", exact: true })
+      .click();
+    const updated = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        response.url().includes(`/api/collections/${collection.id}/fields/`),
+    );
+    await edit.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await updated).status()).toBe(200);
+    await expect(edit).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "Phase", exact: true }),
+    ).toBeVisible();
+
+    const detail = (
+      await api.cortexRequest(`/api/collections/${collection.id}`)
+    ).body;
+    expect(
+      detail.fields.map(
+        (field: { name: string; type: string; config: { options: { name: string }[] } }) => ({
+          name: field.name,
+          type: field.type,
+          options: field.config.options.map((option) => option.name),
+        }),
+      ),
+    ).toEqual([{ name: "Phase", type: "select", options: ["Doing"] }]);
+
+    // The first column is the record title: it can be renamed, nothing else.
+    // Its menu opens from anywhere in the header cell, not only from the
+    // short label at the left of a wide column.
+    const titleHeader = page.locator("thead th").first();
+    const titleBox = (await titleHeader.boundingBox())!;
+    await titleHeader.click({
+      position: { x: titleBox.width - 40, y: titleBox.height / 2 },
+    });
+    await page.getByRole("menuitem", { name: /Edit field/ }).click();
+    const title = page.getByRole("dialog", { name: "Edit field", exact: true });
+    await expect(title.getByLabel("Name", { exact: true })).toHaveValue("Name");
+    await expect(
+      title.getByRole("combobox", { name: "Field type" }),
+    ).toBeDisabled();
+    await title.getByLabel("Name", { exact: true }).fill("Customer");
+    const renamed = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        response.url().endsWith(`/api/collections/${collection.id}`),
+    );
+    await title.getByRole("button", { name: "Save", exact: true }).click();
+    expect((await renamed).status()).toBe(200);
+    await expect(
+      page.getByRole("button", { name: "Customer", exact: true }),
+    ).toBeVisible();
+    expect(
+      (await api.cortexRequest(`/api/collections/${collection.id}`)).body
+        .collection.title_name,
+    ).toBe("Customer");
+  });
+
+  test("a table left on the board layout still gets and edits its fields", async ({
+    page,
+  }) => {
+    const collection = await api.createCollection(
+      `G1 board fields ${Date.now()}`,
+    );
+    await page.goto(`/${slug}/collections/${collection.id}`);
+    await page.getByRole("radio", { name: "Board", exact: true }).click();
+    // A board has no column headers, so its empty state offers the field it
+    // is missing.
+    const main = page.locator("main main");
+    await main.getByRole("button", { name: "New field", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "New field", exact: true });
+    await expect(
+      panel.getByRole("combobox", { name: "Field type" }),
+    ).toContainText("Select");
+    await panel.getByLabel("Name", { exact: true }).fill("Stage");
+    await panel.getByLabel("Option 1", { exact: true }).fill("Todo");
+    await panel.getByRole("button", { name: "Create field", exact: true }).click();
+    await expect(panel).toBeHidden();
+    await expect(page.getByRole("heading", { name: "Todo", exact: true })).toBeVisible();
+
+    // From here on fields are managed from Display.
+    await page.getByRole("button", { name: /^Display/ }).click();
+    await page
+      .getByRole("button", { name: "Edit field Stage", exact: true })
+      .click();
+    const edit = page.getByRole("dialog", { name: "Edit field", exact: true });
+    await edit.getByLabel("Name", { exact: true }).fill("Phase");
+    await edit.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(edit).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: /^Group\s*Phase/ }),
+    ).toBeVisible();
+  });
+
+  test("documents and tables are deleted from their list rows", async ({
+    page,
+  }) => {
+    const suffix = Date.now();
+    const parent = await api.createIssue(`Delete parent ${suffix}`, {
+      kind: "doc",
+    });
+    const child = await api.createIssue(`Delete child ${suffix}`, {
+      kind: "doc",
+      parent_issue_id: parent.id,
+    });
+    const collection = await api.createCollection(`G1 delete ${suffix}`);
+
+    await page.goto(`/${slug}/documents/${parent.id}`);
+    const library = page.getByRole("complementary", {
+      name: "Documents",
+      exact: true,
+    });
+    const parentRow = library.locator('[draggable="true"]').filter({
+      has: page.getByRole("link", { name: parent.title, exact: true }),
+    });
+    await parentRow.hover();
+    await parentRow
+      .getByRole("button", { name: `Actions for ${parent.title}`, exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Delete document", exact: true })
+      .click();
+    const confirm = page.getByRole("alertdialog");
+    await expect(confirm).toContainText(parent.title);
+    await expect(confirm).toContainText("1 child page moves to the top level");
+    const deleted = page.waitForResponse(
+      (response) =>
+        response.request().method() === "DELETE" &&
+        response.url().endsWith(`/api/issues/${parent.id}`),
+    );
+    await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+    expect((await deleted).status()).toBe(204);
+    // Deleting the open document leaves its page once the server confirms.
+    await expect(page).toHaveURL(new RegExp(`/${slug}/documents$`));
+    await expect(
+      library.getByRole("link", { name: parent.title, exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      library.getByRole("link", { name: child.title, exact: true }),
+    ).toBeVisible();
+    expect(
+      (await api.cortexRequest(`/api/issues/${child.id}`)).body.parent_issue_id,
+    ).toBeNull();
+
+    await page.goto(`/${slug}/collections/${collection.id}`);
+    const tables = page.getByRole("complementary", {
+      name: "Tables",
+      exact: true,
+    });
+    const tableRow = tables.getByRole("listitem").filter({
+      has: page.getByRole("link", { name: new RegExp(collection.name) }),
+    });
+    await tableRow.hover();
+    await tableRow
+      .getByRole("button", { name: `Actions for ${collection.name}`, exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Delete table", exact: true })
+      .click();
+    await expect(confirm).toContainText(collection.name);
+    const archived = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PATCH" &&
+        response.url().endsWith(`/api/collections/${collection.id}`),
+    );
+    await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+    expect((await archived).status()).toBe(200);
+    await expect(page).toHaveURL(new RegExp(`/${slug}/collections$`));
+    await expect(
+      tables.getByRole("link", { name: new RegExp(collection.name) }),
+    ).toHaveCount(0);
+    expect(
+      (await api.cortexRequest(`/api/collections/${collection.id}`)).status,
+    ).toBe(404);
   });
 
   test("a cell edit that loses a conflict keeps the user's value until they choose to overwrite", async ({
@@ -347,8 +587,13 @@ test.describe("Cortex G1 P0", () => {
     await expect(path).toContainText(a.title);
     await expect(path).toContainText(child.title);
     const library = page.getByRole("complementary", {
-      name: "Cortex navigation",
+      name: "Documents",
+      exact: true,
     });
+    // Documents and tables each open a column of their own.
+    await expect(
+      page.getByRole("complementary", { name: "Tables", exact: true }),
+    ).toHaveCount(0);
     const from = library.locator('[draggable="true"]').filter({
       has: page.getByRole("link", { name: child.title, exact: true }),
     });
@@ -364,13 +609,14 @@ test.describe("Cortex G1 P0", () => {
     await expect(path).not.toContainText(a.title);
     await page.reload();
     await expect(path).toContainText(b.title);
-    await library
-      .locator('[draggable="true"]')
-      .filter({
-        has: page.getByRole("link", { name: leaf.title, exact: true }),
-      })
+    // Row actions take no room until their row is hovered.
+    const leafRow = library.locator('[draggable="true"]').filter({
+      has: page.getByRole("link", { name: leaf.title, exact: true }),
+    });
+    await leafRow.hover();
+    await leafRow
       .getByRole("button", { name: "Add to favorites", exact: true })
-      .click({ force: true });
+      .click();
     // Tree filters live in the section's filter menu.
     await library.getByRole("button", { name: "Filter documents" }).click();
     await page.getByRole("menuitemradio", { name: "Favorites" }).click();

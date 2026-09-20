@@ -224,6 +224,13 @@ export function useCollectionCommands(
     onError: (error) => toast.error(errorMessage(error)),
   });
 
+  // The title column is not a catalog field: its label is stored on the table.
+  const renameTitleColumn = useMutation({
+    mutationFn: (titleName: string) =>
+      api.updateCollection(collectionId, { title_name: titleName }),
+    onSuccess: () => refreshAll(),
+  });
+
   return {
     setField,
     setTitle,
@@ -233,6 +240,7 @@ export function useCollectionCommands(
     createField,
     updateField,
     renameCollection,
+    renameTitleColumn,
     refresh,
   };
 }

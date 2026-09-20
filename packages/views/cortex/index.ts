@@ -1,1 +1,7 @@
-export { CortexNavigator, type CortexNavigatorProps } from "./cortex-navigator";
+export {
+  CollectionNavigator,
+  DocumentNavigator,
+  NewTablePopover,
+  type CollectionNavigatorProps,
+  type DocumentNavigatorProps,
+} from "./cortex-navigator";

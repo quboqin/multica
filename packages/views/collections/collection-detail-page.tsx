@@ -44,12 +44,15 @@ import {
 import { Switch } from "@multica/ui/components/ui/switch";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { cn } from "@multica/ui/lib/utils";
-import { CortexNavigator } from "../cortex";
+import { CollectionNavigator } from "../cortex";
 import { DataViewCalendar, DataViewGallery } from "../data-view";
 import { AppLink, useNavigation } from "../navigation";
 import { useLocale, useT } from "../i18n";
 import { CollectionBoard } from "./collection-board";
-import { CollectionFieldDialog } from "./collection-field-dialog";
+import {
+  CollectionFieldPanel,
+  type FieldPanelTarget,
+} from "./collection-field-panel";
 import { CollectionValue } from "./collection-cell";
 import { fieldText, recordValue } from "./collection-fields";
 import { FieldQuota } from "./collection-field-menu";
@@ -180,13 +183,31 @@ export function CollectionDetailPage({
   }, [activeView]);
   const [anchor, setAnchor] = useState(() => calendarDate(new Date()));
   const [filterOpen, setFilterOpen] = useState(false);
-  const [dialogField, setDialogField] = useState<CollectionField | null | undefined>(undefined);
+  // What the field panel edits and the control it hangs under. Both outlive
+  // `fieldPanelOpen` so the panel does not change shape while it closes.
+  const [fieldPanel, setFieldPanel] = useState<{
+    target: FieldPanelTarget;
+    anchor: Element | null;
+  }>({ target: { kind: "new" }, anchor: null });
+  const [fieldPanelOpen, setFieldPanelOpen] = useState(false);
+  const openFieldPanel = useCallback(
+    (target: FieldPanelTarget, anchor: Element | null) => {
+      setFieldPanel({ target, anchor });
+      setFieldPanelOpen(true);
+    },
+    [],
+  );
+  const [quotaOpen, setQuotaOpen] = useState(false);
+  const quotaTrigger = useRef<HTMLButtonElement>(null);
   const [selectedRecord, setSelectedRecord] = useState<string | null>(null);
 
   const allFields = useMemo(
     () => [...(data?.fields ?? [])].sort((a, b) => a.position - b.position),
     [data?.fields],
   );
+  const defaultTitleName = t(($) => $.cortex_table.name_column);
+  const storedTitleName = data?.collection.title_name ?? "";
+  const titleName = storedTitleName || defaultTitleName;
   const tableFields = allFields.filter((field) => !prefs.hiddenFields.includes(field.id));
   const groupField = allFields.find(
     (field) => field.id === prefs.groupBy && field.type === "select",
@@ -262,6 +283,16 @@ export function CollectionDetailPage({
     onError: (cause) => toast.error(cause.message),
   });
 
+  // The title column is `record.title`, not a catalog field: only its label
+  // is editable, from its header menu or from Display.
+  const editTitle = useCallback(
+    (anchor: Element | null) =>
+      openFieldPanel(
+        { kind: "title", name: storedTitleName, defaultName: defaultTitleName },
+        anchor,
+      ),
+    [openFieldPanel, storedTitleName, defaultTitleName],
+  );
   const reorder = useCallback(
     (activeId: string, overId: string) => {
       const from = allFields.findIndex((field) => field.id === activeId);
@@ -309,7 +340,9 @@ export function CollectionDetailPage({
       },
       onHide: (fieldId) =>
         update({ hiddenFields: [...new Set([...prefs.hiddenFields, fieldId])] }),
-      onEditField: (field) => setDialogField(field),
+      onEditField: (field, anchor) =>
+        openFieldPanel({ kind: "field", field }, anchor),
+      onEditTitle: editTitle,
       onArchiveField: (field) =>
         commands.updateField.mutate(
           { fieldId: field.id, patch: { archived: true } },
@@ -318,11 +351,21 @@ export function CollectionDetailPage({
             onError: (cause) => toast.error(cause.message),
           },
         ),
-      onAddField: () => setDialogField(null),
+      onAddField: (anchor) => openFieldPanel({ kind: "new" }, anchor),
       onReorderField: reorder,
       onOpenRecord: setSelectedRecord,
     }),
-    [canManage, allFields, prefs, update, commands.updateField, reorder, t],
+    [
+      canManage,
+      allFields,
+      prefs,
+      update,
+      commands.updateField,
+      reorder,
+      openFieldPanel,
+      editTitle,
+      t,
+    ],
   );
 
   const openRow = (row: CollectionRecord) => setSelectedRecord(row.id);
@@ -338,12 +381,28 @@ export function CollectionDetailPage({
   const total = summary.data?.pages[0]?.total;
   const loadedCount = summary.data?.pages.reduce((sum, page) => sum + page.records.length, 0) ?? 0;
 
+  // The layouts without column headers name the field type they are missing,
+  // so their empty state opens the panel with that type already chosen.
+  const newFieldButton = (type: string) => (
+    <Button
+      variant="outline"
+      size="sm"
+      onClick={(event) =>
+        openFieldPanel({ kind: "new", type }, event.currentTarget)
+      }
+    >
+      <Plus />
+      {t(($) => $.cortex_table.new_field)}
+    </Button>
+  );
   const content = (() => {
     if (!data) return null;
     if (prefs.layout === "board") {
       if (!boardGroup)
         return (
-          <EmptyHint>
+          <EmptyHint
+            action={canManage ? newFieldButton("select") : undefined}
+          >
             {t(($) => $.cortex_table.board_needs_select)}
           </EmptyHint>
         );
@@ -360,7 +419,11 @@ export function CollectionDetailPage({
     }
     if (prefs.layout === "calendar") {
       if (!dateField)
-        return <EmptyHint>{t(($) => $.cortex_table.calendar_needs_date)}</EmptyHint>;
+        return (
+          <EmptyHint action={canManage ? newFieldButton("date") : undefined}>
+            {t(($) => $.cortex_table.calendar_needs_date)}
+          </EmptyHint>
+        );
       return (
         <DataViewCalendar
           rows={visualRows}
@@ -442,6 +505,7 @@ export function CollectionDetailPage({
                 </h2>
                 <CollectionTable
                   collectionId={id}
+                  titleName={titleName}
                   fields={tableFields}
                   query={{ ...query, group_by: groupField.id, group_key: key }}
                   commands={commands}
@@ -457,6 +521,7 @@ export function CollectionDetailPage({
     return (
       <CollectionTable
         collectionId={id}
+        titleName={titleName}
         fields={tableFields}
         query={query}
         commands={commands}
@@ -501,13 +566,31 @@ export function CollectionDetailPage({
         />
       )}
       <SortPopover
+        titleName={titleName}
         fields={allFields}
         sortBy={prefs.sortBy}
         sortDir={prefs.sortDir}
         onChange={(sortBy, sortDir) => update({ sortBy, sortDir })}
       />
-      {prefs.layout !== "calendar" && (
-        <DisplayPopover layout={prefs.layout} fields={allFields} prefs={cardPrefs} onChange={update} />
+      {/* A calendar has nothing to show or hide; there the popover only manages fields. */}
+      {(prefs.layout !== "calendar" || canManage) && (
+        <DisplayPopover
+          layout={prefs.layout}
+          titleName={titleName}
+          fields={allFields}
+          prefs={cardPrefs}
+          onChange={update}
+          manage={
+            canManage
+              ? {
+                  onEdit: (field, anchor) =>
+                    openFieldPanel({ kind: "field", field }, anchor),
+                  onEditTitle: editTitle,
+                  onAdd: (anchor) => openFieldPanel({ kind: "new" }, anchor),
+                }
+              : undefined
+          }
+        />
       )}
       <div className="ml-auto flex items-center gap-1.5">
         {dirty && activeView && (
@@ -544,7 +627,9 @@ export function CollectionDetailPage({
       {!embedded && (
         <header className="flex items-center gap-2 border-b px-4 py-2">
           <nav aria-label={t(($) => $.cortex.breadcrumb)} className="flex min-w-0 flex-1 items-center gap-1.5 text-label">
-            <span className="text-muted-foreground">{t(($) => $.cortex_table.tables)}</span>
+            <AppLink href={paths.collections()} className="shrink-0 text-muted-foreground hover:text-foreground">
+              {t(($) => $.cortex_table.tables)}
+            </AppLink>
             <span className="text-muted-foreground">/</span>
             <CollectionName
               name={data?.collection.name ?? ""}
@@ -636,10 +721,14 @@ export function CollectionDetailPage({
               {t(($) => $.cortex_table.row_count, { count: total, loaded: loadedCount })}
             </span>
           )}
-          <Popover>
+          <Popover open={quotaOpen} onOpenChange={setQuotaOpen}>
             <PopoverTrigger
               render={
-                <button type="button" className="rounded-sm px-1 hover:bg-accent hover:text-foreground" />
+                <button
+                  ref={quotaTrigger}
+                  type="button"
+                  className="rounded-sm px-1 hover:bg-accent hover:text-foreground"
+                />
               }
             >
               {t(($) => $.cortex_table.fields_used, { count: allFields.length, max: 50 })}
@@ -647,7 +736,15 @@ export function CollectionDetailPage({
             <PopoverContent side="top" align="start" className="w-72 p-1">
               <FieldQuota count={allFields.length} />
               {canManage && (
-                <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => setDialogField(null)}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    setQuotaOpen(false);
+                    openFieldPanel({ kind: "new" }, quotaTrigger.current);
+                  }}
+                >
                   <Plus />
                   {t(($) => $.cortex_table.new_field)}
                 </Button>
@@ -658,10 +755,12 @@ export function CollectionDetailPage({
           <CollectionTrash wsId={wsId} collectionId={id} commands={commands} />
         </footer>
       )}
-      <CollectionFieldDialog
-        open={dialogField !== undefined}
-        onOpenChange={(open) => !open && setDialogField(undefined)}
-        field={dialogField}
+      <CollectionFieldPanel
+        open={fieldPanelOpen}
+        onOpenChange={setFieldPanelOpen}
+        anchor={fieldPanel.anchor}
+        target={fieldPanel.target}
+        fieldCount={allFields.length}
         commands={commands}
       />
     </main>
@@ -670,18 +769,23 @@ export function CollectionDetailPage({
   if (embedded) return main;
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="hidden md:flex">
-        <CortexNavigator activeCollectionId={id} />
-      </div>
+      <CollectionNavigator activeCollectionId={id} />
       {main}
     </div>
   );
 }
 
-function EmptyHint({ children }: { children: React.ReactNode }) {
+function EmptyHint({
+  children,
+  action,
+}: {
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
   return (
-    <div className="m-auto max-w-sm p-8 text-center text-label text-muted-foreground">
-      {children}
+    <div className="m-auto flex max-w-sm flex-col items-center gap-3 p-8 text-center text-label text-muted-foreground">
+      <p>{children}</p>
+      {action}
     </div>
   );
 }

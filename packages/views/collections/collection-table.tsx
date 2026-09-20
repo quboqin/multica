@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { ColumnDef, ColumnSizingState } from "@tanstack/react-table";
 import { Maximize2, Plus, Trash2 } from "lucide-react";
@@ -23,7 +23,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { DataViewColumnHeader, DataViewTable, useFrozenRows } from "../data-view";
 import { useT } from "../i18n";
 import { CollectionFieldEditor } from "./collection-cell";
-import { CollectionFieldMenu } from "./collection-field-menu";
+import { CollectionFieldMenu, CollectionTitleMenu } from "./collection-field-menu";
 import { FieldTypeIcon } from "./collection-fields";
 import type { CollectionCommands } from "./use-collection-commands";
 
@@ -43,9 +43,12 @@ export interface CollectionTableActions {
   onGroup: (fieldId: string) => void;
   onFilter: (fieldId: string) => void;
   onHide: (fieldId: string) => void;
-  onEditField: (field: CollectionField) => void;
+  /** `anchor` is the header cell the field panel hangs under. */
+  onEditField: (field: CollectionField, anchor: Element | null) => void;
+  /** Renames the title column, the only thing about it that can change. */
+  onEditTitle: (anchor: Element | null) => void;
   onArchiveField: (field: CollectionField) => void;
-  onAddField: () => void;
+  onAddField: (anchor: Element | null) => void;
   onReorderField: (activeId: string, overId: string) => void;
   onOpenRecord: (recordId: string) => void;
 }
@@ -56,6 +59,7 @@ export interface CollectionTableActions {
  */
 export function CollectionTable({
   collectionId,
+  titleName,
   fields,
   query,
   commands,
@@ -65,6 +69,8 @@ export function CollectionTable({
   showHeader = true,
 }: {
   collectionId: string;
+  /** Label of the title column. */
+  titleName: string;
   fields: CollectionField[];
   query: CollectionQuery;
   commands: CollectionCommands;
@@ -82,6 +88,7 @@ export function CollectionTable({
   const [editing, setEditing] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [sizing, setSizing] = useState<ColumnSizingState>({ title: 240 });
+  const headers = useRef(new Map<string, HTMLElement>());
   // The row being edited is read on its own, so it stays editable even after
   // a filter, group or page change would move it out of this table.
   const focused = useQuery(
@@ -117,9 +124,40 @@ export function CollectionTable({
     const titleColumn: ColumnDef<CollectionRecord> = {
       id: "title",
       header: () => (
-        <div className="flex items-center gap-1.5 normal-case tracking-normal">
-          <FieldTypeIcon type="text" />
-          {t(($) => $.cortex_table.name_column)}
+        <div
+          ref={(node) => {
+            if (node) headers.current.set("title", node);
+            else headers.current.delete("title");
+          }}
+          className="normal-case tracking-normal"
+        >
+          <DataViewColumnHeader
+            columnKey="title"
+            reorderable={false}
+            fillCell
+            label={titleName}
+            icon={<FieldTypeIcon type="text" />}
+            sortField="title"
+            sortBy={actions.sortBy}
+            sortDirection={actions.sortDir}
+            onSort={(id, direction) => actions.onSort(id, direction)}
+            ascendingLabel={t(($) => $.cortex_table.sort_ascending)}
+            descendingLabel={t(($) => $.cortex_table.sort_descending)}
+            hideLabel={t(($) => $.cortex_table.hide_in_view)}
+            reorderLabel={t(($) => $.cortex_table.reorder_field, { name: titleName })}
+            menuContent={
+              <CollectionTitleMenu
+                name={titleName}
+                canManage={actions.canManage}
+                onEdit={() =>
+                  actions.onEditTitle(
+                    headers.current.get("title")?.closest("th") ?? null,
+                  )
+                }
+                onSort={(direction) => actions.onSort("title", direction)}
+              />
+            }
+          />
         </div>
       ),
       cell: ({ row }) => (
@@ -140,10 +178,17 @@ export function CollectionTable({
       id: field.id,
       size: field.type === "checkbox" ? 100 : field.type === "multi_select" || field.type === "multi_actor" ? 200 : 150,
       header: () => (
-        <div className="normal-case tracking-normal">
+        <div
+          ref={(node) => {
+            if (node) headers.current.set(field.id, node);
+            else headers.current.delete(field.id);
+          }}
+          className="normal-case tracking-normal"
+        >
           <DataViewColumnHeader
             columnKey={field.id}
             reorderable={actions.canManage}
+            fillCell
             label={field.name}
             icon={<FieldTypeIcon type={field.type} />}
             sortField={field.id}
@@ -159,7 +204,12 @@ export function CollectionTable({
                 field={field}
                 fieldCount={actions.fieldCount}
                 canManage={actions.canManage}
-                onEdit={() => actions.onEditField(field)}
+                onEdit={() =>
+                  actions.onEditField(
+                    field,
+                    headers.current.get(field.id)?.closest("th") ?? null,
+                  )
+                }
                 onSort={(direction) => actions.onSort(field.id, direction)}
                 onGroup={
                   field.type === "select"
@@ -192,26 +242,33 @@ export function CollectionTable({
         );
       },
     }));
+    // Takes the width the fields leave over, so "+" always sits right after
+    // the last field instead of drifting to the far edge of a stretched table.
     const addColumn: ColumnDef<CollectionRecord> = {
       id: "__add",
       size: 48,
       enableResizing: false,
+      meta: { grow: true },
       header: () =>
         actions.canManage ? (
           <Button
             variant="ghost"
-            size="icon-xs"
-            className="-mx-2"
+            size={fields.length ? "icon-xs" : "xs"}
+            className="-mx-2 text-muted-foreground normal-case tracking-normal"
             aria-label={t(($) => $.cortex_table.new_field)}
-            onClick={actions.onAddField}
+            onClick={(event) =>
+              actions.onAddField(event.currentTarget.closest("th"))
+            }
           >
             <Plus />
+            {/* A table with no fields yet spells the action out. */}
+            {fields.length === 0 && t(($) => $.cortex_table.new_field)}
           </Button>
         ) : null,
       cell: () => null,
     };
     return [titleColumn, ...fieldColumns, addColumn];
-  }, [fields, actions, commands, editing, renaming, t]);
+  }, [titleName, fields, actions, commands, editing, renaming, t]);
 
   const total = pages.data?.pages[0]?.total ?? 0;
   return (

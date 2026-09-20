@@ -10,9 +10,7 @@ import {
 import type { IssueView } from "@multica/core/api/schemas";
 import { renderWithI18n } from "../test/i18n";
 import { CollectionFieldEditor } from "./collection-cell";
-import { CollectionFieldDialog } from "./collection-field-dialog";
 import { savedViewPreferences } from "./collection-detail-page";
-import type { CollectionCommands } from "./use-collection-commands";
 import { useCollectionCommands } from "./use-collection-commands";
 
 const { api, ApiError, toast } = vi.hoisted(() => {
@@ -133,64 +131,6 @@ describe("multi-select cells in a collection table", () => {
     expect(options.description).toContain(BLUE);
     options.action.onClick();
     await waitFor(() => expect(server.fields.tags).toEqual([RED]));
-  });
-});
-
-describe("field dialog", () => {
-  const status: CollectionField = {
-    id: "status",
-    name: "Status",
-    type: "select",
-    position: 0,
-    config: {
-      options: [
-        { id: RED, name: "Todo", color: "#dc2626" },
-        { id: BLUE, name: "Done", color: "#2563eb" },
-      ],
-    },
-  };
-
-  it("renames, removes and adds select options in one save", async () => {
-    const updateField = vi.fn().mockResolvedValue({});
-    const commands = {
-      createField: { mutateAsync: vi.fn(), isPending: false },
-      updateField: { mutateAsync: updateField, isPending: false },
-    } as unknown as CollectionCommands;
-    const onOpenChange = vi.fn();
-    renderWithI18n(
-      <CollectionFieldDialog open field={status} commands={commands} onOpenChange={onOpenChange} />,
-    );
-    fireEvent.change(screen.getByLabelText("Option 1"), { target: { value: "Backlog" } });
-    fireEvent.click(screen.getByRole("button", { name: "Remove Done" }));
-    expect(screen.getByText(/Saving clears Done/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Add option" }));
-    fireEvent.change(screen.getByLabelText("Option 2"), { target: { value: "Shipped" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-    expect(updateField).toHaveBeenCalledWith({
-      fieldId: "status",
-      patch: {
-        config: {
-          options: [
-            { id: RED, name: "Backlog", color: "#dc2626" },
-            { name: "Shipped", color: expect.any(String) },
-          ],
-        },
-      },
-    });
-  });
-
-  it("keeps the dialog open with the server error when saving fails", async () => {
-    const commands = {
-      createField: { mutateAsync: vi.fn().mockRejectedValue(new Error("a field with that name already exists")), isPending: false },
-      updateField: { mutateAsync: vi.fn(), isPending: false },
-    } as unknown as CollectionCommands;
-    const onOpenChange = vi.fn();
-    renderWithI18n(<CollectionFieldDialog open commands={commands} onOpenChange={onOpenChange} />);
-    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Status" } });
-    fireEvent.click(screen.getByRole("button", { name: "Create field" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("already exists");
-    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
 

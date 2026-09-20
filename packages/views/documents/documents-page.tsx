@@ -44,7 +44,7 @@ import {
 } from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../common/actor-avatar";
-import { CortexNavigator } from "../cortex";
+import { DocumentNavigator } from "../cortex";
 import {
   useCreateDocument,
   useDocumentCommand,
@@ -65,9 +65,7 @@ const emptyIds: string[] = [];
 export function DocumentsPage({ documentId }: { documentId?: string }) {
   return (
     <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="hidden md:flex">
-        <CortexNavigator activeDocumentId={documentId} />
-      </div>
+      <DocumentNavigator activeDocumentId={documentId} />
       {documentId ? (
         <DocumentView key={documentId} documentId={documentId} />
       ) : (
@@ -82,7 +80,7 @@ function DocumentsEmptyState() {
   const ws = useCurrentWorkspace();
   const creator = useCreateDocument(ws?.id ?? "");
   return (
-    <main className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+    <main className="hidden min-w-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center md:flex">
       <FileText className="size-8 text-muted-foreground" aria-hidden />
       <h1 className="text-title-sm font-medium">
         {t(($) => $.cortex_docs.empty_title)}

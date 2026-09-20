@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   ArrowDownUp,
   CalendarDays,
@@ -10,8 +10,10 @@ import {
   Group,
   Kanban,
   LayoutGrid,
+  Pencil,
   Plus,
   Table2,
+  TableProperties,
   X,
 } from "lucide-react";
 import type { CollectionField } from "@multica/core/collections";
@@ -422,11 +424,14 @@ export function GroupPopover({
 }
 
 export function SortPopover({
+  titleName,
   fields,
   sortBy,
   sortDir,
   onChange,
 }: {
+  /** Label of the title column. */
+  titleName: string;
   fields: CollectionField[];
   sortBy: string;
   sortDir: "asc" | "desc";
@@ -438,7 +443,7 @@ export function SortPopover({
   );
   const name =
     sortBy === "title"
-      ? t(($) => $.cortex_table.name_column)
+      ? titleName
       : sortable.find((field) => field.id === sortBy)?.name;
   return (
     <Popover>
@@ -457,7 +462,7 @@ export function SortPopover({
           <Select
             items={[
               { value: "", label: t(($) => $.cortex_table.sort_created) },
-              { value: "title", label: t(($) => $.cortex_table.name_column) },
+              { value: "title", label: titleName },
               ...sortable.map((field) => ({ value: field.id, label: field.name })),
             ]}
             value={name ? sortBy : ""}
@@ -468,7 +473,7 @@ export function SortPopover({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="">{t(($) => $.cortex_table.sort_created)}</SelectItem>
-              <SelectItem value="title">{t(($) => $.cortex_table.name_column)}</SelectItem>
+              <SelectItem value="title">{titleName}</SelectItem>
               {sortable.map((field) => (
                 <SelectItem key={field.id} value={field.id}>
                   <span className="flex items-center gap-2">
@@ -502,23 +507,42 @@ export function SortPopover({
   );
 }
 
+/** Field management a view bar offers to people who can change the table. */
+export interface FieldManagement {
+  /** `anchor` is the control the field panel hangs under. */
+  onEdit: (field: CollectionField, anchor: Element | null) => void;
+  /** The title column: it can only be renamed. */
+  onEditTitle: (anchor: Element | null) => void;
+  onAdd: (anchor: Element | null) => void;
+}
+
 /**
  * "Display" settings for the current layout: which fields are visible, and
- * the layout-specific choices (calendar date field, gallery cover).
+ * the layout-specific choices (gallery cover). With `manage` it is also where
+ * fields are edited and added in layouts that have no column headers. A
+ * calendar shows titles only, so there the list has nothing to toggle.
  */
 export function DisplayPopover({
   layout,
+  titleName,
   fields,
   prefs,
   onChange,
+  manage,
 }: {
   layout: DataViewLayout;
+  /** Label of the title column, which every layout always shows. */
+  titleName: string;
   fields: CollectionField[];
   prefs: DataViewPreferences;
   onChange: (patch: Partial<DataViewPreferences>) => void;
+  manage?: FieldManagement;
 }) {
   const { t } = useT("issues");
+  const [open, setOpen] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
   const table = layout === "table";
+  const toggles = layout !== "calendar";
   const shown = table
     ? fields.filter((field) => !prefs.hiddenFields.includes(field.id))
     : fields.filter((field) => prefs.displayedFields.includes(field.id));
@@ -536,14 +560,32 @@ export function DisplayPopover({
           : [...prefs.displayedFields, id],
       });
   };
+  // The field panel takes this popover's place under the same button.
+  const handOver = (run: (anchor: Element | null) => void) => {
+    setOpen(false);
+    run(trigger.current);
+  };
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         render={
           <BarButton
-            icon={<Eye className="size-3.5" />}
-            label={t(($) => $.cortex_table.display)}
-            value={`${shown.length}/${fields.length}`}
+            ref={trigger}
+            icon={
+              toggles ? (
+                <Eye className="size-3.5" />
+              ) : (
+                <TableProperties className="size-3.5" />
+              )
+            }
+            label={
+              toggles
+                ? t(($) => $.cortex_table.display)
+                : t(($) => $.cortex_table.fields)
+            }
+            value={
+              toggles ? `${shown.length}/${fields.length}` : String(fields.length)
+            }
           />
         }
       />
@@ -561,20 +603,79 @@ export function DisplayPopover({
             />
           </div>
         )}
-        <p className="px-1 text-caption text-muted-foreground">
-          {table ? t(($) => $.cortex_table.visible_columns) : t(($) => $.cortex_table.card_fields)}
-        </p>
+        {toggles && (
+          <p className="px-1 text-caption text-muted-foreground">
+            {table ? t(($) => $.cortex_table.visible_columns) : t(($) => $.cortex_table.card_fields)}
+          </p>
+        )}
         <div className="max-h-72 overflow-y-auto">
-          {fields.map((field) => {
-            const visible = shown.includes(field);
-            return (
-              <OptionRow key={field.id} selected={visible} onClick={() => toggle(field.id)} checkbox>
-                <FieldTypeIcon type={field.type} />
-                {field.name}
-              </OptionRow>
-            );
-          })}
+          {/* The title column leads the list: always shown, so nothing to toggle. */}
+          <div className="flex items-center gap-0.5">
+            <span className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-label">
+              <span className="flex min-w-0 flex-1 items-center gap-2 truncate">
+                <FieldTypeIcon type="text" />
+                {titleName}
+              </span>
+              {toggles && (
+                <Check aria-hidden className="size-3.5 shrink-0 text-muted-foreground/40" />
+              )}
+            </span>
+            {manage && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="shrink-0 text-muted-foreground"
+                aria-label={t(($) => $.cortex_table.edit_field_named, { name: titleName })}
+                onClick={() => handOver(manage.onEditTitle)}
+              >
+                <Pencil />
+              </Button>
+            )}
+          </div>
+          {fields.map((field) => (
+            <div key={field.id} className="flex items-center gap-0.5">
+              {toggles ? (
+                <OptionRow
+                  selected={shown.includes(field)}
+                  onClick={() => toggle(field.id)}
+                  checkbox
+                >
+                  <FieldTypeIcon type={field.type} />
+                  {field.name}
+                </OptionRow>
+              ) : (
+                <span className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-label">
+                  <FieldTypeIcon type={field.type} />
+                  <span className="truncate">{field.name}</span>
+                </span>
+              )}
+              {manage && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="shrink-0 text-muted-foreground"
+                  aria-label={t(($) => $.cortex_table.edit_field_named, { name: field.name })}
+                  onClick={() => handOver((anchor) => manage.onEdit(field, anchor))}
+                >
+                  <Pencil />
+                </Button>
+              )}
+            </div>
+          ))}
         </div>
+        {manage && (
+          <div className="-mx-2 border-t px-2 pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => handOver(manage.onAdd)}
+            >
+              <Plus />
+              {t(($) => $.cortex_table.new_field)}
+            </Button>
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   );
@@ -637,7 +738,7 @@ function OptionRow({
       role={checkbox ? "menuitemcheckbox" : "menuitemradio"}
       aria-checked={selected}
       onClick={onClick}
-      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-label hover:bg-accent"
+      className="flex w-full min-w-0 items-center gap-2 rounded-sm px-2 py-1.5 text-left text-label hover:bg-accent"
     >
       <span className="flex min-w-0 flex-1 items-center gap-2 truncate">{children}</span>
       <Check className={cn("size-3.5 shrink-0", !selected && "invisible")} />
