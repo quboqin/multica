@@ -61,7 +61,7 @@ func (q *Queries) CountDeletedCollectionRecords(ctx context.Context, arg CountDe
 }
 
 const createCollection = `-- name: CreateCollection :one
-INSERT INTO collection (workspace_id,project_id,name,created_by) VALUES($1,$2,$3,$4) RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at
+INSERT INTO collection (workspace_id,project_id,name,created_by) VALUES($1,$2,$3,$4) RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
 `
 
 type CreateCollectionParams struct {
@@ -91,6 +91,7 @@ func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionPara
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleName,
 	)
 	return i, err
 }
@@ -166,7 +167,7 @@ func (q *Queries) CreateCollectionRecord(ctx context.Context, arg CreateCollecti
 }
 
 const getCollection = `-- name: GetCollection :one
-SELECT id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
+SELECT id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 `
 
 type GetCollectionParams struct {
@@ -189,6 +190,7 @@ func (q *Queries) GetCollection(ctx context.Context, arg GetCollectionParams) (C
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleName,
 	)
 	return i, err
 }
@@ -258,7 +260,7 @@ func (q *Queries) ListCollectionFields(ctx context.Context, arg ListCollectionFi
 }
 
 const listCollections = `-- name: ListCollections :many
-SELECT c.id, c.workspace_id, c.project_id, c.name, c.description, c.icon, c.created_by, c.revision, c.archived_at, c.created_at, c.updated_at,
+SELECT c.id, c.workspace_id, c.project_id, c.name, c.description, c.icon, c.created_by, c.revision, c.archived_at, c.created_at, c.updated_at, c.title_name,
  (SELECT count(*) FROM record r WHERE r.workspace_id=c.workspace_id AND r.collection_id=c.id AND r.deleted_at IS NULL)::bigint AS record_count
 FROM collection c WHERE c.workspace_id=$1 AND c.archived_at IS NULL ORDER BY c.created_at DESC,c.id
 `
@@ -275,6 +277,7 @@ type ListCollectionsRow struct {
 	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	TitleName   string             `json:"title_name"`
 	RecordCount int64              `json:"record_count"`
 }
 
@@ -299,6 +302,7 @@ func (q *Queries) ListCollections(ctx context.Context, workspaceID pgtype.UUID) 
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TitleName,
 			&i.RecordCount,
 		); err != nil {
 			return nil, err
@@ -353,7 +357,7 @@ func (q *Queries) ListDeletedCollectionRecords(ctx context.Context, arg ListDele
 }
 
 const lockCollection = `-- name: LockCollection :one
-SELECT id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE
+SELECT id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE
 `
 
 type LockCollectionParams struct {
@@ -376,6 +380,7 @@ func (q *Queries) LockCollection(ctx context.Context, arg LockCollectionParams) 
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleName,
 	)
 	return i, err
 }
@@ -522,13 +527,15 @@ func (q *Queries) StripCollectionFieldOptions(ctx context.Context, arg StripColl
 
 const updateCollection = `-- name: UpdateCollection :one
 UPDATE collection SET name=COALESCE($1,name),
- archived_at=CASE WHEN $2::boolean THEN now() ELSE archived_at END,
+ title_name=COALESCE($2,title_name),
+ archived_at=CASE WHEN $3::boolean THEN now() ELSE archived_at END,
  revision=revision+1,updated_at=now()
-WHERE workspace_id=$3 AND id=$4 AND archived_at IS NULL RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at
+WHERE workspace_id=$4 AND id=$5 AND archived_at IS NULL RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
 `
 
 type UpdateCollectionParams struct {
 	Name        pgtype.Text `json:"name"`
+	TitleName   pgtype.Text `json:"title_name"`
 	Archive     bool        `json:"archive"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	ID          pgtype.UUID `json:"id"`
@@ -537,6 +544,7 @@ type UpdateCollectionParams struct {
 func (q *Queries) UpdateCollection(ctx context.Context, arg UpdateCollectionParams) (Collection, error) {
 	row := q.db.QueryRow(ctx, updateCollection,
 		arg.Name,
+		arg.TitleName,
 		arg.Archive,
 		arg.WorkspaceID,
 		arg.ID,
@@ -554,6 +562,7 @@ func (q *Queries) UpdateCollection(ctx context.Context, arg UpdateCollectionPara
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TitleName,
 	)
 	return i, err
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/multica-ai/multica/server/internal/testutil"
@@ -34,6 +35,73 @@ func patchField(t *testing.T, collection, field string, body map[string]any) *te
 	t.Helper()
 	request := withURLParams(newRequest("PATCH", "/api/collections/fields", body), "collectionID", collection, "fieldID", field)
 	return testutil.Call(t, testHandler.UpdateCollectionField, request)
+}
+
+func patchCollection(t *testing.T, collection string, body map[string]any) *testutil.Response {
+	t.Helper()
+	request := withURLParam(newRequest("PATCH", "/api/collections", body), "collectionID", collection)
+	return testutil.Call(t, testHandler.UpdateCollection, request)
+}
+
+func TestCollectionTitleColumnCanBeRenamed(t *testing.T) {
+	collection := dbfx.Insert(t, "collection", testutil.Cols{"workspace_id": testWorkspaceID, "created_by": testUserID, "name": t.Name()})
+	var updated struct {
+		Name      string `json:"name"`
+		TitleName string `json:"title_name"`
+	}
+	patchCollection(t, collection, map[string]any{"title_name": "  Customer  "}).Want(200).JSON(&updated)
+	if updated.TitleName != "Customer" || updated.Name != t.Name() {
+		t.Fatalf("title column not renamed: %+v", updated)
+	}
+	var detail struct {
+		Collection struct {
+			TitleName string `json:"title_name"`
+		} `json:"collection"`
+	}
+	testutil.Call(t, testHandler.GetCollection, withURLParam(newRequest("GET", "/api/collections", nil), "collectionID", collection)).Want(200).JSON(&detail)
+	if detail.Collection.TitleName != "Customer" {
+		t.Fatalf("detail=%+v", detail)
+	}
+	// Renaming the table leaves the column label alone.
+	patchCollection(t, collection, map[string]any{"name": "Renamed table"}).Want(200).JSON(&updated)
+	if updated.TitleName != "Customer" || updated.Name != "Renamed table" {
+		t.Fatalf("table rename touched the title column: %+v", updated)
+	}
+	patchCollection(t, collection, map[string]any{"title_name": strings.Repeat("x", 33)}).Want(400)
+	patchCollection(t, collection, map[string]any{"title_name": "two\nlines"}).Want(400)
+	// Empty returns the column to the client's localized default.
+	patchCollection(t, collection, map[string]any{"title_name": "   "}).Want(200).JSON(&updated)
+	if updated.TitleName != "" {
+		t.Fatalf("title column not reset: %+v", updated)
+	}
+
+	_, _, member := privateAgentTestFixture(t)
+	request := withURLParam(newRequestAs(member, "PATCH", "/api/collections", map[string]any{"title_name": "Nope"}), "collectionID", collection)
+	testutil.Call(t, testHandler.UpdateCollection, request).Want(403)
+}
+
+func TestArchivedCollectionLeavesTheWorkspace(t *testing.T) {
+	collection := dbfx.Insert(t, "collection", testutil.Cols{"workspace_id": testWorkspaceID, "created_by": testUserID, "name": t.Name()})
+	kept := dbfx.Insert(t, "collection", testutil.Cols{"workspace_id": testWorkspaceID, "created_by": testUserID, "name": t.Name() + " kept"})
+
+	_, _, member := privateAgentTestFixture(t)
+	request := withURLParam(newRequestAs(member, "PATCH", "/api/collections", map[string]any{"archived": true}), "collectionID", collection)
+	testutil.Call(t, testHandler.UpdateCollection, request).Want(403)
+
+	patchCollection(t, collection, map[string]any{"archived": true}).Want(200)
+	var listed []struct {
+		ID string `json:"id"`
+	}
+	testutil.Call(t, testHandler.ListCollections, newRequest("GET", "/api/collections", nil)).Want(200).JSON(&listed)
+	seen := map[string]bool{}
+	for _, item := range listed {
+		seen[item.ID] = true
+	}
+	if seen[collection] || !seen[kept] {
+		t.Fatalf("archived table still listed, or a live one went with it: %+v", listed)
+	}
+	testutil.Call(t, testHandler.GetCollection, withURLParam(newRequest("GET", "/api/collections", nil), "collectionID", collection)).Want(404)
+	patchCollection(t, collection, map[string]any{"name": "Back again"}).Want(404)
 }
 
 func TestCollectionFieldOptionsCanBeEditedAndRemoved(t *testing.T) {

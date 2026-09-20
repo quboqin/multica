@@ -1,4 +1,4 @@
-import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, type CollectionFieldPatch, type CollectionQuery } from "../collections";
+import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, type CollectionFieldPatch, type CollectionPatch, type CollectionQuery } from "../collections";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
@@ -1490,7 +1490,7 @@ export class ApiClient {
       "POST",
     );
   }
-  async updateCollection(id: string, patch: { name?: string }) {
+  async updateCollection(id: string, patch: CollectionPatch) {
     const raw = await this.fetch<unknown>(`/api/collections/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),

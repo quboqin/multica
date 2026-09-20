@@ -10,6 +10,13 @@ describe("collection schemas", () => {
     expect(CollectionSchema.parse({ ...base, record_count: "x" }).record_count).toBeUndefined();
   });
 
+  it("reads a missing or malformed title column label as the default", () => {
+    const base = { id: "c1", workspace_id: "w1", name: "Backlog" };
+    expect(CollectionSchema.parse(base).title_name).toBe("");
+    expect(CollectionSchema.parse({ ...base, title_name: null }).title_name).toBe("");
+    expect(CollectionSchema.parse({ ...base, title_name: "Customer" }).title_name).toBe("Customer");
+  });
+
   it("tolerates malformed trash metadata", () => {
     const parsed = CollectionTrashSchema.parse({
       records: [

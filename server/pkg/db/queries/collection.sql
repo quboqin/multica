@@ -5,6 +5,7 @@ FROM collection c WHERE c.workspace_id=$1 AND c.archived_at IS NULL ORDER BY c.c
 
 -- name: UpdateCollection :one
 UPDATE collection SET name=COALESCE(sqlc.narg(name),name),
+ title_name=COALESCE(sqlc.narg(title_name),title_name),
  archived_at=CASE WHEN sqlc.arg(archive)::boolean THEN now() ELSE archived_at END,
  revision=revision+1,updated_at=now()
 WHERE workspace_id=sqlc.arg(workspace_id) AND id=sqlc.arg(id) AND archived_at IS NULL RETURNING *;

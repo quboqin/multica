@@ -556,6 +556,7 @@ type Collection struct {
 	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	TitleName   string             `json:"title_name"`
 }
 
 type CollectionField struct {

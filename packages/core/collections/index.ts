@@ -10,6 +10,8 @@ export const CollectionSchema = z.object({
   project_id: z.string().nullable().catch(null),
   revision: z.number().default(1),
   record_count: z.number().nonnegative().optional().catch(undefined),
+  /** Label of the title column; empty means the client's localized default. */
+  title_name: z.string().catch(""),
 });
 export const CollectionFieldSchema = z.object({
   id: z.string(),
@@ -71,6 +73,13 @@ export interface CollectionQuery {
   /** A field id, "title" or "created_at". */
   sort_by?: string;
   sort_dir?: "asc" | "desc";
+}
+export interface CollectionPatch {
+  name?: string;
+  /** Empty returns the title column to its localized default label. */
+  title_name?: string;
+  /** Archiving removes the table from the workspace; there is no unarchive yet. */
+  archived?: true;
 }
 export interface CollectionFieldPatch {
   name?: string;

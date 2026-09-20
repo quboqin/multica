@@ -61,8 +61,9 @@ func (h *Handler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name     *string `json:"name"`
-		Archived *bool   `json:"archived"`
+		Name      *string `json:"name"`
+		TitleName *string `json:"title_name"`
+		Archived  *bool   `json:"archived"`
 	}
 	if !decodeCollectionBody(w, r, &req) {
 		return
@@ -75,6 +76,20 @@ func (h *Handler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.Name = pgtype.Text{String: name, Valid: true}
+	}
+	if req.TitleName != nil {
+		// The title column is not a catalog field, so its label lives on the
+		// table. Empty returns it to the client's localized default.
+		title := strings.TrimSpace(*req.TitleName)
+		if title != "" {
+			validated, err := validateLabelName(*req.TitleName)
+			if err != nil {
+				writeError(w, 400, err.Error())
+				return
+			}
+			title = validated
+		}
+		params.TitleName = pgtype.Text{String: title, Valid: true}
 	}
 	updated, err := h.Queries.UpdateCollection(r.Context(), params)
 	if err != nil {
