@@ -79,3 +79,6 @@ data/
 __pycache__/
 *.pyc
 perf-report/
+
+# Claude Code local artifacts
+Claude outputs/
