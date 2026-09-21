@@ -14,6 +14,10 @@ import (
 
 var errDocumentConflict = errors.New("document body version changed")
 
+// documentTransitionRequiresHuman is the stable code on a lifecycle change
+// refused because the caller holds a machine credential.
+const documentTransitionRequiresHuman = "document_transition_requires_human"
+
 func writeDocumentConflict(w http.ResponseWriter, current db.Issue, code string) {
 	writeJSON(w, http.StatusConflict, map[string]any{
 		"error": "Document changed. Keep your draft, compare with the current body, then retry with its document_revision.",
@@ -187,8 +191,11 @@ func (h *Handler) TransitionDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "not a document")
 		return
 	}
+	// Review, publication and withdrawal are recorded against the person who
+	// made them. A task token authenticates as its runtime's owner, so letting
+	// one through would sign that person's name to an agent's decision.
 	if isMachineCredentialActor(r) {
-		writeError(w, 403, "document approval requires a human actor")
+		writeErrorCode(w, 403, documentTransitionRequiresHuman, "document approval requires a human actor")
 		return
 	}
 	var req struct {

@@ -77,10 +77,6 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if isMachineCredentialActor(r) {
-		writeError(w, 403, "collection creation requires a human member")
-		return
-	}
 	var req struct {
 		Name      string  `json:"name"`
 		ProjectID *string `json:"project_id"`
@@ -104,11 +100,17 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// created_by is always a person. A run's task token authenticates as its
+	// runtime's owner, so a table an agent creates is that person's to manage.
 	collection, err := h.Queries.CreateCollection(r.Context(), db.CreateCollectionParams{WorkspaceID: ws, ProjectID: project, Name: name, CreatedBy: parseUUID(user)})
 	if err != nil {
 		writeError(w, 500, "failed to create collection")
 		return
 	}
+	// A table created from the CLI or by a run has no client mutation to refresh
+	// the list, so open clients learn about it here.
+	actorType, actorID := h.resolveActor(r, user, uuidToString(ws))
+	h.publish("collection:updated", uuidToString(ws), actorType, actorID, map[string]any{"collection_id": uuidToString(collection.ID)})
 	writeJSON(w, 201, collection)
 }
 func (h *Handler) GetCollection(w http.ResponseWriter, r *http.Request) {
@@ -132,20 +134,11 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	user, ok := requireUserID(w, r)
+	// A table's catalog is managed independently of task-property
+	// administration, which stays closed to agents.
+	actorType, actorID, ok := h.requireCollectionManager(w, r, collection)
 	if !ok {
 		return
-	}
-	if isMachineCredentialActor(r) {
-		writeError(w, 403, "field definitions require a human actor")
-		return
-	}
-	// A collection creator manages its catalog independently of task-property
-	// administration. Workspace administrators may also manage it.
-	if uuidToString(collection.CreatedBy) != user {
-		if _, ok := h.requireWorkspaceRole(w, r, uuidToString(collection.WorkspaceID), "workspace not found", "owner", "admin"); !ok {
-			return
-		}
 	}
 	var req struct {
 		Name   string          `json:"name"`
@@ -203,7 +196,7 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, "failed to commit field")
 		return
 	}
-	h.publish("collection:updated", uuidToString(collection.WorkspaceID), "member", user, map[string]any{"collection_id": uuidToString(collection.ID)})
+	h.publish("collection:updated", uuidToString(collection.WorkspaceID), actorType, actorID, map[string]any{"collection_id": uuidToString(collection.ID)})
 	writeJSON(w, 201, collectionFieldResponse(field))
 }
 func (h *Handler) CreateCollectionRecord(w http.ResponseWriter, r *http.Request) {

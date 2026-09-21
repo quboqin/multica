@@ -13,23 +13,35 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
+// collectionSchemaForbidden is the stable code on a refused table structure
+// change. The CLI branches on it to say who may make the change, which the
+// generic 403 copy cannot: the caller still sees the table and writes its rows.
+const collectionSchemaForbidden = "collection_schema_forbidden"
+
 // requireCollectionManager admits the collection creator and workspace
-// owners/admins. Machine credentials never manage a catalog.
-func (h *Handler) requireCollectionManager(w http.ResponseWriter, r *http.Request, collection db.Collection) (string, bool) {
+// owners/admins, and returns the actor to credit with the change.
+//
+// A run's task token authenticates as its runtime's owner and is held to the
+// same rule as that person: what they may reshape, a run on their runtime may
+// reshape, and nothing more.
+func (h *Handler) requireCollectionManager(w http.ResponseWriter, r *http.Request, collection db.Collection) (actorType, actorID string, ok bool) {
 	user, ok := requireUserID(w, r)
 	if !ok {
-		return "", false
+		return "", "", false
 	}
-	if isMachineCredentialActor(r) {
-		writeError(w, 403, "field definitions require a human actor")
-		return "", false
-	}
+	workspaceID := uuidToString(collection.WorkspaceID)
 	if uuidToString(collection.CreatedBy) != user {
-		if _, ok := h.requireWorkspaceRole(w, r, uuidToString(collection.WorkspaceID), "workspace not found", "owner", "admin"); !ok {
-			return "", false
+		member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
+		if !ok {
+			return "", "", false
+		}
+		if !roleAllowed(member.Role, "owner", "admin") {
+			writeErrorCode(w, http.StatusForbidden, collectionSchemaForbidden, "only the table's creator or a workspace owner or admin can change its structure")
+			return "", "", false
 		}
 	}
-	return user, true
+	actorType, actorID = h.resolveActor(r, user, workspaceID)
+	return actorType, actorID, true
 }
 
 // collectionFieldConversion names the value rewrite a type change needs, or
@@ -56,7 +68,7 @@ func (h *Handler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	user, ok := h.requireCollectionManager(w, r, collection)
+	actorType, actorID, ok := h.requireCollectionManager(w, r, collection)
 	if !ok {
 		return
 	}
@@ -96,7 +108,7 @@ func (h *Handler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "collection not found")
 		return
 	}
-	h.publish("collection:updated", uuidToString(collection.WorkspaceID), "member", user, map[string]any{"collection_id": uuidToString(collection.ID)})
+	h.publish("collection:updated", uuidToString(collection.WorkspaceID), actorType, actorID, map[string]any{"collection_id": uuidToString(collection.ID)})
 	writeJSON(w, 200, updated)
 }
 
@@ -105,7 +117,7 @@ func (h *Handler) UpdateCollectionField(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	user, ok := h.requireCollectionManager(w, r, collection)
+	actorType, actorID, ok := h.requireCollectionManager(w, r, collection)
 	if !ok {
 		return
 	}
@@ -216,7 +228,7 @@ func (h *Handler) UpdateCollectionField(w http.ResponseWriter, r *http.Request) 
 		writeError(w, 500, "failed to commit field")
 		return
 	}
-	h.publish("collection:updated", uuidToString(collection.WorkspaceID), "member", user, map[string]any{"collection_id": uuidToString(collection.ID)})
+	h.publish("collection:updated", uuidToString(collection.WorkspaceID), actorType, actorID, map[string]any{"collection_id": uuidToString(collection.ID)})
 	writeJSON(w, 200, collectionFieldResponse(field))
 }
 
