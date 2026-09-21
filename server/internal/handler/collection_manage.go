@@ -73,14 +73,25 @@ func (h *Handler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name      *string `json:"name"`
-		TitleName *string `json:"title_name"`
-		Archived  *bool   `json:"archived"`
+		Name        *string `json:"name"`
+		Icon        *string `json:"icon"`
+		Description *string `json:"description"`
+		TitleName   *string `json:"title_name"`
+		Archived    *bool   `json:"archived"`
 	}
 	if !decodeCollectionBody(w, r, &req) {
 		return
 	}
 	params := db.UpdateCollectionParams{WorkspaceID: collection.WorkspaceID, ID: collection.ID, Archive: req.Archived != nil && *req.Archived}
+	if req.Icon != nil {
+		params.Icon = pgtype.Text{String: *req.Icon, Valid: true}
+	}
+	if req.Description != nil {
+		params.Description = pgtype.Text{String: *req.Description, Valid: true}
+	}
+	if !validateCollectionMetadata(w, params.Icon.String, params.Description.String) {
+		return
+	}
 	if req.Name != nil {
 		name := strings.TrimSpace(*req.Name)
 		if len([]rune(name)) < 1 || len([]rune(name)) > 80 {

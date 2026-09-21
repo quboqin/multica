@@ -1372,11 +1372,12 @@ export class ApiClient {
   }
 
   async listCollections(options?: {
+    archived?: boolean;
     workspaceId: string;
     signal?: AbortSignal;
   }) {
     return parseWithFallback(
-      await this.fetch<unknown>("/api/collections", {
+      await this.fetch<unknown>(`/api/collections${options?.archived ? "?archived=true" : ""}`, {
         signal: options?.signal,
         headers: options
           ? { "X-Workspace-ID": options.workspaceId }
@@ -1387,10 +1388,10 @@ export class ApiClient {
       { endpoint: "GET /api/collections" },
     );
   }
-  async createCollection(name: string, projectId?: string) {
+  async createCollection(name: string, projectId?: string, metadata?: {icon?: string; description?: string}) {
     const raw = await this.fetch<unknown>("/api/collections", {
       method: "POST",
-      body: JSON.stringify({ name, project_id: projectId }),
+      body: JSON.stringify({ name, project_id: projectId, ...metadata }),
     });
     const result = parseWithFallback(
       raw,
@@ -1469,6 +1470,76 @@ export class ApiClient {
       { endpoint: "GET /api/collections/:id/records" },
     );
     if (!result) throw new Error("Invalid records response");
+    return result;
+  }
+  async restoreCollection(id: string) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/restore`, { method: "POST" });
+    const result = parseWithFallback<import("../collections").Collection | null>(
+      raw, CollectionSchema, null, { endpoint: "restore collection" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async previewCollectionImport(workspaceId: string, file: File, options: import("../collections/import").CollectionImportOptions = {}, signal?: AbortSignal) {
+    const { CollectionImportPreviewSchema } = await import("../collections/import");
+    const raw = await this.uploadCollectionImport(workspaceId, file, { ...options, dry_run: true }, signal);
+    const result = parseWithFallback<import("../collections/import").CollectionImportPreview | null>(
+      raw, CollectionImportPreviewSchema, null, { endpoint: "preview collection import" },
+    );
+    if (!result) throw new Error("Invalid import preview response");
+    return result;
+  }
+  async createCollectionFromFile(workspaceId: string, file: File, options: import("../collections/import").CollectionImportOptions) {
+    const { z } = await import("zod");
+    const schema = z.object({ collection: CollectionSchema, count: z.number().int().positive().max(10000) });
+    const raw = await this.uploadCollectionImport(workspaceId, file, { ...options, dry_run: false });
+    const result = parseWithFallback<import("zod").infer<typeof schema> | null>(raw, schema, null, { endpoint: "create collection from file" });
+    if (!result) throw new Error("Invalid imported collection response");
+    return result;
+  }
+  private async uploadCollectionImport(workspaceId: string, file: File, options: import("../collections/import").CollectionImportOptions & { dry_run: boolean }, signal?: AbortSignal): Promise<unknown> {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("options", JSON.stringify(options));
+    const res = await this.fetchRaw("/api/collections/import", {
+      method: "POST", body, signal, headers: { "X-Workspace-ID": workspaceId },
+    });
+    return res.json();
+  }
+  async listArchivedCollectionFields(id: string, workspaceId: string, signal?: AbortSignal) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/fields/archived`, {
+      signal, headers: { "X-Workspace-ID": workspaceId },
+    });
+    return parseWithFallback<import("../collections").CollectionField[]>(
+      raw, CollectionFieldSchema.array(), [], { endpoint: "archived fields" },
+    );
+  }
+  async restoreCollectionField(id: string, fieldId: string) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/fields/${fieldId}/restore`, { method: "POST" });
+    const result = parseWithFallback<import("../collections").CollectionField | null>(
+      raw, CollectionFieldSchema, null, { endpoint: "restore field" },
+    );
+    if (!result) throw new Error("Invalid field response");
+    return result;
+  }
+  async batchCollectionRecords(id: string, input: import("../collections").CollectionBatchInput) {
+    return this.collectionBulkCommand(id, "batch", input);
+  }
+  async importCollectionCSV(id: string, csv: string, dryRun: boolean) {
+    return this.collectionBulkCommand(id, "import", { csv, dry_run: dryRun });
+  }
+  private async collectionBulkCommand(id: string, action: string, input: unknown) {
+    const { CollectionBatchResultSchema } = await import("../collections");
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/records/${action}`, {
+      method: "POST", body: JSON.stringify(input),
+    });
+    const schema = action === "import"
+      ? CollectionBatchResultSchema.required({ dry_run: true })
+      : CollectionBatchResultSchema;
+    const result = parseWithFallback<import("zod").infer<typeof CollectionBatchResultSchema> | null>(
+      raw, schema, null, { endpoint: `collection ${action}` },
+    );
+    if (!result) throw new Error(`Invalid ${action} response`);
     return result;
   }
   async createCollectionRecord(

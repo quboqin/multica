@@ -59,6 +59,8 @@ import { fieldText, isRelation, linkLabel, recordLinks } from "./collection-fiel
 import { FieldQuota } from "./collection-field-menu";
 import { CollectionRecordPanel } from "./collection-record-panel";
 import { CollectionTable, type CollectionTableActions } from "./collection-table";
+import { CollectionBulkTools } from "./collection-bulk-tools";
+import { CollectionManagement } from "./collection-management";
 import { CollectionTrash } from "./collection-trash";
 import {
   DateFieldChip,
@@ -203,6 +205,8 @@ export function CollectionDetailPage({
   // A link to one record — from a task's linked records, or from another
   // table's relation — opens this table with that record's panel showing.
   const linkedRecord = embedded ? null : navigation.searchParams.get("record");
+  const [batchSelection, setBatchSelection] = useState<import("@multica/core/collections").CollectionRecord[]>([]);
+  useEffect(() => setBatchSelection([]), [id, wsId]);
   const [selectedRecord, setSelectedRecord] = useState<string | null>(linkedRecord);
   useEffect(() => {
     if (linkedRecord) setSelectedRecord(linkedRecord);
@@ -340,6 +344,7 @@ export function CollectionDetailPage({
   const tableActions = useMemo<CollectionTableActions>(
     () => ({
       canManage,
+      selection: embedded ? undefined : { rows: batchSelection, toggle: (record: import("@multica/core/collections").CollectionRecord, checked: boolean) => setBatchSelection(rows => checked ? (rows.some(r=>r.id===record.id)||rows.length>=500 ? rows : [...rows,record]) : rows.filter(r=>r.id!==record.id)) },
       fieldCount: allFields.length,
       sortBy: prefs.sortBy,
       sortDir: prefs.sortDir,
@@ -374,6 +379,7 @@ export function CollectionDetailPage({
       onOpenRecord: setSelectedRecord,
     }),
     [
+      batchSelection, embedded,
       canManage,
       allFields,
       prefs,
@@ -677,6 +683,9 @@ export function CollectionDetailPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
+          {data && canManage && (
+            <CollectionManagement key={id} collection={data.collection} wsId={wsId} />
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -704,6 +713,15 @@ export function CollectionDetailPage({
         </header>
       )}
       {viewBar}
+      {!embedded && data && (
+        <CollectionBulkTools
+          key={id} id={id} wsId={wsId} fields={allFields} query={query}
+          selected={batchSelection} onSelection={setBatchSelection}
+        />
+      )}
+      {data?.collection.description && (
+        <p className="px-4 py-2 text-caption text-muted-foreground">{data.collection.description}</p>
+      )}
       {(error || visual.error) && (
         <p role="alert" className="px-4 py-2 text-caption text-destructive">
           {(error || visual.error)?.message}

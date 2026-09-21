@@ -783,7 +783,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td><strong>FR-022</strong></td><td><span class="pill bad">P0</span></td><td>每个 collection 拥有<strong>独立字段目录</strong>，字段数上限 50，不占用 workspace 的 issue 属性配额（20）</td><td>建 3 张表各 30 个字段互不影响，且 workspace 的 issue 自定义属性数量不受影响</td></tr>
     <tr><td><strong>FR-023</strong> <span class="pill">待定</span></td><td><span class="pill bad">P0</span></td><td>复用任务的 9 类字段并新增 relation。actor 首期按 member 基线设计；是否开放 agent / squad 仍待决。扩展前必须在写入、详情、选择器、查询和 facet 读路径校验私有智能体可见性</td><td>各类型可编辑、过滤、排序；跨工作区或无权可见的引用不泄露名称、存在性或计数，见 AC-26。actor 仍是纯数据，不触发运行</td></tr>
     <tr><td><strong>FR-024</strong></td><td><span class="pill bad">P0</span></td><td><code>record</code> 行对象：无编号、无 status、无 assignee，含 title + JSONB 值袋 + position + 软删除</td><td>建 1000 行后 issue 编号序列不变，inbox 与 issue 看板中不出现任何 record</td></tr>
-    <tr><td><strong>FR-025</strong></td><td><span class="pill bad">P0</span></td><td>record CRUD + 批量操作：CSV 导入、批量编辑、批量删除、回收站恢复</td><td>导入 1 万行 CSV 成功；批量改 500 行；删除后可从回收站恢复</td></tr>
+    <tr><td><strong>FR-025</strong></td><td><span class="pill bad">P0</span></td><td>record CRUD + 批量操作：Excel / CSV 导入为新 collection，识别表头和字段、预览及跳过列；已有表追加 CSV、批量编辑、批量删除、回收站恢复</td><td>上传 .xlsx 选择工作表并预览，确认后自动建表建字段建行；导入 1 万行 CSV 成功；批量改 500 行；删除后可从回收站恢复</td></tr>
     <tr><td><strong>FR-026</strong></td><td><span class="pill bad">P0</span></td><td>集合视图按 DataSource 能力复用 table / list / board / gantt / swimlane，拟新增 calendar / gallery；无 status 的 record 不继承任务专属动作。布局所需日期、分组和封面字段须显式配置</td><td>按 AC-2 验证支持的布局与字段前提；过滤、排序、分组、列宽、显隐、保存与可见性独立持久化，不支持的动作可诊断</td></tr>
     <tr><td><strong>FR-027</strong> <span class="pill">本轮修订</span></td><td><span class="pill bad">P0</span></td><td>集合级 CLI / API 命令面与 JSON 输出，命令面、寻址与输出契约见 <a href="#fr-agent">5.7</a>（<code>FR-061</code> / <code>FR-062</code>）。行读写按资源权限校验；建表对成员与智能体开放，改表结构按「表的创建者或 owner / admin」判定，智能体以运行时主人的身份适用同一规则（<a href="#rev-9">修订九</a>）；批量破坏性操作需明确授权</td><td>CLI 可在授权范围建表、管理字段、写行和查询；人类/智能体/撤权矩阵通过 AC-26 / AC-28。无权改结构时返回可诊断拒绝（稳定错误码，见 <code>FR-064</code>），既有任务字段的管理规则不变</td></tr>
     <tr><td><strong>FR-028</strong></td><td><span class="pill bad">P0</span></td><td><code>relation</code> 字段：可指向另一个 collection 或<strong>指向 issue</strong>；关联边显式落表，支持反向引用展示</td><td>「需求池」一行可关联到实施它的 issue，并在 issue 侧看到反向引用</td></tr>
@@ -849,9 +849,9 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td><strong>FR-062</strong></td><td><span class="pill bad">P0</span></td><td><strong>按名称寻址，按名称输出。</strong>表用名称 / ID / ID 前缀，字段、单选选项、成员用名称，行用 ID 或<strong>完全一致</strong>的标题，任务用编号。行的 JSON 默认以字段名为键、以名称为值（<code>values</code>），与写入参数同一种写法；需要 ID 时加 <code>--detail</code></td><td>智能体不接触任何选项 ID 即可完成「读表 → 写行 → 回读」；同名的表或同标题的行列出候选并停止，不猜；默认输出的体积不超过明细输出的一半</td></tr>
     <tr><td><strong>FR-063</strong></td><td><span class="pill bad">P0</span></td><td><strong>并发语义在 CLI 上不放宽。</strong>文档保存必须带读到的版本（<code>FR-017</code>），CLI 不自动补、不自动重试；冲突时报出当前版本并要求先合并。单元格逐个原子写入，可用 <code>--expect</code> 声明「仅当仍是我读到的值」；标题改名自带前值比较。多格写入中途失败时说明哪些已经写入</td><td>两个智能体基于同一版本保存同一文档，后者被拒且提示合并而非换版本号重试；带 <code>--expect</code> 的写入在值已变化时返回冲突且不覆盖；三格写入第二格失败时输出第一格已写入</td></tr>
     <tr><td><strong>FR-064</strong></td><td><span class="pill bad">P0</span></td><td><strong>权限矩阵与可诊断拒绝。</strong>任务令牌的放行与拒绝见下方矩阵。两类拒绝返回稳定错误码：<code>collection_schema_forbidden</code>（调用者既不是表的创建者也不是 owner / admin，对人和智能体一视同仁）、<code>document_transition_requires_human</code>；CLI 据此给出「为什么」和「接下来怎么办」，其余 403 保持通用文案，不泄露资源存在性</td><td>矩阵每一格有服务端测试；拒绝不写入任何审计 / 批准记录；智能体收到的提示指向可行动作（写行、自建一张表、留评论请人评审），不引导它另找凭证</td></tr>
-    <tr><td><strong>FR-064A</strong> <span class="pill">修订九</span></td><td><span class="pill bad">P0</span></td><td><strong>结构变更开放，破坏性变更要显式。</strong>追加选项走 <code>field update --add-option</code>：既有选项按 ID 原样带回，行值不动。<code>--option</code> 是整体替换，被移除的选项会从所有行（含回收站）清除；类型只沿安全路径转换，多选转单选只保留每格第一个值；归档的表与字段目前无法恢复。内置技能要求智能体只在任务明说时才移除、转换、归档，并在评论里写明改了什么</td><td>智能体不重新键入既有选项即可加一个选项；同名选项、非单选 / 多选字段、与 <code>--option</code> 同用，均在发出请求前拒绝；技能参考逐条列出不可撤销的变更；表结构变更事件的执行者记为智能体</td></tr>
+    <tr><td><strong>FR-064A</strong> <span class="pill">修订九</span></td><td><span class="pill bad">P0</span></td><td><strong>结构变更开放，破坏性变更要显式。</strong>追加选项走 <code>field update --add-option</code>：既有选项按 ID 原样带回，行值不动。<code>--option</code> 是整体替换，被移除的选项会从所有行（含回收站）清除；类型只沿安全路径转换，多选转单选只保留每格第一个值；归档的表与字段可从已归档列表恢复，字段重名或达到配额时须先解决冲突。内置技能要求智能体只在任务明说时才移除、转换、归档，并在评论里写明改了什么</td><td>智能体不重新键入既有选项即可加一个选项；同名选项、非单选 / 多选字段、与 <code>--option</code> 同用，均在发出请求前拒绝；技能参考逐条列出不可撤销的变更；表结构变更事件的执行者记为智能体</td></tr>
     <tr><td><strong>FR-065</strong></td><td><span class="pill bad">P0</span></td><td><strong>让智能体知道这些能力。</strong>内置平台技能新增「文档」「表格」两篇参考，运行时 brief 的技能提示点名这两个域。参考只写可观察的行为与命令，不写源码位置</td><td>技能路由表、描述与参考文件一一对应（有测试）；参考覆盖版本化保存、批准边界、逐格写入、关联与失效关联、分页</td></tr>
-    <tr><td><strong>FR-066</strong></td><td><span class="pill">P1</span></td><td>后续：比较运算过滤（<code>&gt;=</code>、<code>&lt;</code>、包含）、按关联过滤与排序、批量写入与 CSV 导入的命令、<code>mention://collection|record</code> 在 CLI 输出中的降级形态</td><td>随 <code>FR-025</code> / <code>FR-031</code> 一起排期；在此之前 CLI 对这些写法明确报「尚不支持」，不静默忽略</td></tr>
+    <tr><td><strong>FR-066</strong></td><td><span class="pill">P1</span></td><td>CLI 查询与批量命令：比较运算过滤（<code>&gt;=</code>、<code>&lt;</code>、包含）、按关联过滤与排序、批量写入与 CSV 导入的命令、<code>mention://collection|record</code> 在 CLI 输出中的降级形态</td><td>比较与关联过滤、关联排序、批量和 CSV 命令随 FR-025 已实现；mention 输出降级随 FR-031 排期。不支持的写法明确报错，不静默忽略</td></tr>
   </tbody>
 </table></div>
 
@@ -1052,7 +1052,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td>两位写入者同时修改文档</td><td>按拟新增的 FR-017 检查整篇文档版本，后保存者保留草稿并比较/合并重试；段落软锁属于 FR-017A，不能把该保证描述为当前编辑器已有能力</td></tr>
     <tr><td>知识库后端不可用</td><td><code>knowledge.search</code> 快速失败并降级到平台自带全文搜索；界面上状态带原地变黄写明「已降级」，<strong>不弹错误对话框</strong></td></tr>
     <tr><td>高风险知识候选</td><td>低置信度 / 与既有条目冲突时，动作按钮中移除「入库」，只留「丢弃」与「升级为 issue 去核实」</td></tr>
-    <tr><td>CSV 导入含未知列</td><td>提示并允许「新建字段」或「跳过该列」，不静默丢弃</td></tr>
+    <tr><td>文件导入的列与字段</td><td>从 Excel / CSV 新建表时自动识别字段，预览可改名、改类型或跳过列；已有表的「追加 CSV 记录」只接受已存在字段，不静默丢弃未知列</td></tr>
   </tbody>
 </table></div>
 </section>
@@ -1331,11 +1331,11 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
 <tr><td>FR-006 分组扩展</td><td><span class="pill bad">未开始</span></td><td>集合只能按单选字段分组</td><td>date 分桶、checkbox、actor、relation 分组</td></tr>
 <tr><td>FR-011 ~ FR-017 文档</td><td><span class="pill ok">已实现</span></td><td><code>issue.kind</code>、文档树与移动、文档库导航、TipTap 复用、按 kind 搜索、draft / reviewing / published 与授权发布、整篇版本检查（数据库触发器兜底）</td><td>—</td></tr>
 <tr><td>FR-017A / FR-018 / FR-019</td><td><span class="pill bad">未开始</span></td><td>右栏「版本」仅占位</td><td>段落软锁、版本历史与回滚、实时协同</td></tr>
-<tr><td>FR-021 collection 对象</td><td><span class="pill">部分</span></td><td>workspace / project 级、名称、归档（归档后从列表消失、数据保留）、首列改名</td><td>项目内的建表入口、图标与描述的界面、已归档列表与恢复</td></tr>
+<tr><td>FR-021 collection 对象</td><td><span class="pill ok">已实现</span></td><td>workspace / project 级建表、名称与首列改名、图标/描述、归档；已归档表及字段列表/恢复，重名和 50 字段配额阻止不安全恢复</td><td>用户验收待确认</td></tr>
 <tr><td>FR-022 ~ FR-024</td><td><span class="pill ok">已实现</span></td><td>每表独立字段目录（上限 50）、九类字段 + relation、安全类型转换、<code>record</code> 行（无编号 / status / assignee，软删除）</td><td>actor 是否开放 agent / squad 待 <code>Q-U3</code></td></tr>
-<tr><td>FR-025 CRUD 与批量</td><td><span class="pill">部分</span></td><td>单行增删改、逐格原子写入与冲突检测、回收站 30 天内恢复</td><td>CSV 导入、批量编辑、批量删除（<code>AC-1</code> 未满足）</td></tr>
+<tr><td>FR-025 CRUD 与批量</td><td><span class="pill ok">已实现</span></td><td>单行增删改、逐格原子写入与冲突检测、回收站 30 天内恢复；Excel / CSV 预览后原子创建新表、字段和记录；已有表 CSV 全量预校验与原子追加，最多 500 行批量编辑/删除/恢复。服务端 1 万行 × 20 字段与浏览器 1 万行导入、500 行修改/删除/恢复通过</td><td>用户验收待确认；见 <a href="cortex-p2a-development.md">P2a 验证记录</a></td></tr>
 <tr><td>FR-026 集合视图</td><td><span class="pill">部分</span></td><td>table / board / calendar / gallery；过滤、排序、分组、列显隐独立保存</td><td>list / gantt / swimlane 尚未接到集合数据源</td></tr>
-<tr><td>FR-027、FR-061 ~ FR-065、FR-064A</td><td><span class="pill ok">已实现</span></td><td><code>multica collection / record / document</code>、<code>issue records</code>、<code>issue search --kind</code>；按名称寻址与紧凑输出；稳定错误码；智能体按运行时主人的身份建表与管理字段，<code>--add-option</code> 安全追加选项；内置技能「文档」「表格」两篇参考；权限矩阵的服务端测试</td><td><code>FR-066</code>：比较过滤、关联过滤、批量与 CSV 命令</td></tr>
+<tr><td>FR-027、FR-061 ~ FR-065、FR-064A</td><td><span class="pill ok">已实现</span></td><td><code>multica collection / record / document</code>、<code>issue records</code>、<code>issue search --kind</code>；按名称寻址与紧凑输出；稳定错误码；智能体按运行时主人的身份建表与管理字段，<code>--add-option</code> 安全追加选项；内置技能「文档」「表格」两篇参考；权限矩阵的服务端测试</td><td><code>FR-066</code> 的比较/关联过滤、关联排序、批量与 CSV 命令已补齐；mention 输出降级随 FR-031 留在 P2b</td></tr>
 <tr><td>FR-028 relation</td><td><span class="pill ok">已实现</span></td><td><code>record_link</code> 显式落表；关联任务 / 另一张表；失效关联保留并标记；任务侧与行侧反查；行详情「转为任务」</td><td>关联列的排序 / 过滤 / 分组；双向关联字段；批量删任务时的提示</td></tr>
 <tr><td>FR-029 表单视图</td><td><span class="pill bad">未开始</span></td><td>—</td><td>全部</td></tr>
 <tr><td>FR-02A 行详情</td><td><span class="pill ok">已实现</span></td><td>侧滑详情、纵向编辑、关联字段分节、「转为任务」出口</td><td>—</td></tr>

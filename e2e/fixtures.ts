@@ -52,6 +52,7 @@ export class TestApiClient {
   private email: string | null = null;
   private createdIssueIds: string[] = [];
   private createdCollectionIds: string[] = [];
+  private createdProjectIds: string[] = [];
   private seededIssueIds: string[] = [];
 
   async login(email: string, name: string) {
@@ -194,6 +195,15 @@ export class TestApiClient {
     this.createdIssueIds.push(issue.id);
     return issue;
   }
+
+  async createProject(title: string) {
+    const response = await this.authedFetch("/api/projects", {method: "POST", body: JSON.stringify({title})});
+    if (!response.ok) throw new Error(`Create project failed: ${response.status}`);
+    const project = await response.json();
+    this.createdProjectIds.push(project.id);
+    return project;
+  }
+  trackCollection(id: string) { this.createdCollectionIds.push(id); }
 
   async createCollection(name:string) {
     const response=await this.authedFetch("/api/collections",{method:"POST",body:JSON.stringify({name})});
@@ -362,6 +372,11 @@ export class TestApiClient {
       }
     }
     this.createdIssueIds = [];
+    for (const id of this.createdProjectIds) {
+      const response = await this.authedFetch(`/api/projects/${id}`, {method: "DELETE"});
+      if (!response.ok && response.status !== 404) throw new Error(`Project cleanup failed: ${response.status}`);
+    }
+    this.createdProjectIds = [];
   }
 
   getToken() {

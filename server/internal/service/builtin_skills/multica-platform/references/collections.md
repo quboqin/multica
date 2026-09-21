@@ -91,7 +91,7 @@ name splits the data.
 
 Adding is safe — a table, a field, an option with `--add-option` — and changes
 nothing that is already there. Everything else touches other people's data, and
-none of it can be undone from here:
+some changes cannot be undone:
 
 - `--option` **replaces** the whole option list. An option left out is removed
   from every row that held it, trashed rows included. To add an option, use
@@ -105,9 +105,9 @@ none of it can be undone from here:
   drops the rest. Any other conversion is refused: add a new field instead.
 - A relation's target is fixed when the field is created.
 - An archived field disappears everywhere. Its values are kept in storage, but
-  nothing brings a field back yet; its name becomes free again.
+  restore it with `collection field restore <table> <field>`. A live field with the same name or the 50-field cap can block restoration.
 - An archived table leaves every list, its rows can no longer be opened, and
-  links pointing at them read as deleted. Nothing restores a table yet.
+  links pointing at them read as deleted. Use `collection list --archived` and `collection restore <table>` to bring it back.
 
 So remove, convert and archive only when the task says to, in those words — not
 to tidy up — and say in your comment exactly what you changed.
@@ -139,7 +139,7 @@ field ids, types, stored values and link ids — when you need an id.
 
 `--filter "Field=Value"` is repeatable: the same field twice matches either
 value, different fields must all match, `"Field=__none__"` matches an empty
-cell. Only equality is offered; for ranges, list and compare yourself.
+cell. Comparisons use `>`, `>=`, `<`, `<=` for numbers/dates and `~=` for text containment. Relation equality accepts a target name or ID; relation sorting uses the alphabetically first visible target title. Deleted/archived targets do not match or contribute sort labels.
 
 ## Cell values by field type
 
@@ -259,4 +259,39 @@ few rows the task is about, not the table.
 | `N rows … are titled "X"; pass the id instead` | Titles are not unique. Use the id from `record list`. |
 | `row … not found in this table; it may be in the trash` | It was deleted. `multica record trash <table>`, then `record restore`. |
 | `a relation cell holds at most 50 links` | The cap is per cell. |
-| A table is missing from `collection list` | It was archived. Nothing restores a table yet; tell the user. |
+| A table is missing from `collection list` | Check `collection list --archived`; restore with `collection restore <table>` when requested. |
+
+## CSV and atomic batches
+
+Use these commands only for the rows or import the task explicitly requests.
+Never broaden a selection just because a batch accepts more rows.
+
+```bash
+multica record import Customers --file customers.csv --dry-run
+multica record import Customers --file customers.csv
+multica record batch-update Customers --record <id1> --record <id2> --set "Stage=Won"
+multica record batch-update Customers --record <id1> --set "Seats=25" --expect-revision "<id1>=3"
+multica record batch-delete Customers --record <id1> --record <id2> --yes
+multica record batch-restore Customers --record <id1> --record <id2>
+multica collection list --archived
+multica collection restore Customers
+multica collection field list Customers --archived
+multica collection field restore Customers Notes
+multica collection update Customers --icon "📋" --description "Customer follow-up"
+multica record list Customers --filter "Seats>=10" --sort Stage
+```
+
+CSV uses UTF-8 and at most 10,000 rows per file. Headers are `title` (or the
+table's title-column name) and existing field names or IDs. Select values accept
+option names/IDs; multi-select and multi-actor cells contain JSON string arrays
+with ordinary CSV quote escaping. Actors use `member:USER_ID`; they remain
+member-only. Empty cells remain unset. Relation edges use `record link` rather
+than value cells. An invalid row aborts the entire import and reports its row
+and column; `--dry-run` never writes. Import creates new rows; it is not an upsert.
+
+Batches accept 1–500 explicit rows. Updates preserve unrelated fields; every
+row is written or none are. `--expect-revision` must cover all selected rows
+when used. A conflict aborts the batch: read again and explicitly decide whether
+to retry. A response count confirms the committed number of rows. Delete
+requires `--yes` and keeps rows in the trash for 30 days. Restore works only
+within that retention window. No batch starts an agent run.

@@ -346,3 +346,20 @@ Markdown instructions.
 - [Authentication and tokens](/auth-tokens) — creating, renewing, and revoking PATs.
 - [Troubleshooting](/troubleshooting) — diagnosing command errors and runs that never start.
 - [Create and configure an agent](/agents-create) — the full semantics of every `agent create` field.
+
+## Table imports and batches
+
+CSV import validates all rows before writing (10,000 maximum). Batches accept up to 500 explicit record IDs; --expect-revision covers every row when used. Delete requires --yes; trash retention is 30 days. Archived tables and fields can be restored; field name conflicts and the 50-field limit return an error.
+
+```bash
+multica record import Customers --file customers.csv --dry-run
+multica record import Customers --file customers.csv
+multica record batch-update Customers --record <row-id> --set "Seats=25" --expect-revision "<row-id>=3"
+multica record batch-delete Customers --record <row-id> --yes
+multica record batch-restore Customers --record <row-id>
+multica collection list --archived
+multica collection restore Customers
+multica collection field list Customers --archived
+multica collection field restore Customers Notes
+multica record list Customers --filter "Seats>=10" --sort Stage
+```

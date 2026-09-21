@@ -696,7 +696,11 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"--add-option \"Churned:#ef4444\"",
 				"`--option` **replaces** the whole option list",
 				"keeps the **first** value of each cell",
-				"Nothing restores a table yet",
+				"collection restore <table>",
+				"collection field restore <table> <field>",
+				"--dry-run",
+				"batch-delete Customers",
+				"A conflict aborts the batch",
 				"only when the task says to",
 				// Per-cell writes: partial success is real, and the guard exists.
 				"Already written before this failure",

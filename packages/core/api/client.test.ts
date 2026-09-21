@@ -3126,3 +3126,40 @@ describe("ApiClient shared credential across windows", () => {
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
 });
+
+it("validates bulk results and keeps archived collection reads workspace scoped", async () => {
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ count: "not a number" }))
+    .mockResolvedValueOnce(Response.json({ count: 1 }))
+    .mockResolvedValueOnce(Response.json([]));
+  vi.stubGlobal("fetch", fetchMock);
+  const client = new ApiClient("https://api.example.test");
+  await expect(client.batchCollectionRecords("c1", {
+    action: "delete", record_ids: ["r1"], confirmed: true,
+  })).rejects.toThrow("Invalid batch response");
+  await expect(client.importCollectionCSV("c1", "title\nExample", true))
+    .rejects.toThrow("Invalid import response");
+  await client.listCollections({ workspaceId: "ws1", archived: true });
+  const archivedRequest = fetchMock.mock.calls[2]!;
+  expect(archivedRequest[0]).toContain("/api/collections?archived=true");
+  expect(new Headers(archivedRequest[1]?.headers).get("X-Workspace-ID")).toBe("ws1");
+});
+
+it("uploads a worksheet in the selected workspace and rejects malformed import responses", async () => {
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ name: "Import", row_count: "unknown" }))
+    .mockResolvedValueOnce(Response.json({ count: 2, collection: null }));
+  vi.stubGlobal("fetch", fetchMock);
+  const client = new ApiClient("https://api.example.test");
+  const file = new File(["Customer,Seats\nAcme,25"], "customers.csv", { type: "text/csv" });
+  await expect(client.previewCollectionImport("ws-import", file)).rejects.toThrow("Invalid import preview response");
+  await expect(client.createCollectionFromFile("ws-import", file, { name: "Customers" }))
+    .rejects.toThrow("Invalid imported collection response");
+  const request = fetchMock.mock.calls[0]![1]!;
+  expect(new Headers(request.headers).get("X-Workspace-ID")).toBe("ws-import");
+  expect(new Headers(request.headers).has("Content-Type")).toBe(false);
+  expect(request.body).toBeInstanceOf(FormData);
+  expect(JSON.parse((request.body as FormData).get("options") as string)).toEqual({ dry_run: true });
+  const submitted = fetchMock.mock.calls[1]![1]!.body as FormData;
+  expect(JSON.parse(submitted.get("options") as string)).toEqual({ name: "Customers", dry_run: false });
+});

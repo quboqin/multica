@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
 }));
 
+vi.mock("../../cortex", () => ({NewTablePopover: ({trigger, projectId}: {trigger: React.ReactNode; projectId: string}) => <div data-testid="project-new-table" data-project-id={projectId}>{trigger}</div>}));
+
 vi.mock("@multica/ui/lib/clipboard", () => ({
   copyText: mocks.copyText,
 }));

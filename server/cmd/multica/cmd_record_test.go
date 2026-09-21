@@ -151,9 +151,9 @@ func TestRunRecordListRefusesWhatTheServerWouldQuietlyIgnore(t *testing.T) {
 		flags []string
 		want  string
 	}{
-		{"a relation filter", []string{"filter", "Customer=ACME"}, "relation fields cannot be filtered"},
-		{"a relation sort", []string{"sort", "Implementation"}, "no sort order"},
-		{"a comparison", []string{"filter", "Seats>=10"}, "comparison operators are not supported"},
+		{"invalid relation comparison", []string{"filter", "Customer>=ACME"}, "equality only"},
+
+		{"invalid comparison", []string{"filter", "Stage>Shipped"}, "comparison requires"},
 		{"an empty value", []string{"filter", "Stage="}, propertyNoValueSentinel},
 		{"an unknown option", []string{"filter", "Stage=Doing"}, "valid options: Triage, Shipped"},
 		{"desc without a sort", []string{"desc", "true"}, "--desc needs --sort"},

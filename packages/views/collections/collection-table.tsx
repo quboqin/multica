@@ -35,6 +35,7 @@ export const tableCapabilities = {
 } as const;
 
 export interface CollectionTableActions {
+  selection?: { rows: CollectionRecord[]; toggle: (row: CollectionRecord, checked: boolean) => void };
   canManage: boolean;
   fieldCount: number;
   sortBy: string;
@@ -120,6 +121,8 @@ export function CollectionTable({
   );
   const rows = useFrozenRows(identity, loaded, editing, reconcile);
 
+  const selectionRows = useRef(rows);
+  selectionRows.current = rows;
   const columns = useMemo<ColumnDef<CollectionRecord>[]>(() => {
     const titleColumn: ColumnDef<CollectionRecord> = {
       id: "title",
@@ -281,7 +284,11 @@ export function CollectionTable({
         ) : null,
       cell: () => null,
     };
-    return [titleColumn, ...fieldColumns, addColumn];
+    const selectionColumns: ColumnDef<CollectionRecord>[] = actions.selection ? [{id: "__select", size: 44, enableResizing: false,
+      header: () => <input type="checkbox" aria-label={t($=>$.cortex_bulk.select_page)} checked={selectionRows.current.length>0 && selectionRows.current.every(r=>actions.selection!.rows.some(s=>s.id===r.id))} onChange={e=>selectionRows.current.forEach(r=>actions.selection!.toggle(r,e.target.checked))}/>,
+      cell: ({row}) => <input type="checkbox" aria-label={t($=>$.cortex_bulk.select_row,{title:row.original.title})} checked={actions.selection!.rows.some(r=>r.id===row.original.id)} onChange={e=>actions.selection!.toggle(row.original,e.target.checked)}/>
+    }] : [];
+    return [...selectionColumns, titleColumn, ...fieldColumns, addColumn];
   }, [titleName, fields, actions, commands, editing, renaming, t]);
 
   const total = pages.data?.pages[0]?.total ?? 0;

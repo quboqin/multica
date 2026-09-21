@@ -61,7 +61,7 @@ func (h *Handler) ListCollections(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	collections, err := h.Queries.ListCollections(r.Context(), ws)
+	collections, err := h.Queries.ListCollections(r.Context(), db.ListCollectionsParams{WorkspaceID: ws, Archived: r.URL.Query().Get("archived") == "true"})
 	if err != nil {
 		writeError(w, 500, "failed to list collections")
 		return
@@ -78,8 +78,10 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name      string  `json:"name"`
-		ProjectID *string `json:"project_id"`
+		Name        string  `json:"name"`
+		Icon        string  `json:"icon"`
+		Description string  `json:"description"`
+		ProjectID   *string `json:"project_id"`
 	}
 	if !decodeCollectionBody(w, r, &req) {
 		return
@@ -87,6 +89,9 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	if len([]rune(name)) < 1 || len([]rune(name)) > 80 {
 		writeError(w, 400, "name must be 1 to 80 characters")
+		return
+	}
+	if !validateCollectionMetadata(w, req.Icon, req.Description) {
 		return
 	}
 	var project pgtype.UUID
@@ -102,7 +107,7 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	// created_by is always a person. A run's task token authenticates as its
 	// runtime's owner, so a table an agent creates is that person's to manage.
-	collection, err := h.Queries.CreateCollection(r.Context(), db.CreateCollectionParams{WorkspaceID: ws, ProjectID: project, Name: name, CreatedBy: parseUUID(user)})
+	collection, err := h.Queries.CreateCollection(r.Context(), db.CreateCollectionParams{WorkspaceID: ws, ProjectID: project, Name: name, CreatedBy: parseUUID(user), Icon: req.Icon, Description: req.Description})
 	if err != nil {
 		writeError(w, 500, "failed to create collection")
 		return
@@ -352,12 +357,12 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 		where = append(where, "r.title ILIKE "+add("%"+escapeLikePattern(search)+"%"))
 	}
 	if raw := r.URL.Query().Get("properties"); raw != "" {
-		filter, ok := parsePropertiesFilterParam(w, raw)
+		predicate, ok := h.collectionFilterPredicate(w, r, collection, raw, add)
 		if !ok {
 			return
 		}
-		if len(filter) > 0 {
-			where = append(where, propertiesFilterPredicate(filter, add, "r.fields"))
+		if predicate != "" {
+			where = append(where, predicate)
 		}
 	}
 	if raw := r.URL.Query().Get("date_field"); raw != "" {
@@ -572,6 +577,8 @@ func (h *Handler) collectionSortExpression(w http.ResponseWriter, r *http.Reques
 	}
 	key := add(uuidToString(id))
 	switch def.Type {
+	case fields.TypeRelation:
+		return "(SELECT min(lower(COALESCE(i.title,t.title))) " + collectionLiveLinkJoin + " AND l.from_field_id=" + key + "::uuid)", true
 	case "number":
 		return "CASE WHEN jsonb_typeof(r.fields->" + key + ")='number' THEN (r.fields->>" + key + ")::numeric END", true
 	case "checkbox":

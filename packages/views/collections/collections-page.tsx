@@ -5,6 +5,7 @@ import { useCurrentWorkspace } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { CollectionNavigator, NewTablePopover } from "../cortex";
 import { useT } from "../i18n";
+import { CollectionImportDialog } from "./collection-import-dialog";
 
 export function CollectionsPage() {
   return (
@@ -33,6 +34,7 @@ function CollectionsEmptyState() {
           </Button>
         }
       />
+      <CollectionImportDialog />
     </main>
   );
 }

@@ -2457,7 +2457,7 @@ sequenceDiagram
     <tr><td>读一页行</td><td><code>GET …/records</code>：<code>REPEATABLE READ READ ONLY</code> 快照内先算分组计数，再取页；无排序时用 <code>(created_at, id)</code> keyset 游标，按字段排序时退化为偏移游标；游标带查询指纹，换了过滤条件的游标会被拒绝</td><td>计数、分组与行来自同一快照，界面上「共 N 行」与列表不会互相矛盾</td></tr>
     <tr><td>过滤</td><td>复用任务属性的过滤编译器，对 <code>record.fields</code> 做 JSONB 包含匹配；同字段取或、跨字段取与，<code>__none__</code> 表示空值</td><td>一处实现，两个数据源</td></tr>
     <tr><td>字段变更</td><td>改名、调序、归档随意；类型只沿安全方向转换（单选 ↔ 多选、actor ↔ multi_actor、数字 / 日期 / URL / 勾选 → 文本），其余要求新建字段；删掉的选项同步从所有行清除</td><td>不做隐式丢数据</td></tr>
-    <tr><td>删除</td><td>行软删除，30 天内可列出、可恢复；表只归档，目前没有恢复入口；字段只归档，值袋里的旧值保留</td><td>误删可救；结构变更可回看</td></tr>
+    <tr><td>删除</td><td>行软删除，30 天内可列出、可恢复；表与字段归档后可从已归档列表恢复；字段恢复检查重名和 50 字段配额，值袋里的旧值保留</td><td>误删可救；结构变更可回看</td></tr>
   </tbody>
 </table></div>
 <p>事件方面，每次行写入发 <code>record:updated</code>，字段与表的变更发 <code>collection:updated</code>，事件里的执行者按凭证解析——任务令牌写入的行，事件上记的是那个智能体。行本身没有创建者列，集合侧也还没有审计与埋点（PRD NFR-051 未做）。</p>
@@ -2510,7 +2510,7 @@ sequenceDiagram
 </table></div>
 <p><strong>表结构为什么没有「智能体专属」的门。</strong>分支最初按凭证类型拒绝任务令牌建表和改字段（<code>collection_schema_requires_human</code>）；2026-09-21 按用户决定去掉（PRD 修订九、Q-U3 的 schema 部分）。现在 <code>requireCollectionManager</code>（<code>collection_manage.go</code>）只问一件事：调用者的用户 ID 是不是 <code>collection.created_by</code>，或者该用户是不是 owner / admin。任务令牌的用户 ID 就是运行时主人，所以管理员名下的运行可以改任何表，普通成员名下的运行只能改该成员建的表——包括他名下的运行替他建的表，界面上的 <code>canManage</code> 用同一个判断，两边不会不一致。云节点 PAT（<code>cloud_pat</code>）同理。通过后用 <code>resolveActor</code> 取执行者，<code>collection:updated</code> 事件因此记在智能体名下；建表现在也发这条事件，否则 CLI 或智能体建的表要等客户端下一次重取才出现。任务字段定义（<code>requirePropertyAdmin</code>）没有跟着放开，仍然拒绝智能体。</p>
 <p>两类拒绝都带稳定的 <code>code</code>。原因在 CLI 一侧：<code>cli.FormatError</code> 有意把所有 403 折叠成同一句「无权访问」，以免拒绝本身泄露资源是否存在；命令只有按 <code>code</code> 显式认领某一种拒绝，才会换成具体的话。对智能体来说这不是体验问题——通用文案会让它去找别的凭证，具体文案告诉它「这张表谁能改，你可以去写行、自建一张表」或「批准归人做，你可以留评论请人评审」。</p>
-<div class="risk"><span class="t">放开表结构之后，风险在哪</span>不在「谁能改」，而在「改了收不回」。字段配置的接口只收整份选项列表，被移除的选项由 <code>StripCollectionFieldOptions</code> 从所有行（含回收站）清除；多选转单选只保留每格第一个值；表和字段的归档都是单向的，产品里还没有恢复入口。所以 CLI 给最常见的结构变更单独做了安全形态：<code>collection field update --add-option</code> 把既有选项按 ID 原样带回再追加，调用者不必、也不会因为漏键一个选项而清掉别人的数据；内置技能要求智能体只在任务明说时才移除、转换、归档。补上「已归档列表与恢复」（PRD FR-021）之前，这是唯一的缓冲。</div>
+<div class="risk"><span class="t">放开表结构之后，风险在哪</span>不在「谁能改」，而在「改了收不回」。字段配置的接口只收整份选项列表，被移除的选项由 <code>StripCollectionFieldOptions</code> 从所有行（含回收站）清除；多选转单选只保留每格第一个值；表和字段归档保留数据，现已提供已归档列表与恢复；字段重名或达到配额时返回冲突。所以 CLI 给最常见的结构变更单独做了安全形态：<code>collection field update --add-option</code> 把既有选项按 ID 原样带回再追加，调用者不必、也不会因为漏键一个选项而清掉别人的数据；内置技能要求智能体只在任务明说时才移除、转换、归档。归档恢复不等于撤销选项移除或类型转换，后两者仍需事先明确授权。</div>
 <div class="risk"><span class="t">为什么文档批准不能放给任务令牌</span><code>document_publication.actor_id</code> 记的是用户 ID，而任务令牌通过认证后的用户 ID 就是运行时主人。放行等于让智能体以那个人的名义在批准记录上签字。要开放「智能体送审」，得先给批准记录加执行者类型（PRD Q-U5）。矩阵由 <code>server/internal/handler/cortex_agent_access_test.go</code> 固定，包括「主人为 owner / admin / 普通成员三种情形下智能体与本人得到同样结果」和「被拒的转换不留下任何批准记录」。</div>
 
 <h3 id="cortex-agent"><span class="sec">11.8</span>智能体通道：CLI 与内置技能</h3>
@@ -2549,9 +2549,10 @@ sequenceDiagram
 </table></div>
 <p>服务端数据归 TanStack Query，键带工作区 ID。<code>record:updated</code>、<code>collection:updated</code> 使集合查询失效；任务被删除或状态变化时也刷新集合查询，关联格上的状态图标与「已删除」因此跟着变。关联选择器里的搜索结果刻意放在集合键之外——别人每写一行都让用户正在看的搜索结果跳动，是不可接受的。单元格写入走「同一格串行提交、冲突保留用户输入并提供显式覆盖」，与 §2.5 的乐观更新规则一致。</p>
 
+<p>2026-09-21 P2a：<code>POST /api/collections/import</code> 读取 Excel / CSV 并预览工作表、表头与字段；确认后在单个事务中创建新 collection、字段和记录。预览不持久化，失败不留空表；支持改字段名/类型、跳过列和选择项目。Excelize 只读取已保存的公式结果，不执行公式或宏。已有表的 <code>POST …/records/import</code> 提供 UTF-8 CSV 预校验与最多 1 万行原子导入；<code>POST …/records/batch</code> 对最多 500 条显式记录执行原子修改、软删除或恢复，可携带每行预期版本。字段目录和记录使用事务锁；JSONB 合并保留未修改字段。失败整批回滚，成功后发布一次集合更新事件，由 Query 刷新分页与编辑记录。未新增数据库表或迁移。</p>
 <h3 id="cortex-open"><span class="sec">11.10</span>还没有的部分</h3>
-<p>按 PRD 里程碑：CSV 导入与批量编辑 / 删除（FR-025）、<code>mention://collection|record</code>（FR-031）、每篇文档的内嵌视图本地覆盖与链接式落盘格式（FR-033 / FR-034）、集合的 list / gantt / swimlane、非单选分组、版本历史与段落软锁、表单视图、审计与埋点，以及整个知识库与 Workflow。逐条状态见 <a href="cortex-prd.html#main-sync-status">PRD §14</a>。智能体一侧的缺口是比较运算过滤、按关联过滤、批量写入命令（PRD FR-066）。</p>
-<p class="source-map">源码入口（分支工作树）：<code>server/migrations/500–515</code> · <code>server/internal/fields/value.go</code> · <code>server/internal/handler/document.go</code> · <code>collection.go</code> · <code>collection_manage.go</code> · <code>collection_link.go</code> · <code>cortex_agent_access_test.go</code> · <code>server/cmd/multica/cmd_collection.go</code> · <code>cmd_record.go</code> · <code>cmd_document.go</code> · <code>server/internal/service/builtin_skills/multica-platform/references/</code>。</p>
+<p>按 PRD 里程碑：<code>mention://collection|record</code>（FR-031）、每篇文档的内嵌视图本地覆盖与链接式落盘格式（FR-033 / FR-034）、集合的 list / gantt / swimlane、非单选分组、版本历史与段落软锁、表单视图、审计与埋点，以及整个知识库与 Workflow。逐条状态见 <a href="cortex-prd.html#main-sync-status">PRD §14</a>。智能体一侧已支持比较与关联过滤、关联排序、批量写入和 CSV 导入；mention 输出降级仍随 FR-031 实现。</p>
+<p class="source-map">源码入口（分支工作树）：<code>server/migrations/500–515</code> · <code>server/internal/fields/value.go</code> · <code>server/internal/handler/document.go</code> · <code>collection.go</code> · <code>collection_manage.go</code> · <code>collection_batch.go</code> · <code>collection_import.go</code> · <code>internal/collectionimport/</code> · <code>collection_link.go</code> · <code>cortex_agent_access_test.go</code> · <code>server/cmd/multica/cmd_collection.go</code> · <code>cmd_record.go</code> · <code>cmd_document.go</code> · <code>server/internal/service/builtin_skills/multica-platform/references/</code>。</p>
 </section>
 <footer class="foot">
   <span>本轮源码复核：<span class="mono">multica-ai/multica @ 9e7e529b7</span> · 2026-09-18；§11 依据功能分支工作树 · 2026-09-21</span>

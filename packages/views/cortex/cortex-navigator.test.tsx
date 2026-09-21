@@ -9,7 +9,7 @@ import { SidebarProvider } from "@multica/ui/components/ui/sidebar";
 import { NavigationProvider } from "../navigation/context";
 import type { NavigationAdapter } from "../navigation";
 import { renderWithI18n } from "../test/i18n";
-import { CollectionNavigator, DocumentNavigator } from "./cortex-navigator";
+import { CollectionNavigator, DocumentNavigator, NewTablePopover } from "./cortex-navigator";
 
 const api = vi.hoisted(() => ({
   listDocuments: vi.fn(),
@@ -42,7 +42,7 @@ vi.mock("@multica/core/projects/queries", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@multica/core/projects/queries")>()),
   projectListOptions: () => ({
     queryKey: ["projects"],
-    queryFn: async () => [],
+    queryFn: async () => [{id: "p1", title: "Alpha"}],
   }),
 }));
 vi.mock("@multica/core/paths", async (importOriginal) => ({
@@ -179,7 +179,7 @@ it("creates a table from the popover and opens it after the server confirms", as
   });
   fireEvent.click(screen.getByRole("button", { name: "Create" }));
   await waitFor(() => expect(push).toHaveBeenCalledWith("/acme/collections/c3"));
-  expect(api.createCollection).toHaveBeenCalledWith("Leads");
+  expect(api.createCollection).toHaveBeenCalledWith("Leads", undefined, {icon: "", description: ""});
 });
 
 it("deletes a document from its row after confirming, and says where its child pages go", async () => {
@@ -246,4 +246,15 @@ it("lets workspace admins delete tables they did not create", async () => {
   api.listMembers.mockResolvedValue([{ user_id: "user-1", role: "admin" }]);
   mount(<CollectionNavigator />);
   expect(await screen.findByRole("button", { name: "Actions for Assets" })).toBeInTheDocument();
+});
+
+it("creates a table in the supplied project with icon and description", async () => {
+  mount(<NewTablePopover projectId="p1" trigger={<button>New project table</button>}/>);
+  fireEvent.click(screen.getByRole("button",{name:"New project table"}));
+  fireEvent.change(await screen.findByRole("textbox",{name:"Table name"}),{target:{value:"Project table"}});
+  expect(screen.getByRole("combobox",{name:"Project"})).toHaveValue("p1");
+  fireEvent.change(screen.getByRole("textbox",{name:"Icon (emoji)"}),{target:{value:"📋"}});
+  fireEvent.change(screen.getByRole("textbox",{name:"Description"}),{target:{value:"Working materials"}});
+  fireEvent.click(screen.getByRole("button",{name:"Create"}));
+  await waitFor(()=>expect(api.createCollection).toHaveBeenCalledWith("Project table","p1",{icon:"📋",description:"Working materials"}));
 });

@@ -1885,9 +1885,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/collections", func(r chi.Router) {
 				r.Get("/", h.ListCollections)
 				r.Post("/", h.CreateCollection)
+				r.Post("/import", h.ImportCollection)
 				r.Route("/{collectionID}", func(r chi.Router) {
 					r.Get("/", h.GetCollection)
 					r.Patch("/", h.UpdateCollection)
+					r.Post("/restore", h.RestoreCollection)
+					r.Get("/fields/archived", h.ListArchivedCollectionFields)
+					r.Post("/fields/{fieldID}/restore", h.RestoreCollectionField)
+					r.Post("/records/batch", h.BatchCollectionRecords)
+					r.Post("/records/import", h.ImportCollectionCSV)
 					r.Post("/fields", h.CreateCollectionField)
 					r.Patch("/fields/{fieldID}", h.UpdateCollectionField)
 					r.Get("/records", h.ListCollectionRecords)

@@ -1,11 +1,12 @@
 -- name: ListCollections :many
 SELECT c.*,
  (SELECT count(*) FROM record r WHERE r.workspace_id=c.workspace_id AND r.collection_id=c.id AND r.deleted_at IS NULL)::bigint AS record_count
-FROM collection c WHERE c.workspace_id=$1 AND c.archived_at IS NULL ORDER BY c.created_at DESC,c.id;
+FROM collection c WHERE c.workspace_id=$1 AND (c.archived_at IS NOT NULL)=sqlc.arg(archived)::boolean ORDER BY c.created_at DESC,c.id;
 
 -- name: UpdateCollection :one
 UPDATE collection SET name=COALESCE(sqlc.narg(name),name),
  title_name=COALESCE(sqlc.narg(title_name),title_name),
+ icon=COALESCE(sqlc.narg(icon),icon), description=COALESCE(sqlc.narg(description),description),
  archived_at=CASE WHEN sqlc.arg(archive)::boolean THEN now() ELSE archived_at END,
  revision=revision+1,updated_at=now()
 WHERE workspace_id=sqlc.arg(workspace_id) AND id=sqlc.arg(id) AND archived_at IS NULL RETURNING *;
@@ -17,7 +18,7 @@ SELECT * FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 SELECT * FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE;
 
 -- name: CreateCollection :one
-INSERT INTO collection (workspace_id,project_id,name,created_by) VALUES($1,$2,$3,$4) RETURNING *;
+INSERT INTO collection (workspace_id,project_id,name,created_by,icon,description) VALUES($1,$2,$3,$4,$5,$6) RETURNING *;
 
 -- name: ListCollectionFields :many
 SELECT * FROM collection_field WHERE workspace_id=$1 AND collection_id=$2 AND archived_at IS NULL ORDER BY position,id;
@@ -90,3 +91,17 @@ RETURNING *;
 UPDATE record SET title=sqlc.arg(title),revision=revision+1,updated_at=now()
 WHERE workspace_id=sqlc.arg(workspace_id) AND collection_id=sqlc.arg(collection_id) AND id=sqlc.arg(id) AND deleted_at IS NULL
  AND (title=sqlc.arg(title_base) OR title=sqlc.arg(title)) RETURNING *;
+
+-- name: GetArchivedCollection :one
+SELECT * FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NOT NULL;
+
+-- name: RestoreCollection :one
+UPDATE collection SET archived_at=NULL,revision=revision+1,updated_at=now()
+WHERE workspace_id=$1 AND id=$2 AND archived_at IS NOT NULL RETURNING *;
+
+-- name: ListArchivedCollectionFields :many
+SELECT * FROM collection_field WHERE workspace_id=$1 AND collection_id=$2 AND archived_at IS NOT NULL ORDER BY position,id;
+
+-- name: RestoreCollectionField :one
+UPDATE collection_field SET archived_at=NULL
+WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND archived_at IS NOT NULL RETURNING *;

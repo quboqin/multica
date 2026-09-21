@@ -61,7 +61,7 @@ func (q *Queries) CountDeletedCollectionRecords(ctx context.Context, arg CountDe
 }
 
 const createCollection = `-- name: CreateCollection :one
-INSERT INTO collection (workspace_id,project_id,name,created_by) VALUES($1,$2,$3,$4) RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
+INSERT INTO collection (workspace_id,project_id,name,created_by,icon,description) VALUES($1,$2,$3,$4,$5,$6) RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
 `
 
 type CreateCollectionParams struct {
@@ -69,6 +69,8 @@ type CreateCollectionParams struct {
 	ProjectID   pgtype.UUID `json:"project_id"`
 	Name        string      `json:"name"`
 	CreatedBy   pgtype.UUID `json:"created_by"`
+	Icon        string      `json:"icon"`
+	Description string      `json:"description"`
 }
 
 func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionParams) (Collection, error) {
@@ -77,6 +79,8 @@ func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionPara
 		arg.ProjectID,
 		arg.Name,
 		arg.CreatedBy,
+		arg.Icon,
+		arg.Description,
 	)
 	var i Collection
 	err := row.Scan(
@@ -166,6 +170,35 @@ func (q *Queries) CreateCollectionRecord(ctx context.Context, arg CreateCollecti
 	return i, err
 }
 
+const getArchivedCollection = `-- name: GetArchivedCollection :one
+SELECT id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NOT NULL
+`
+
+type GetArchivedCollectionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) GetArchivedCollection(ctx context.Context, arg GetArchivedCollectionParams) (Collection, error) {
+	row := q.db.QueryRow(ctx, getArchivedCollection, arg.WorkspaceID, arg.ID)
+	var i Collection
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.CreatedBy,
+		&i.Revision,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TitleName,
+	)
+	return i, err
+}
+
 const getCollection = `-- name: GetCollection :one
 SELECT id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name FROM collection WHERE workspace_id=$1 AND id=$2 AND archived_at IS NULL
 `
@@ -221,6 +254,44 @@ func (q *Queries) GetCollectionField(ctx context.Context, arg GetCollectionField
 	return i, err
 }
 
+const listArchivedCollectionFields = `-- name: ListArchivedCollectionFields :many
+SELECT id, workspace_id, collection_id, name, type, config, position, archived_at FROM collection_field WHERE workspace_id=$1 AND collection_id=$2 AND archived_at IS NOT NULL ORDER BY position,id
+`
+
+type ListArchivedCollectionFieldsParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	CollectionID pgtype.UUID `json:"collection_id"`
+}
+
+func (q *Queries) ListArchivedCollectionFields(ctx context.Context, arg ListArchivedCollectionFieldsParams) ([]CollectionField, error) {
+	rows, err := q.db.Query(ctx, listArchivedCollectionFields, arg.WorkspaceID, arg.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CollectionField{}
+	for rows.Next() {
+		var i CollectionField
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.CollectionID,
+			&i.Name,
+			&i.Type,
+			&i.Config,
+			&i.Position,
+			&i.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCollectionFields = `-- name: ListCollectionFields :many
 SELECT id, workspace_id, collection_id, name, type, config, position, archived_at FROM collection_field WHERE workspace_id=$1 AND collection_id=$2 AND archived_at IS NULL ORDER BY position,id
 `
@@ -262,8 +333,13 @@ func (q *Queries) ListCollectionFields(ctx context.Context, arg ListCollectionFi
 const listCollections = `-- name: ListCollections :many
 SELECT c.id, c.workspace_id, c.project_id, c.name, c.description, c.icon, c.created_by, c.revision, c.archived_at, c.created_at, c.updated_at, c.title_name,
  (SELECT count(*) FROM record r WHERE r.workspace_id=c.workspace_id AND r.collection_id=c.id AND r.deleted_at IS NULL)::bigint AS record_count
-FROM collection c WHERE c.workspace_id=$1 AND c.archived_at IS NULL ORDER BY c.created_at DESC,c.id
+FROM collection c WHERE c.workspace_id=$1 AND (c.archived_at IS NOT NULL)=$2::boolean ORDER BY c.created_at DESC,c.id
 `
+
+type ListCollectionsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	Archived    bool        `json:"archived"`
+}
 
 type ListCollectionsRow struct {
 	ID          pgtype.UUID        `json:"id"`
@@ -281,8 +357,8 @@ type ListCollectionsRow struct {
 	RecordCount int64              `json:"record_count"`
 }
 
-func (q *Queries) ListCollections(ctx context.Context, workspaceID pgtype.UUID) ([]ListCollectionsRow, error) {
-	rows, err := q.db.Query(ctx, listCollections, workspaceID)
+func (q *Queries) ListCollections(ctx context.Context, arg ListCollectionsParams) ([]ListCollectionsRow, error) {
+	rows, err := q.db.Query(ctx, listCollections, arg.WorkspaceID, arg.Archived)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +457,63 @@ func (q *Queries) LockCollection(ctx context.Context, arg LockCollectionParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.TitleName,
+	)
+	return i, err
+}
+
+const restoreCollection = `-- name: RestoreCollection :one
+UPDATE collection SET archived_at=NULL,revision=revision+1,updated_at=now()
+WHERE workspace_id=$1 AND id=$2 AND archived_at IS NOT NULL RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
+`
+
+type RestoreCollectionParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	ID          pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RestoreCollection(ctx context.Context, arg RestoreCollectionParams) (Collection, error) {
+	row := q.db.QueryRow(ctx, restoreCollection, arg.WorkspaceID, arg.ID)
+	var i Collection
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Description,
+		&i.Icon,
+		&i.CreatedBy,
+		&i.Revision,
+		&i.ArchivedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TitleName,
+	)
+	return i, err
+}
+
+const restoreCollectionField = `-- name: RestoreCollectionField :one
+UPDATE collection_field SET archived_at=NULL
+WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND archived_at IS NOT NULL RETURNING id, workspace_id, collection_id, name, type, config, position, archived_at
+`
+
+type RestoreCollectionFieldParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	CollectionID pgtype.UUID `json:"collection_id"`
+	ID           pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) RestoreCollectionField(ctx context.Context, arg RestoreCollectionFieldParams) (CollectionField, error) {
+	row := q.db.QueryRow(ctx, restoreCollectionField, arg.WorkspaceID, arg.CollectionID, arg.ID)
+	var i CollectionField
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CollectionID,
+		&i.Name,
+		&i.Type,
+		&i.Config,
+		&i.Position,
+		&i.ArchivedAt,
 	)
 	return i, err
 }
@@ -528,14 +661,17 @@ func (q *Queries) StripCollectionFieldOptions(ctx context.Context, arg StripColl
 const updateCollection = `-- name: UpdateCollection :one
 UPDATE collection SET name=COALESCE($1,name),
  title_name=COALESCE($2,title_name),
- archived_at=CASE WHEN $3::boolean THEN now() ELSE archived_at END,
+ icon=COALESCE($3,icon), description=COALESCE($4,description),
+ archived_at=CASE WHEN $5::boolean THEN now() ELSE archived_at END,
  revision=revision+1,updated_at=now()
-WHERE workspace_id=$4 AND id=$5 AND archived_at IS NULL RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
+WHERE workspace_id=$6 AND id=$7 AND archived_at IS NULL RETURNING id, workspace_id, project_id, name, description, icon, created_by, revision, archived_at, created_at, updated_at, title_name
 `
 
 type UpdateCollectionParams struct {
 	Name        pgtype.Text `json:"name"`
 	TitleName   pgtype.Text `json:"title_name"`
+	Icon        pgtype.Text `json:"icon"`
+	Description pgtype.Text `json:"description"`
 	Archive     bool        `json:"archive"`
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	ID          pgtype.UUID `json:"id"`
@@ -545,6 +681,8 @@ func (q *Queries) UpdateCollection(ctx context.Context, arg UpdateCollectionPara
 	row := q.db.QueryRow(ctx, updateCollection,
 		arg.Name,
 		arg.TitleName,
+		arg.Icon,
+		arg.Description,
 		arg.Archive,
 		arg.WorkspaceID,
 		arg.ID,

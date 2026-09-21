@@ -337,3 +337,20 @@ Claude Code のプラグインマーケットプレイス、Codex の skill イ�
 - [認証とトークン](/auth-tokens) — PAT の作成、更新、失効。
 - [トラブルシューティング](/troubleshooting) — コマンドのエラーと、いつまでも開始しない実行の診断。
 - [エージェントの作成と設定](/agents-create) — `agent create` 各フィールドの完全な意味。
+
+## テーブルのインポートと一括操作
+
+CSV は最大 10,000 行を全件検証してから取り込みます。一括操作は明示した最大 500 行です。--expect-revision を使う場合は全行分を指定します。削除には --yes が必要で、ゴミ箱は 30 日間保持されます。テーブルとフィールドは復元可能ですが、名前の重複や 50 フィールドの上限を超える復元は拒否されます。
+
+```bash
+multica record import Customers --file customers.csv --dry-run
+multica record import Customers --file customers.csv
+multica record batch-update Customers --record <row-id> --set "Seats=25" --expect-revision "<row-id>=3"
+multica record batch-delete Customers --record <row-id> --yes
+multica record batch-restore Customers --record <row-id>
+multica collection list --archived
+multica collection restore Customers
+multica collection field list Customers --archived
+multica collection field restore Customers Notes
+multica record list Customers --filter "Seats>=10" --sort Stage
+```

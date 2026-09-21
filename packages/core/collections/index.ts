@@ -1,11 +1,15 @@
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
+export * from "./import";
 import { api } from "../api";
 
 export const CollectionSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
   name: z.string(),
+  icon: z.string().catch(""),
+  description: z.string().catch(""),
+  archived_at: z.string().nullable().catch(null),
   created_by: z.string().catch(""),
   project_id: z.string().nullable().catch(null),
   revision: z.number().default(1),
@@ -122,9 +126,11 @@ export interface CollectionQuery {
 }
 export interface CollectionPatch {
   name?: string;
+  icon?: string;
+  description?: string;
   /** Empty returns the title column to its localized default label. */
   title_name?: string;
-  /** Archiving removes the table from the workspace; there is no unarchive yet. */
+  /** Archiving removes the table from the workspace; restoration uses the explicit restore endpoint. */
   archived?: true;
 }
 export interface CollectionFieldInput {
@@ -152,10 +158,10 @@ export const collectionKeys = {
   /** Reverse lookups. "links" sits where a table id would, and is never one. */
   backlinks: (wsId: string) => ["collections", wsId, "links"] as const,
 };
-export function collectionListOptions(wsId: string) {
+export function collectionListOptions(wsId: string, archived = false) {
   return queryOptions({
-    queryKey: [...collectionKeys.all(wsId), "list"],
-    queryFn: ({ signal }) => api.listCollections({ workspaceId: wsId, signal }),
+    queryKey: [...collectionKeys.all(wsId), "list", ...(archived ? ["archived"] : [])],
+    queryFn: ({ signal }) => api.listCollections({ workspaceId: wsId, signal, archived }),
     enabled: !!wsId,
   });
 }
@@ -236,5 +242,24 @@ export function recordBacklinksOptions(
         signal,
       }),
     enabled: !!wsId && !!id && !!recordId,
+  });
+}
+
+export const CollectionBatchResultSchema = z.object({
+  count: z.number().int().nonnegative(),
+  dry_run: z.boolean().optional(),
+});
+export interface CollectionBatchInput {
+  action: "update" | "delete" | "restore";
+  record_ids: string[];
+  fields?: Record<string, unknown>;
+  expected_revisions?: Record<string, number>;
+  confirmed?: boolean;
+}
+export function archivedCollectionFieldsOptions(wsId: string, id: string) {
+  return queryOptions({
+    queryKey: [...collectionKeys.all(wsId), id, "archived-fields"],
+    queryFn: ({ signal }) => api.listArchivedCollectionFields(id, wsId, signal),
+    enabled: !!wsId && !!id,
   });
 }

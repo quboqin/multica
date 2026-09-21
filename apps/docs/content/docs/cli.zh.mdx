@@ -335,3 +335,20 @@ Claude Code 插件市场、Codex skill 安装器、Cursor 以及其他任何加�
 - [认证与令牌](/auth-tokens) — PAT 的创建、续期和吊销。
 - [故障排查](/troubleshooting) — 命令报错和运行不开始的排查路径。
 - [创建和配置智能体](/agents-create) — `agent create` 各字段的完整语义。
+
+## 表格导入与批量操作
+
+CSV 最多 1 万行，全部校验通过后原子导入。批量操作最多接受 500 个显式记录 ID；使用 --expect-revision 时必须覆盖全部记录。删除需要 --yes，回收站保留 30 天。已归档表与字段支持恢复；字段重名或超过 50 字段配额时返回错误。
+
+```bash
+multica record import Customers --file customers.csv --dry-run
+multica record import Customers --file customers.csv
+multica record batch-update Customers --record <row-id> --set "Seats=25" --expect-revision "<row-id>=3"
+multica record batch-delete Customers --record <row-id> --yes
+multica record batch-restore Customers --record <row-id>
+multica collection list --archived
+multica collection restore Customers
+multica collection field list Customers --archived
+multica collection field restore Customers Notes
+multica record list Customers --filter "Seats>=10" --sort Stage
+```

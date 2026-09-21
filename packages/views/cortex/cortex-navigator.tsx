@@ -71,6 +71,7 @@ import { CollapsedNavTrigger } from "../layout/page-header";
 import { AppLink, useNavigation } from "../navigation";
 import { useT } from "../i18n";
 import { useCreateDocument, useDocumentCommand } from "./use-document-commands";
+import { CollectionImportDialog } from "../collections/collection-import-dialog";
 
 const DRAG_TYPE = "application/x-multica-document";
 const emptyIds: string[] = [];
@@ -720,8 +721,10 @@ function FilterChip({
 export function NewTablePopover({
   trigger,
   align = "start",
+  projectId: initialProjectId = "",
 }: {
   trigger: ReactElement;
+  projectId?: string;
   align?: "start" | "center" | "end";
 }) {
   const { t } = useT("issues");
@@ -731,8 +734,12 @@ export function NewTablePopover({
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [projectId, setProjectId] = useState(initialProjectId);
+  const [icon, setIcon] = useState("");
+  const [description, setDescription] = useState("");
+  const {data: projects = []} = useQuery(projectListOptions(wsId));
   const create = useMutation({
-    mutationFn: (value: string) => api.createCollection(value),
+    mutationFn: (value: string) => api.createCollection(value, projectId || undefined, {icon, description}),
     onSuccess: async (collection) => {
       await queryClient.invalidateQueries({
         queryKey: collectionKeys.all(wsId),
@@ -769,6 +776,9 @@ export function NewTablePopover({
               className="h-8"
             />
           </label>
+          <label className="block text-caption">{t($=>$.cortex_bulk.project)}<select className="w-full rounded border bg-background p-1" value={projectId} onChange={e=>setProjectId(e.target.value)}><option value="">{t($=>$.cortex_bulk.workspace)}</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
+          <label className="block text-caption">{t($=>$.cortex_bulk.icon)}<Input maxLength={32} value={icon} onChange={e=>setIcon(e.target.value)}/></label>
+          <label className="block text-caption">{t($=>$.cortex_bulk.description)}<Input maxLength={4000} value={description} onChange={e=>setDescription(e.target.value)}/></label>
           {create.error && (
             <p role="alert" className="text-caption text-destructive">
               {create.error.message}
@@ -802,8 +812,10 @@ export function CollectionNavigator({
   const paths = useWorkspacePaths();
   const navigation = useNavigation();
   const queryClient = useQueryClient();
+  const [archived, setArchived] = useState(false);
+  const restore = useMutation({mutationFn: (id:string)=>api.restoreCollection(id),onSuccess:()=>queryClient.invalidateQueries({queryKey:collectionKeys.all(wsId)})});
   const { data: collections = [], isLoading, error } = useQuery(
-    collectionListOptions(wsId),
+    collectionListOptions(wsId, archived),
   );
   // Same rule the server applies: the creator, or a workspace owner or admin.
   const userId = useAuthStore((state) => state.user?.id);
@@ -865,10 +877,14 @@ export function CollectionNavigator({
           }
         />
       </SectionHeader>
+      <div className="px-2 py-2"><CollectionImportDialog /></div>
+      <label className="flex items-center gap-2 px-2 py-2 text-caption"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>{t($=>$.cortex_bulk.archived_tables)}</label>
+      {restore.error && <p role="alert">{restore.error.message}</p>}
       <ul aria-labelledby={TABLES_HEADING_ID}>
         {rows.map((collection) => {
           const active = collection.id === activeCollectionId;
           const deletable = canDelete(collection);
+          if (archived) return <li key={collection.id} className="flex items-center gap-2 px-2 py-1 text-label"><span className="min-w-0 flex-1 truncate">{collection.icon} {collection.name}</span>{deletable && <Button size="xs" variant="outline" disabled={restore.isPending} onClick={()=>restore.mutate(collection.id)}>{t($=>$.cortex_bulk.restore)}</Button>}</li>;
           return (
             <li
               key={collection.id}
@@ -885,7 +901,7 @@ export function CollectionNavigator({
                 aria-current={active ? "page" : undefined}
                 className="flex min-w-0 flex-1 items-center gap-2 self-stretch px-2"
               >
-                <Table2 className="size-3.5 shrink-0 text-muted-foreground" />
+                {collection.icon ? <span aria-hidden>{collection.icon}</span> : <Table2 className="size-3.5 shrink-0 text-muted-foreground" />}
                 <span className="min-w-0 flex-1 truncate">{collection.name}</span>
                 {collection.record_count !== undefined && (
                   <span

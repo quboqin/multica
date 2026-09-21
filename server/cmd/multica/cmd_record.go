@@ -145,7 +145,8 @@ with the SAME filters to read on.
 --filter takes "Field=Value" and is repeatable: the same field twice matches
 either value, different fields must all match, and "Field=__none__" matches
 rows where the field is empty. Values are written the way "record update --set"
-takes them. Relation fields cannot be filtered or sorted yet.`,
+takes them. Comparisons use >, >=, <, <=; text contains uses ~=. Relations
+match a target name/ID and sort by their first visible target title.`,
 	Args: exactArgs(1),
 	RunE: runRecordList,
 }
@@ -552,43 +553,81 @@ func splitFieldPair(flag, pair string) (string, string, error) {
 // the records endpoint takes as `properties`: OR within a field, AND across
 // fields, keyed by field id so a name and an id address the same entry.
 func buildRecordFilterParam(ctx context.Context, client *cli.APIClient, directory *memberDirectory, detail collectionDetailDTO, pairs []string) (string, error) {
-	filter := make(map[string][]string, len(pairs))
+	filter := make(map[string][]any, len(pairs))
 	for _, pair := range pairs {
-		name, rawValue, err := splitFieldPair("filter", pair)
+		name, rawValue, op, err := splitRecordFilter(pair)
 		if err != nil {
 			return "", err
-		}
-		// Reserved so scripts never come to depend on "Seats>" resolving as a
-		// field name once >=, <= and != mean comparison filters.
-		if strings.HasSuffix(name, "<") || strings.HasSuffix(name, ">") || strings.HasSuffix(name, "!") {
-			return "", fmt.Errorf(`--filter %q: comparison operators are not supported yet; only "Field=Value" is accepted`, pair)
-		}
-		if strings.TrimSpace(rawValue) == "" {
-			return "", fmt.Errorf("--filter %s: value cannot be empty (use %s to match rows where the field is empty)", name, propertyNoValueSentinel)
 		}
 		field, err := resolveCollectionFieldRef(detail, name)
 		if err != nil {
 			return "", err
 		}
-		value, err := resolveRecordFilterValue(ctx, client, directory, field, rawValue)
+		if strings.TrimSpace(rawValue) == "" {
+			return "", fmt.Errorf("--filter %s: value cannot be empty (use __none__)", name)
+		}
+		var value string
+		if field.isRelation() {
+			if op != "=" {
+				return "", fmt.Errorf("relation filters support equality only")
+			}
+			if rawValue == propertyNoValueSentinel {
+				value = rawValue
+			} else {
+				value, err = resolveRelationTarget(ctx, client, field, rawValue)
+			}
+		} else {
+			value, err = resolveRecordFilterValue(ctx, client, directory, field, rawValue)
+		}
 		if err != nil {
 			return "", err
 		}
-		duplicate := false
-		for _, existing := range filter[field.ID] {
-			if existing == value {
-				duplicate = true
+		if op == "=" {
+			duplicate := false
+			for _, v := range filter[field.ID] {
+				if v == value {
+					duplicate = true
+				}
 			}
+			if !duplicate {
+				filter[field.ID] = append(filter[field.ID], value)
+			}
+			continue
 		}
-		if !duplicate {
-			filter[field.ID] = append(filter[field.ID], value)
+		operator := map[string]string{">": "gt", ">=": "gte", "<": "lt", "<=": "lte", "~=": "contains"}[op]
+		if op == "~=" {
+			if field.Type != "text" && field.Type != "url" {
+				return "", fmt.Errorf("contains requires a text or URL field")
+			}
+		} else if field.Type == "date" {
+			if strings.HasPrefix(op, ">") {
+				operator = "after"
+			} else {
+				operator = "before"
+			}
+			if strings.HasSuffix(op, "=") {
+				filter[field.ID] = append(filter[field.ID], value)
+			}
+		} else if field.Type != "number" {
+			return "", fmt.Errorf("comparison requires a number or date field")
 		}
+		filter[field.ID] = append(filter[field.ID], map[string]string{"op": operator, "value": value})
 	}
 	buf, err := json.Marshal(filter)
-	if err != nil {
-		return "", fmt.Errorf("encode filter: %w", err)
+	return string(buf), err
+}
+
+func splitRecordFilter(pair string) (name, value, op string, err error) {
+	i := strings.IndexAny(pair, "!<>=~")
+	if i <= 0 {
+		return "", "", "", fmt.Errorf("--filter requires Field=Value, Field>=Value, Field<Value or Field~=text")
 	}
-	return string(buf), nil
+	for _, candidate := range []string{">=", "<=", "~=", ">", "<", "="} {
+		if strings.HasPrefix(pair[i:], candidate) {
+			return strings.TrimSpace(pair[:i]), pair[i+len(candidate):], candidate, nil
+		}
+	}
+	return "", "", "", fmt.Errorf("unsupported filter operator")
 }
 
 // resolveRecordFilterValue spells one filter value the way the cell stores it.
@@ -647,9 +686,7 @@ func resolveRecordSort(detail collectionDetailDTO, ref string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf(`--sort takes "title", "created_at", or a field: %w`, err)
 	}
-	if field.isRelation() {
-		return "", fmt.Errorf("--sort %s: relation fields have no sort order yet", field.Name)
-	}
+
 	return field.ID, nil
 }
 

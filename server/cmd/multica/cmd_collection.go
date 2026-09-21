@@ -484,7 +484,13 @@ func runCollectionList(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
-	collections, err := fetchCollections(ctx, client)
+	var collections []collectionDTO
+	archived, _ := cmd.Flags().GetBool("archived")
+	path := "/api/collections"
+	if archived {
+		path += "?archived=true"
+	}
+	err = client.GetJSON(ctx, path, &collections)
 	if err != nil {
 		return err
 	}
@@ -578,6 +584,12 @@ func runCollectionCreate(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	body := map[string]any{"name": name}
+	for _, key := range []string{"icon", "description"} {
+		if cmd.Flags().Changed(key) {
+			value, _ := cmd.Flags().GetString(key)
+			body[key] = value
+		}
+	}
 	if ref, _ := cmd.Flags().GetString("project"); ref != "" {
 		project, err := resolveProjectID(ctx, client, ref)
 		if err != nil {
@@ -594,6 +606,12 @@ func runCollectionCreate(cmd *cobra.Command, _ []string) error {
 
 func runCollectionUpdate(cmd *cobra.Command, args []string) error {
 	body := map[string]any{}
+	for _, key := range []string{"icon", "description"} {
+		if cmd.Flags().Changed(key) {
+			value, _ := cmd.Flags().GetString(key)
+			body[key] = value
+		}
+	}
 	if cmd.Flags().Changed("name") {
 		name, _ := cmd.Flags().GetString("name")
 		body["name"] = name
@@ -603,7 +621,7 @@ func runCollectionUpdate(cmd *cobra.Command, args []string) error {
 		body["title_name"] = titleName
 	}
 	if len(body) == 0 {
-		return fmt.Errorf("nothing to update; pass --name or --title-name")
+		return fmt.Errorf("nothing to update; pass --name, --title-name, --icon or --description")
 	}
 	client, err := newAPIClient(cmd)
 	if err != nil {
@@ -653,6 +671,11 @@ func runCollectionFieldList(cmd *cobra.Command, args []string) error {
 	detail, err := loadCollection(ctx, client, args[0])
 	if err != nil {
 		return err
+	}
+	if archived, _ := cmd.Flags().GetBool("archived"); archived {
+		if err = client.GetJSON(ctx, "/api/collections/"+detail.Collection.ID+"/fields/archived", &detail.Fields); err != nil {
+			return err
+		}
 	}
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {

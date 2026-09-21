@@ -337,3 +337,20 @@ Claude Code 플러그인 마켓플레이스, Codex skill 설치 도구, Cursor�
 - [인증과 토큰](/auth-tokens) — PAT 생성, 갱신, 취소를 알아봅니다.
 - [문제 해결](/troubleshooting) — 명령 오류와 실행이 시작되지 않는 문제를 해결합니다.
 - [에이전트 생성 및 설정](/agents-create) — `agent create` 각 필드의 전체 의미를 알아봅니다.
+
+## 테이블 가져오기와 일괄 작업
+
+CSV는 최대 10,000행을 모두 검증한 뒤 가져옵니다. 일괄 작업은 명시한 최대 500행을 처리합니다. --expect-revision을 사용할 때는 모든 행을 지정하세요. 삭제에는 --yes가 필요하며 휴지통은 30일 동안 보관됩니다. 테이블과 필드는 복원할 수 있지만 이름 충돌이나 50개 필드 한도를 초과하면 오류가 반환됩니다.
+
+```bash
+multica record import Customers --file customers.csv --dry-run
+multica record import Customers --file customers.csv
+multica record batch-update Customers --record <row-id> --set "Seats=25" --expect-revision "<row-id>=3"
+multica record batch-delete Customers --record <row-id> --yes
+multica record batch-restore Customers --record <row-id>
+multica collection list --archived
+multica collection restore Customers
+multica collection field list Customers --archived
+multica collection field restore Customers Notes
+multica record list Customers --filter "Seats>=10" --sort Stage
+```
