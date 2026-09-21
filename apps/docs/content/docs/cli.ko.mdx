@@ -165,6 +165,8 @@ multica runtime activity <runtime-id>
 | 명령 | 용도 |
 | --- | --- |
 | `issue` | 태스크 생성, 업데이트, 할당, 검색. 댓글, 구독, 라벨, 속성, 실행 기록 관리 |
+| `document` | 문서 읽기와 쓰기: 트리, 버전 기반 본문 저장, 상태 |
+| `collection`, `record` | 테이블과 행 다루기: 필드, 셀, 태스크 연결 |
 | `project` | 프로젝트와 프로젝트 리소스 관리 |
 | `label`, `property` | 워크스페이스 라벨과 사용자 지정 속성 관리 |
 | `agent`, `skill`, `squad` | 에이전트, 스킬, 스쿼드 관리 |
@@ -233,7 +235,8 @@ CLI 설정 파일에는 사용자를 대신해 Multica에 접근할 수 있는 t
 | | `assign <id>` | 할당 또는 할당 해제 | `--to`(이름으로 멤버, 에이전트, 스쿼드 fuzzy match), `--to-id`, `--unassign`, `--no-start` |
 | | `status <id> <status>` | 상태 변경 | `--no-start` |
 | | `reorder <id>` | 열 안에서 이동 | |
-| | `search <query>` | 태스크 검색 | `--limit`, `--include-closed` |
+| | `search <query>` | 태스크 검색 | `--limit`, `--include-closed`, `--kind`(`task` 또는 `doc`; 생략하면 모든 종류) |
+| | `records <id>` | 이 태스크에 연결된 테이블 행 목록 | |
 | | `children <id>` | 단계별로 묶은 하위 태스크 목록 | |
 | | `pull-requests <id>` | 연결된 PR 목록 | |
 | | `comment list/add/delete/resolve/unresolve` | 댓글 관리 | `add`: `--content` / `--content-stdin` / `--content-file`, `--parent`, `--attachment`. `list`: `--since`, `--thread`, `--tail` |
@@ -246,6 +249,19 @@ CLI 설정 파일에는 사용자를 대신해 Multica에 접근할 수 있는 t
 | | `usage <issue-id>` | 집계 token 사용량 확인 | |
 | | `rerun <id>` | 현재 할당을 기준으로 다시 큐에 넣어 실행 | |
 | | `cancel-task <task-id>` | 진행 중 또는 큐 대기 중인 실행 취소 | `--issue` |
+| `document` | `list` | 문서 트리 목록(제목과 상태, 본문 제외) | `--project` |
+| | `get <document>` | 본문과 리비전 보기 | `--output markdown`은 본문만 출력 |
+| | `create` | 문서 생성(항상 초안으로 시작) | `--title`(필수), `--content` / `--content-stdin` / `--content-file`, `--parent`, `--project` |
+| | `save <document>` | 읽은 리비전을 기준으로 본문 저장 | `--expected-revision`(필수), `--content` / `--content-stdin` / `--content-file`, `--title`; 오래된 리비전은 거부되며 아무것도 기록되지 않음 |
+| | `move <document>` | 트리 안에서 이동 | `--parent` / `--root`, `--before` / `--first` |
+| | `status <document> <status>` | 검토 요청, 게시, 초안으로 되돌리기(`draft`, `reviewing`, `published`) | `--expected-revision`(필수); 사람만 실행할 수 있으며 에이전트의 태스크 토큰은 거부됨 |
+| `collection` | `list/get/create/update/archive` | 테이블 관리 | `create`: `--name`, `--project`; `update`: `--name`, `--title-name`. 테이블 생성은 워크스페이스의 누구나 가능; 이름 변경·보관·필드 변경은 생성자 또는 워크스페이스 owner / admin이 수행. 에이전트 실행은 해당 런타임 소유자의 자격으로 같은 규칙을 따름 |
+| | `field list/add/update/archive <table>` | 테이블 필드 관리 | `add`: `--name`, `--type`(9가지 속성 유형과 `relation`), `--option`(반복 가능), `--relation-to`(`issues` 또는 테이블; 생성 후 변경 불가); `update`: `--add-option`은 기존 옵션을 유지하며 추가, `--option`은 목록 전체를 교체하며 빠진 옵션은 모든 행에서 지워짐 |
+| `record` | `list <table>` | 행 목록 | `--search`, `--filter`(반복 가능, `"필드=값"`; `__none__`은 빈 셀과 일치), `--sort`, `--desc`, `--limit`(최대 100), `--cursor`, `--detail`(JSON 전용; 이름 대신 필드 ID와 저장된 값을 출력) |
+| | `get/create/update/delete/restore <table> …` | 행 읽기와 쓰기 | `create` / `update`: `--title`, `--set`(반복 가능, `"필드=값"`), `--unset`, `--expect`(셀이 아직 그 값일 때만 기록) |
+| | `trash <table>` | 삭제된 행 목록(30일 동안 복원 가능) | |
+| | `link/unlink <table> <row>` | 행을 태스크나 다른 행에 연결 | `--field`(관계 필드), `--to`(반복 가능; 태스크 키, 또는 행 ID나 정확히 일치하는 제목) |
+| | `backlinks <table> <row>` | 이 행에 연결된 행 목록 | |
 | `project` | `list/get/create/update/delete` | 프로젝트 관리 | |
 | | `status <id> <status>` | 프로젝트 상태 변경 | |
 | | `resource list/add/update/remove` | 프로젝트 추가 리소스 관리 | `--type`, `--url`, `--local-path`, `--daemon-id`, `--execution-mode`(로컬 디렉터리의 `in_place` / `worktree`) |

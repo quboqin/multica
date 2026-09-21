@@ -165,6 +165,8 @@ See [Daemon and runtimes](/daemon-runtimes) for how it works and for custom prof
 | Command | Purpose |
 | --- | --- |
 | `issue` | Create, update, assign, and search issues; manage comments, subscribers, labels, properties, and runs |
+| `document` | Read and write documents: the tree, versioned body saves, and status |
+| `collection`, `record` | Work with tables and their rows: fields, cells, and links to issues |
 | `project` | Manage projects and their resources |
 | `label`, `property` | Manage workspace labels and custom properties |
 | `agent`, `skill`, `squad` | Manage agents, skills, and squads |
@@ -241,7 +243,8 @@ The tables below cover every current top-level command, grouped the way the CLI 
 | | `assign <id>` | Assign or unassign | `--to` (fuzzy name match against members, agents, and squads), `--to-id`, `--unassign`, `--no-start` |
 | | `status <id> <status>` | Change status | `--no-start` |
 | | `reorder <id>` | Move within a column | |
-| | `search <query>` | Search issues | `--limit`, `--include-closed` |
+| | `search <query>` | Search issues | `--limit`, `--include-closed`, `--kind` (`task` or `doc`; every kind when omitted) |
+| | `records <id>` | List the table rows that link to an issue | |
 | | `children <id>` | List sub-issues grouped by stage | |
 | | `pull-requests <id>` | List linked PRs | |
 | | `comment list/add/delete/resolve/unresolve` | Manage comments | `add`: `--content` / `--content-stdin` / `--content-file`, `--parent`, `--attachment`; `list`: `--since`, `--thread`, `--tail` |
@@ -254,6 +257,19 @@ The tables below cover every current top-level command, grouped the way the CLI 
 | | `usage <issue-id>` | View aggregated token usage | |
 | | `rerun <id>` | Re-enqueue a run for the current assignee | |
 | | `cancel-task <task-id>` | Cancel a running or queued run | `--issue` |
+| `document` | `list` | List the document tree (titles and status, no bodies) | `--project` |
+| | `get <document>` | Show a document with its body and revision | `--output markdown` prints the body alone |
+| | `create` | Create a document (always starts as a draft) | `--title` (required), `--content` / `--content-stdin` / `--content-file`, `--parent`, `--project` |
+| | `save <document>` | Save the body against the revision you read | `--expected-revision` (required), `--content` / `--content-stdin` / `--content-file`, `--title`; a stale revision is refused and nothing is written |
+| | `move <document>` | Move within the tree | `--parent` / `--root`, `--before` / `--first` |
+| | `status <document> <status>` | Submit for review, publish, or return to draft (`draft`, `reviewing`, `published`) | `--expected-revision` (required); people only — an agent's task token is refused |
+| `collection` | `list/get/create/update/archive` | Manage tables | `create`: `--name`, `--project`; `update`: `--name`, `--title-name`. Anyone in the workspace can create a table; renaming, archiving and field changes are for its creator and workspace owners/admins. An agent's run acts for the person who owns its runtime and follows the same rule |
+| | `field list/add/update/archive <table>` | Manage a table's fields | `add`: `--name`, `--type` (the nine property types plus `relation`), `--option` (repeatable), `--relation-to` (`issues` or a table; cannot change afterwards); `update`: `--add-option` appends options and keeps the rest, `--option` replaces the whole list and clears any option left out from every row |
+| `record` | `list <table>` | List rows | `--search`, `--filter` (repeatable, `"Field=Value"`; `__none__` matches an empty cell), `--sort`, `--desc`, `--limit` (up to 100), `--cursor`, `--detail` (JSON only; field ids and stored values instead of names) |
+| | `get/create/update/delete/restore <table> …` | Read and write rows | `create` / `update`: `--title`, `--set` (repeatable, `"Field=Value"`), `--unset`, `--expect` (only write while the cell still holds this value) |
+| | `trash <table>` | List deleted rows (restorable for 30 days) | |
+| | `link/unlink <table> <row>` | Link a row to issues or to other rows | `--field` (a relation field), `--to` (repeatable; an issue key, or a row id or exact title) |
+| | `backlinks <table> <row>` | List the rows that link to this row | |
 | `project` | `list/get/create/update/delete` | Manage projects | |
 | | `status <id> <status>` | Change project status | |
 | | `resource list/add/update/remove` | Manage project resources | `--type`, `--url`, `--local-path`, `--daemon-id`, `--execution-mode` (`in_place` / `worktree` for a local directory) |

@@ -165,6 +165,8 @@ multica runtime activity <runtime-id>
 | 命令 | 用途 |
 | --- | --- |
 | `issue` | 创建、更新、分配和搜索任务；管理评论、订阅、标签、属性与执行记录 |
+| `document` | 读写文档：文档树、按版本保存正文、状态 |
+| `collection`、`record` | 操作表格及其中的行：字段、单元格、到任务的关联 |
 | `project` | 管理项目及其资源 |
 | `label`、`property` | 管理工作区标签和自定义属性 |
 | `agent`、`skill`、`squad` | 管理智能体、skill 和小队 |
@@ -233,7 +235,8 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 | | `assign <id>` | 指派或取消指派 | `--to`（名称模糊匹配成员、智能体或小队）、`--to-id`、`--unassign`、`--no-start` |
 | | `status <id> <status>` | 修改状态 | `--no-start` |
 | | `reorder <id>` | 在列内移动 | |
-| | `search <query>` | 搜索任务 | `--limit`、`--include-closed` |
+| | `search <query>` | 搜索任务 | `--limit`、`--include-closed`、`--kind`（`task` 或 `doc`；不传则不限类型） |
+| | `records <id>` | 列出关联到该任务的表格行 | |
 | | `children <id>` | 按阶段分组列出子任务 | |
 | | `pull-requests <id>` | 列出关联的 PR | |
 | | `comment list/add/delete/resolve/unresolve` | 管理评论 | `add`：`--content` / `--content-stdin` / `--content-file`、`--parent`、`--attachment`；`list`：`--since`、`--thread`、`--tail` |
@@ -246,6 +249,19 @@ CLI 配置文件包含可代表你访问 Multica 的令牌。不要提交到仓�
 | | `usage <issue-id>` | 查看聚合 token 用量 | |
 | | `rerun <id>` | 按当前指派重新入队执行 | |
 | | `cancel-task <task-id>` | 取消进行中或排队中的运行 | `--issue` |
+| `document` | `list` | 列出文档树（标题与状态，不含正文） | `--project` |
+| | `get <document>` | 查看文档的正文与版本 | `--output markdown` 只输出正文 |
+| | `create` | 新建文档（总是从草稿开始） | `--title`（必填）、`--content` / `--content-stdin` / `--content-file`、`--parent`、`--project` |
+| | `save <document>` | 按读到的版本保存正文 | `--expected-revision`（必填）、`--content` / `--content-stdin` / `--content-file`、`--title`；版本过期会被拒绝，且不写入任何内容 |
+| | `move <document>` | 在文档树中移动 | `--parent` / `--root`、`--before` / `--first` |
+| | `status <document> <status>` | 提交评审、发布或退回草稿（`draft`、`reviewing`、`published`） | `--expected-revision`（必填）；只有人能执行，智能体的任务令牌会被拒绝 |
+| `collection` | `list/get/create/update/archive` | 管理表格 | `create`：`--name`、`--project`；`update`：`--name`、`--title-name`。工作区里任何人都可以建表；改名、归档和字段变更由表的创建者或工作区 owner / admin 完成。智能体的运行按其运行时主人的身份适用同一规则 |
+| | `field list/add/update/archive <table>` | 管理表格的字段 | `add`：`--name`、`--type`（九类属性类型加 `relation`）、`--option`（可重复）、`--relation-to`（`issues` 或某张表；创建后不可修改）；`update`：`--add-option` 追加选项并保留其余选项，`--option` 整体替换选项列表，漏写的选项会从所有行中清除 |
+| `record` | `list <table>` | 列出行 | `--search`、`--filter`（可重复，`"字段=值"`；`__none__` 匹配空单元格）、`--sort`、`--desc`、`--limit`（最多 100）、`--cursor`、`--detail`（仅 JSON；输出字段 ID 与存储值，而不是名称） |
+| | `get/create/update/delete/restore <table> …` | 读写行 | `create` / `update`：`--title`、`--set`（可重复，`"字段=值"`）、`--unset`、`--expect`（仅当单元格仍是该值时才写入） |
+| | `trash <table>` | 列出已删除的行（30 天内可恢复） | |
+| | `link/unlink <table> <row>` | 把行关联到任务或其他行 | `--field`（关联字段）、`--to`（可重复；任务编号，或行 ID / 完全一致的标题） |
+| | `backlinks <table> <row>` | 列出关联到该行的行 | |
 | `project` | `list/get/create/update/delete` | 管理项目 | |
 | | `status <id> <status>` | 修改项目状态 | |
 | | `resource list/add/update/remove` | 管理项目附加资源 | `--type`、`--url`、`--local-path`、`--daemon-id`、`--execution-mode`（本地目录的 `in_place` / `worktree`） |

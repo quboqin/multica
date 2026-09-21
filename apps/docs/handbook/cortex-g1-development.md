@@ -77,6 +77,40 @@ P1 的段落软锁、版本历史和实时协同编辑也不在本轮。
 - 需要执行迁移并重建后端：`make down && make up`。
 - 验证（2026-09-20，隔离环境）：Go `go build ./...`、`go vet`（handler、fields、migrate、server）、`go test ./internal/handler`（整包）与 `go test ./cmd/migrate` 通过；数据库已应用迁移 515，另在一次性数据库上把 511～515 逐个回滚、再连续执行两遍 up（幂等、回滚后 relation 字段被归档且类型被拒）。新增 `collection_link_test.go` 覆盖：字段定义与不可变目标、AC-8 全流程（关联 → 任务侧反查 → 删任务后 `missing` → 取消关联）、表到表与自关联、回收站 / 归档对正反两个方向的影响、跨工作区 / 文档 / 非 relation 字段 / 不存在的行被拒、普通成员可关联、50 条上限。前端：`@multica/core` 全套 161 个文件 1,964 个用例通过（含 schema 与 `ApiClient` 的畸形响应测试）；`@multica/views` 全套（最后一次改动之后重跑）448 个文件中 445 个、5,329 个用例通过，失败的 5 个用例都在 `issues/surface/`（基线提交上同样失败，与本次无关）。core / views 的 `tsc --noEmit` 与 eslint 无错误。用真实页面组件对真实 API 走通了整条链路（建两个关联字段 201、从格子里关联两个任务和一条客户记录、行详情、转为任务、任务侧「关联记录」点回该行、删除确认框的提示、删除后格子显示「已删除」且可点掉），中英文界面各一遍，无页面错误。**`e2e/cortex-g1.spec.ts` 新增的用例尚未通过 Next 前端执行**，请在本机运行 `make env-exec ARGS='-- pnpm exec playwright test e2e/cortex-g1.spec.ts --workers=1'`。
 
+## 2026-09-21：FR-027 命令行与智能体接口（PRD 5.7）
+
+起因：文档与表格的 HTTP 接口大多已接受智能体的任务令牌，但 `multica` CLI 没有一条表格命令，文档也只能借道 `issue create --kind doc` / `issue update --expected-document-revision`；内置平台技能和运行时 brief 对这两类对象只字未提。智能体只经 CLI 做事，所以这些能力对它等于不存在。需求写进了 PRD 新增的 5.7（`FR-061`～`FR-066`、`AC-28` / `AC-29`、修订八、`Q-U5`），架构手册新增第 11 章。
+
+- **一条线。** 行和页面是工作材料，结构和批准属于人。任务令牌可以读表、建行、逐格写入、改标题、删行 / 恢复、关联 / 取消关联、反查；可以新建文档、按版本保存、移动、评论。建表、改表名 / 归档、增改字段，以及文档的送审 / 发布 / 退回草稿只有人能做——按凭证类型判断，运行时主人是管理员也不放行。**服务端的放行范围没有变**，本次只是把它固定下来并让拒绝说得清楚。**（同日调整：表结构已向智能体放开，本条关于建表 / 改字段的部分不再成立，见下一节。）**
+- **可诊断拒绝。** 两类拒绝从纯文字 403 改为带稳定错误码：`collection_schema_requires_human`（建表、`requireCollectionManager`、建字段）与 `document_transition_requires_human`（`TransitionDocument`）。原因在 CLI：`cli.FormatError` 有意把所有 403 折叠成同一句“无权访问”，命令必须按 `code` 认领才会换成具体的话。响应体多一个 `code` 字段，对 Web / Desktop 无影响。（`collection_schema_requires_human` 已随下一节取消，换成 `collection_schema_forbidden`。）
+- **命令。** `server/cmd/multica/` 新增 `cmd_collection.go`、`cmd_record.go`、`cmd_document.go`：
+  - `collection list|get|create|update|archive`、`collection field list|add|update|archive`；
+  - `record list|get|create|update|delete|restore|trash|link|unlink|backlinks`；
+  - `document list|get|create|save|move|status`；
+  - `issue records <issue>`（任务侧反查）、`issue search --kind task|doc`。
+- **按名称寻址。** 表：ID → 名称 → ID 前缀（名称先于前缀）；字段、选项、成员：名称或 ID，值编码复用任务属性的编码器；行：ID 或**完全一致**的标题，同标题多行时列出 ID 并停止，搜索结果被分页截断时也拒绝按标题匹配；任务：编号。文档只接受编号或完整 ID——ID 前缀要靠任务列表解析，而任务列表不含文档。
+- **输出。** 行的 JSON 默认把单元格放在 `values` 下：键是字段名，值是选项名 / 成员名 / 原始标量；关联格给出能直接回填 `--to` 的标识（`{"issue": "MUL-31", …}`、`{"row": "<id>", …}`，失效的边是 `{"deleted": true, "link_id": …}`）。`--detail` 才输出字段 ID、存储值与边 ID。同一页数据默认形态约为明细的三分之一大小。`document list` 不带正文。
+- **并发语义不放宽。** `document save` 必须带 `--expected-revision`，CLI 不自动补、不重试；409 时回读当前版本再生成提示（冲突响应带整篇正文，超过 CLI 保留的错误体上限，解析不可靠），提示要求“先合并再用新版本保存”。`record update` 先解析完所有参数再开始写；每格一次原子写入，`--expect "字段=值"`（`"字段="` 表示仍为空）变成 `expected_value`；改标题自动带 `title_base`；中途失败时在 stderr 列出已写入的格。关联列的过滤与排序、比较运算符在客户端直接报“尚不支持”，因为服务端会静默退回默认顺序 / 空结果。
+- **一个顺手修掉的坑。** `document move --first` 不能用位置 0：新建 issue 的 `position` 是 `MIN(position) - 1`，即负数，位置 0 会排到最后。CLI 用远小于零的位置表示“最前”，远大于现有值的位置表示“最后”。
+- **让智能体知道。** 内置技能 `multica-platform` 新增 `references/documents.md`、`references/collections.md`，路由表与描述同步（描述 247 / 300 字符）；运行时 brief 的技能提示点名“documents, tables and their rows”。参考只写可观察行为，不含源码路径（有测试）。
+- **文档站。** `apps/docs/content/docs/cli*.mdx` 四种语言的命令总览与参考表补上三组命令、`issue records` 与 `issue search --kind`。
+- **未做（PRD `FR-066`）：** 比较运算过滤、按关联过滤 / 排序、批量写入与 CSV 导入的命令、`mention://collection|record` 在 CLI 输出里的形态；是否允许智能体“送审”见 `Q-U5`（批准记录只有 `actor_id`，任务令牌以运行时主人的身份认证，放行会把智能体的动作记在那个人名下）。
+- 不需要迁移；需要重新编译后端与 CLI：`make down && make up`，`make build`；让运行中的守护进程用上新 CLI：`make daemon`。
+- 验证（2026-09-21，隔离环境）：`go build ./...`、`go vet`（cmd/multica、handler、service、execenv）通过，`gofmt` 无差异；`go test ./internal/handler ./internal/service ./internal/cli ./cmd/multica ./cmd/migrate ./cmd/server` 全部通过。新增测试：`cortex_agent_access_test.go` 两条（表格矩阵、文档矩阵，含“被拒的转换不留批准记录”“人发布后智能体改正文回到 draft”）；`cmd_collection_test.go` / `cmd_record_test.go` / `cmd_document_test.go` 共 35 个测试函数（寻址与歧义、过滤与排序的翻译、逐格写入顺序与 `--expect`、中途失败的提示、关联目标解析、失效边按边 ID 移除、文档树排序、无版本 / 旧版本保存、状态到动作的映射、两种拒绝的提示文案与退出码）；内置技能测试覆盖路由表、描述触发词、两篇参考的契约锚点与“不含源码引用”。`./internal/daemon/execenv` 有 2 个、`./internal/daemon` 有 1 个用例失败（`TestFinalizeKeepsWorktreeWhenCommitFails`、`TestMigrateHermesTaskMemoriesFailureKeepsSource`、`TestValidateLocalPath`）：它们依赖“chmod 后不可读”或“HOME 不是系统根目录”，而隔离环境以 root 运行；撤掉本次改动后同样失败，与本次无关，请在本机用 `make test` 确认。真实走查：用真实的 `multica` 二进制对真实后端执行 60 条命令——先以人的身份建两张表和字段，再以智能体身份（按测试夹具的方式插入运行时、智能体、运行中的 task 与 `mat_` 任务令牌）读表、按名称写格、带 `--expect` 的写入与冲突、关联任务与另一张表的行、任务侧反查、回收站；五种表结构操作被拒（退出码 3，提示说明行仍可写）；文档新建 / 读取 / 按版本保存 / 旧版本保存被拒 / 无版本被拒 / 移动 / 评论 / 按类型搜索，送审被拒，人发布后智能体改正文回到 draft。另外单独验证了：九类字段全部能按名称写入并回读（含带 `=` 和 `,` 的文本），URL / 日期 / 数字的非法值被拒；运行时主人被移出工作区后，同一任务令牌的读请求返回 404。两份 HTML 手册用 Chromium 渲染检查，新增的 Mermaid 图全部渲染、无页面错误；四个 `cli*.mdx` 用 `@mdx-js/mdx` 编译通过。**未执行**：真实智能体运行（需要本机守护进程与模型凭据，步骤见 `LOCAL-MANUAL-TEST.md` 的“命令行与智能体验收”）、`make test` 全量与 race、前端测试（本次没有改前端代码）。
+
+## 2026-09-21：放开智能体管理表结构（PRD 修订九，Q-U3 的 schema 部分）
+
+起因：上一节按基线把建表和改字段留给了人。第一次真实运行，用户让智能体“建一张客户名单”，`multica collection create` 被拒，智能体只能回一句“平台把表结构锁给人类了”。用户决定去掉这条限制。
+
+- **规则。** 表格上不再有按凭证类型的拒绝，任务令牌完全沿用运行时主人的身份：建表对成员与智能体开放，`created_by` 记运行时主人（这个人在界面上继续管理它，`canManage` 的判断没有变）；改表名 / 首列名、归档表、增改 / 归档字段与选项仍是“表的创建者或 owner / admin”，对智能体取其运行时主人——管理员名下的运行可以改任何表，普通成员名下的运行只能改该成员建的表（含他名下的运行替他建的）。云节点 PAT 同理。
+- **没有放开的。** 任务字段定义（`requirePropertyAdmin`）仍拒绝智能体；`actor` 字段仍只引用成员（Q-U3 的另一半）；文档送审 / 发布 / 退回草稿仍只属于人（Q-U5）。
+- **服务端。** `collection.go` 的 `CreateCollection`、`CreateCollectionField` 和 `collection_manage.go` 的 `requireCollectionManager` 去掉 `isMachineCredentialActor` 分支；建字段改为复用 `requireCollectionManager`。非管理者的拒绝从 `requireWorkspaceRole` 的通用 403 换成带稳定错误码的 `collection_schema_forbidden`，对人和智能体相同；`collection_schema_requires_human` 取消。`collection:updated` 的执行者改用 `resolveActor`，智能体的结构变更记在智能体名下；**建表现在也发这条事件**——之前只有界面自己的 mutation 会刷新列表，CLI 或智能体建的表要等客户端下一次重取才出现。
+- **CLI。** `collectionSchemaRequestError` 改为认领新错误码，提示“只有表的创建者或 owner/admin 能改结构、智能体的运行算作运行时主人、行仍可写、可以自建一张表”；帮助文案去掉“仅限人”。新增 `collection field update --add-option`：字段配置接口只收整份选项列表，漏掉的选项会被 `StripCollectionFieldOptions` 从所有行（含回收站）清除，让智能体为了加一个选项去重键整份列表是个坑；`--add-option` 把既有选项按 ID 和颜色原样带回再追加。同名选项、非单选 / 多选字段、与 `--option` 同用，都在发请求之前拒绝。
+- **技能。** `references/collections.md` 的权限表改为“运行 = 运行时主人”，新增“CLI: tables and fields”一节：增加是安全的；`--option` 整体替换且不能改名、多选转单选只保留第一个值、关联目标不可改、归档的表与字段目前回不来——只在任务明说时才移除、转换、归档，并在评论里写明改了什么。路由表与测试锚点同步。
+- **文档。** PRD：5.7 的“一条线”、`FR-064`、新增 `FR-064A`、权限矩阵、时序图、`FR-027`、`US-10`、`AC-26` / `AC-28`、`Q-U3`、修订四的后续说明、新增修订九、§14。架构手册 11.7（矩阵、放开的原因与实现、风险说明）与 11.8。UI 原型文档里两处 Q-U3 的表述、四种语言的 `cli*.mdx`、`LOCAL-MANUAL-TEST.md`（命令行第 8 步；智能体验收改为预期建表 / 加字段 / 加选项成功、提交评审被拒）。
+- 不需要迁移；需要重新编译后端与 CLI：`make down && make up`，`make build`，`make daemon`。
+- 验证（2026-09-21，隔离环境）：`go build ./...`、`go vet`（cmd/multica、handler、service）通过，改动的 Go 文件 `gofmt` 无差异；`go test ./internal/handler ./internal/service ./internal/cli ./cmd/multica ./cmd/migrate ./cmd/server` 全部通过。`cortex_agent_access_test.go` 的表格部分改为三条：智能体以主人身份建表、加字段、改名、改选项、归档字段与表，七次结构变更的事件全部记在智能体名下；主人为普通成员时四种结构操作被拒（`collection_schema_forbidden`）而本人得到同样的错误码、写行与自建表不受影响、成员能在界面侧继续管理智能体替他建的表，主人为 admin 时放行；行与关联的原有断言保留。`cmd_collection_test.go` 新增 `--add-option` 的请求体与四种拒绝。真实走查：用真实的 `multica` 二进制对真实后端，四个身份（owner 本人、owner 的运行、普通成员本人、普通成员的运行）共 34 条命令——早上被拒的 `collection create --name "客户名单"` 成功，`created_by` 等于运行时主人；加单选 / 数字 / 关联字段、改首列名、`--add-option` 后立刻用新选项写行；成员的运行在别人的表上写行成功、五种结构操作被拒（退出码 3）且本人得到同一句话；owner 的运行能改成员建的表；`--option` 漏写选项后该选项的行值确实被清掉（与文档写的代价一致）；送审仍被拒。另用 WebSocket 以 owner 身份连上实时通道，智能体建表后收到 `collection:updated`，执行者为该智能体。两份 HTML 手册与 UI 原型文档用 Chromium 渲染：Mermaid 图全部渲染、无失效锚点、无页面错误；四个 `cli*.mdx` 编译通过。**未执行**：真实智能体运行、`make test` 全量与 race、前端测试（没有改前端代码）。
+
 ## 本地测试环境
 
 - 环境：`multica-703`；独立数据库：`multica_multica_703`。

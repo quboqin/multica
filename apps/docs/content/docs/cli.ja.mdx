@@ -165,6 +165,8 @@ multica runtime activity <runtime-id>
 | コマンド | 用途 |
 | --- | --- |
 | `issue` | タスクの作成、更新、割り当て、検索。コメント、購読者、ラベル、プロパティ、実行履歴の管理 |
+| `document` | ドキュメントの読み書き：ツリー、バージョン付きの本文保存、ステータス |
+| `collection`、`record` | テーブルとその行の操作：フィールド、セル、タスクへのリンク |
 | `project` | プロジェクトとそのリソースを管理 |
 | `label`、`property` | ワークスペースのラベルとカスタムプロパティを管理 |
 | `agent`、`skill`、`squad` | エージェント、スキル、スクワッドを管理 |
@@ -233,7 +235,8 @@ CLI の設定ファイルには、あなたとして Multica にアクセスで�
 | | `assign <id>` | 割り当てまたは割り当て解除 | `--to`（メンバー、エージェント、スクワッドを名前であいまいマッチ）、`--to-id`、`--unassign`、`--no-start` |
 | | `status <id> <status>` | ステータスを変更 | `--no-start` |
 | | `reorder <id>` | カラム内で移動 | |
-| | `search <query>` | タスクを検索 | `--limit`、`--include-closed` |
+| | `search <query>` | タスクを検索 | `--limit`、`--include-closed`、`--kind`（`task` または `doc`；省略時は種類を問わない） |
+| | `records <id>` | このタスクにリンクしているテーブルの行を一覧 | |
 | | `children <id>` | サブタスクをステージごとに一覧 | |
 | | `pull-requests <id>` | 関連付けられた PR を一覧 | |
 | | `comment list/add/delete/resolve/unresolve` | コメントを管理 | `add`: `--content` / `--content-stdin` / `--content-file`、`--parent`、`--attachment`；`list`: `--since`、`--thread`、`--tail` |
@@ -246,6 +249,19 @@ CLI の設定ファイルには、あなたとして Multica にアクセスで�
 | | `usage <issue-id>` | 集計されたトークン使用量を表示 | |
 | | `rerun <id>` | 現在の担当者で実行を再キューイング | |
 | | `cancel-task <task-id>` | 進行中またはキュー中の実行をキャンセル | `--issue` |
+| `document` | `list` | ドキュメントツリーを一覧（タイトルとステータス、本文なし） | `--project` |
+| | `get <document>` | 本文とリビジョンを表示 | `--output markdown` は本文のみを出力 |
+| | `create` | ドキュメントを作成（常に下書きから開始） | `--title`（必須）、`--content` / `--content-stdin` / `--content-file`、`--parent`、`--project` |
+| | `save <document>` | 読み取ったリビジョンに対して本文を保存 | `--expected-revision`（必須）、`--content` / `--content-stdin` / `--content-file`、`--title`；古いリビジョンは拒否され、何も書き込まれない |
+| | `move <document>` | ツリー内で移動 | `--parent` / `--root`、`--before` / `--first` |
+| | `status <document> <status>` | レビューに提出、公開、下書きに戻す（`draft`、`reviewing`、`published`） | `--expected-revision`（必須）；人のみ実行可能で、エージェントのタスクトークンは拒否される |
+| `collection` | `list/get/create/update/archive` | テーブルを管理 | `create`: `--name`、`--project`；`update`: `--name`、`--title-name`。テーブルの作成はワークスペースの誰でも可能；名前変更・アーカイブ・フィールドの変更は作成者またはワークスペースの owner / admin が行う。エージェントの実行は、そのランタイムの所有者として同じルールに従う |
+| | `field list/add/update/archive <table>` | テーブルのフィールドを管理 | `add`: `--name`、`--type`（9 種類のプロパティ型と `relation`）、`--option`（繰り返し可）、`--relation-to`（`issues` またはテーブル；作成後は変更不可）；`update`: `--add-option` は既存のオプションを残して追加、`--option` はリスト全体を置き換え、省かれたオプションはすべての行から消去される |
+| `record` | `list <table>` | 行を一覧 | `--search`、`--filter`（繰り返し可、`"フィールド=値"`；`__none__` は空のセルに一致）、`--sort`、`--desc`、`--limit`（最大 100）、`--cursor`、`--detail`（JSON のみ；名前の代わりにフィールド ID と保存値を出力） |
+| | `get/create/update/delete/restore <table> …` | 行の読み書き | `create` / `update`: `--title`、`--set`（繰り返し可、`"フィールド=値"`）、`--unset`、`--expect`（セルがまだその値のときだけ書き込む） |
+| | `trash <table>` | 削除済みの行を一覧（30 日間は復元可能） | |
+| | `link/unlink <table> <row>` | 行をタスクや他の行にリンク | `--field`（リレーションフィールド）、`--to`（繰り返し可；タスクのキー、または行の ID か完全一致のタイトル） |
+| | `backlinks <table> <row>` | この行にリンクしている行を一覧 | |
 | `project` | `list/get/create/update/delete` | プロジェクトを管理 | |
 | | `status <id> <status>` | プロジェクトのステータスを変更 | |
 | | `resource list/add/update/remove` | プロジェクトの追加リソースを管理 | `--type`、`--url`、`--local-path`、`--daemon-id`、`--execution-mode`（ローカルディレクトリの `in_place` / `worktree`） |

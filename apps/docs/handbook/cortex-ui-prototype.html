@@ -784,7 +784,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 <article class="sync-card"><h3>知识晋升 · 先确认来源完整</h3><span class="sync-pill">映射 S8 / AC-16 / AC-21</span><div class="sync-thread"><strong>候选：迁移回退说明</strong><p>来源：执行记录 → 工具输出<br>完整度：仅保留开头<br>用量：尚未上报</p></div><p id="sync-proof" role="status" aria-live="polite">需要打开完整来源核验。截断输出不能作为完整证据。</p><button type="button" id="sync-inspect">演示：完成来源核验</button><button type="button" id="sync-promote" disabled>入库（演示）</button><p>来源未知也保持可见；“未上报”与“真实为 0”必须区分。本屏按钮仅演示，不调用 API。</p></article>
 </div>
 <h3>与既有九屏配套的实施说明</h3><p>S2 的评论执行块复用 main 的线程展示；S7 的 runner 字段继续必填，并在激活后续阶段前检查业务审批结果；S8 的运行时兼容提示还需列出凭据、授权与连通性结果。界面中的 pending、blocked、部分成功应来自服务端结果，不由前端猜测。</p>
-<p>Q-U1 至 Q-U3 仍待产品决策；Q-U4 已按 PRD 收敛为一期 Web / Desktop、Mobile 单独立项。当前实现的服务端数据由 TanStack Query 持有，Zustand 仅持有客户端偏好；共享视图提案必须保留工作区查询隔离、服务端分页 / 分组 / facet 与 mutation / WebSocket 缓存协调。</p>
+<p>Q-U1、Q-U2 与 Q-U3 的 actor 部分仍待产品决策（Q-U3 的 schema 部分已决：智能体按运行时主人的身份管理表结构，见 PRD 修订九）；Q-U4 已按 PRD 收敛为一期 Web / Desktop、Mobile 单独立项。当前实现的服务端数据由 TanStack Query 持有，Zustand 仅持有客户端偏好；共享视图提案必须保留工作区查询隔离、服务端分页 / 分组 / facet 与 mutation / WebSocket 缓存协调。</p>
 <p><b>执行边界：</b>状态分类只描述生命周期。是否运行还取决于具体状态键、触发来源、调用方权限、执行策略、Triage 与运行时可用性；不能从一个状态颜色或 category 推断已经启动。</p>
 <p>本次源码定位：<a href="https://github.com/quboqin/multica/blob/9e7e529b7fcba26ff4de10b089faa5a368b5a297/server/internal/issuestatus/issuestatus.go#L3">状态契约</a> · <a href="https://github.com/quboqin/multica/blob/9e7e529b7fcba26ff4de10b089faa5a368b5a297/packages/views/layout/app-sidebar.tsx#L147">导航分组</a> · <a href="https://github.com/quboqin/multica/blob/9e7e529b7fcba26ff4de10b089faa5a368b5a297/packages/ui/styles/tokens.css#L91">字号与颜色</a> · <a href="https://github.com/quboqin/multica/blob/9e7e529b7fcba26ff4de10b089faa5a368b5a297/server/internal/service/task_triage_guard.go#L14">Triage 执行门禁</a> · <a href="https://github.com/quboqin/multica/blob/9e7e529b7fcba26ff4de10b089faa5a368b5a297/packages/views/issues/surface/use-issue-surface-controller.ts#L87">Query 与视图数据归属</a>。外链用于核对来源，不是离线阅读依赖。</p>
 </div></section>
@@ -1768,7 +1768,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
       v0.1 的这一屏画错了（有一行放了 agent 头像），已改为成员。
       <br><br><code>member:</code> 前缀提供类型扩展位置，但扩展到私有智能体仍需写入权限、成员可见性和 facet 查询防泄漏校验；并非只放宽前缀。
       而 record 没有 assignee 语义（<span class="fr">D-1</span>），actor 属性是它唯一能表达「谁负责」的手段。
-      <b>collection 是否支持 <code>member / agent / squad</code> 仍见 <span class="fr">Q-U3</span></b>；还需独立定义集合字段管理权限，不能绕过当前 issue 字段管理对智能体的限制。
+      <b>collection 是否支持 <code>member / agent / squad</code> 仍见 <span class="fr">Q-U3</span></b>。集合字段的管理权限已独立定义（PRD 修订九）：表的创建者或 owner / admin，智能体取其运行时主人；issue 字段管理对智能体的限制不受影响。
     </div>
     <div class="note warn">
       <h4>「归档字段」不是「删除字段」</h4>

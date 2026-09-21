@@ -1,12 +1,11 @@
 # 本机手动测试说明
 
-当前本机环境使用以下地址和账号：
+当前本机环境使用以下地址和账号（端口与数据库名来自仓库根目录的 `.env`，以 `make status` 的输出为准）：
 
-- Web：<http://localhost:13974>
-- API：<http://localhost:19054>
+- Web：<http://localhost:13703>
+- API：<http://localhost:18783>
 - 工作区：`dev`
-- 当前提交：`305e81811`
-- 数据库：`multica_multica_974`
+- 数据库：`multica_multica_703`
 - 登录邮箱：`dev@localhost`
 - 验证码：`888888`
 - 密码：无，使用本地验证码登录
@@ -29,7 +28,7 @@ make status
 然后打开：
 
 ```text
-http://localhost:13974
+http://localhost:13703
 ```
 
 登录后确认进入 `dev` 工作区，并确认侧边栏存在：
@@ -43,7 +42,7 @@ http://localhost:13974
 进入：
 
 ```text
-http://localhost:13974/dev/documents
+http://localhost:13703/dev/documents
 ```
 
 ### 正文编辑
@@ -112,7 +111,7 @@ http://localhost:13974/dev/documents
 进入：
 
 ```text
-http://localhost:13974/dev/collections
+http://localhost:13703/dev/collections
 ```
 
 界面对照 `apps/docs/handbook/cortex-ui-prototype.html` 的 S4（表格）、S5（布局）和 S6（行详情）。点击侧栏的 Collections 后，侧栏右侧新增一列表格列表：可按名称搜索，显示记录数，`+` 可以新建表格。这一列只有表格；文档树在 Documents 自己的一列里。
@@ -206,12 +205,77 @@ http://localhost:13974/dev/collections
 
 预期：窗口 B 提示“保存前这一格已被他人修改”，显示当前值，并提供“用我的值覆盖”；不点击时不会覆盖窗口 A 的值。
 
+## 命令行与智能体验收（FR-027）
+
+文档和表格现在可以用 `multica` 命令行操作，智能体走的也是这一套命令。先用你自己的身份走一遍，再让一个真实的智能体做同样的事，看它被允许和被拒绝的地方。
+
+准备：
+
+```bash
+# 在仓库根目录执行
+make build                                  # 生成 server/bin/multica
+export PATH="$PWD/server/bin:$PATH"
+export MULTICA_SERVER_URL="http://localhost:$(grep -E '^PORT=' .env | cut -d= -f2)"   # 本机是 18783；`make status` 的 Backend 一行也会打印
+export MULTICA_TOKEN=<在 Web「设置 → API Token」里新建的 mul_ 令牌>
+multica workspace list --full-id            # 记下 dev 工作区的完整 ID
+export MULTICA_WORKSPACE_ID=<上一步的 ID>
+```
+
+令牌只放在当前终端的环境变量里，不要写进仓库里的任何文件。
+
+### 表格
+
+沿用上一节的“需求池”“客户名单”两张表（表名按你实际建的来）。
+
+1. `multica collection list`，再 `multica collection get 需求池 --output table`：看到每个字段的名称、类型、选项，关联字段写着 `issues` 或 `table 客户名单`。
+2. `multica record create 需求池 --title "命令行建的行" --set "状态=待评估"`（字段名、选项名换成你表里的）。回到浏览器，不刷新也能看到这一行出现。
+3. `multica record list 需求池 --filter "状态=待评估"`，再加 `--output json` 看一眼：单元格在 `values` 下，键是字段名，值是选项名而不是 ID。
+4. `multica record update 需求池 "命令行建的行" --set "状态=已排期" --expect "状态=待评估"` 成功；**原样再执行一次**，这次应当失败。
+5. `multica record link 需求池 "命令行建的行" --field "关联任务" --to <某个任务编号>`，然后 `multica issue records <同一个任务编号>`。
+6. 故意写错：`--set "状态=不存在的选项"`、`--set "关联任务=XXX-1"`、`multica record list 需求池 --filter "关联任务=XXX-1"`。
+7. `multica record delete 需求池 "命令行建的行"` → `multica record trash 需求池` → `multica record restore 需求池 "命令行建的行"`。
+8. 表结构：`multica collection create --name "命令行建的表"`，浏览器不刷新，左侧表格列表里出现这张表；`multica collection field add 命令行建的表 --name 阶段 --type select --option "线索" --option "成交:#22c55e"`；`multica collection field update 命令行建的表 阶段 --add-option "已流失:#ef4444"`；最后 `multica collection get 命令行建的表 --output table`。
+
+预期：
+- 第 4 步第二次执行返回“field changed; reload and retry”，浏览器里的值没有被覆盖。
+- 第 8 步：`阶段` 有三个选项，前两个原样保留。`--add-option` 只追加；`--option` 是整体替换，漏写的选项会从所有行里清掉，两者同时给会直接报错。再执行一次同样的 `--add-option` 会提示该选项已存在、什么都没改。
+- 第 5 步之后，浏览器里那一格出现蓝色任务 chip；`issue records` 列出“需求池 + 行标题”。
+- 第 6 步三条命令都在发请求之前就报错：第一条列出可用选项，第二条提示改用 `record link`，第三条说明关联字段暂不支持过滤。
+
+### 文档
+
+1. `multica document list`：缩进表示层级，不含正文。
+2. `multica document create --title "命令行写的文档" --content "# 第一版"`，记下编号（形如 `XXX-12`）。
+3. `multica document get XXX-12 --output markdown > /tmp/doc.md`，终端里另外打印了 `revision 1`。改一下 `/tmp/doc.md`，然后 `multica document save XXX-12 --expected-revision 1 --content-file /tmp/doc.md --allow-external-file`。
+4. **不改版本号再保存一次**（仍然 `--expected-revision 1`）。
+5. 在浏览器里打开这篇文档改几个字并等“已保存”，再用命令行按旧版本保存。
+6. `multica document move XXX-12 --parent <另一篇文档的编号>`，浏览器里的文档树跟着变；再 `--root --first` 移回顶层第一位。
+7. `multica document status XXX-12 reviewing --expected-revision <当前版本>`，再 `published`。
+8. `multica issue search "第一版" --kind doc`。
+
+预期：
+- 第 4、5 步都被拒绝，提示形如“nothing was written: XXX-12 is at revision 2, and this command named revision 1 …”，并要求先重新读取、合并，再用新版本保存；文档内容不变。
+- 第 7 步：你是工作区 owner / admin 时两步都成功；发布后再用命令行改正文，状态回到 draft。
+- 不带 `--expected-revision` 的 `save` 直接报错，不发请求。
+
+### 让智能体来做（可选，需要本机有可用的智能体运行时）
+
+1. 重启守护进程让它用上新编译的 CLI：`make daemon`。
+2. 新建一个任务指派给智能体，内容类似：“读取表格『需求池』，把标题含『命令行』的那一行的状态改成『已上线』；给『需求池』加一个文本字段『备注』，再给『状态』加一个选项『已搁置』；新建一张表『客户名单（智能体）』，带单选字段『阶段』（线索、成交），写两行；再新建一篇文档，标题『智能体周报』，写三行摘要，并把它提交评审。把每一步的结果写在评论里。”
+3. 等它跑完，看评论、表格和文档树。
+
+预期：
+- 行的状态被改掉、文档建出来了，评论里写明这两件事成功。
+- 表结构也改成了：『需求池』多了『备注』列，『状态』多了『已搁置』且原有选项和各行的值都还在；新表不用刷新就出现在表格列表里，里面有两行。智能体的任务令牌按**运行时主人**的身份判定——运行时是你的，所以新表的创建者是你，你在界面上能继续改它的字段；如果运行时主人既不是某张表的创建者、也不是工作区 owner / admin，改那张表的结构会被拒（“only a table's creator or a workspace owner/admin can change its structure …”），写行不受影响。
+- 提交评审**失败**，智能体在评论里转述了原因（“… approvals signed by a person …”），没有去尝试别的办法；文档的状态没变。
+- 这次运行里的评论作者是智能体；`multica issue runs <任务编号>` 能看到这次运行。
+
 ## Issues 回归验收
 
 进入：
 
 ```text
-http://localhost:13974/dev/issues
+http://localhost:13703/dev/issues
 ```
 
 检查以下功能：
@@ -243,6 +307,10 @@ http://localhost:13974/dev/issues
 [ ] 关联字段：关联任务 / 关联另一张表的记录
 [ ] 转为任务，并从任务回到这一行
 [ ] 删除被关联的任务：删除前提示、表里显示“已删除”
+[ ] 命令行：读表、建行、按名称写格、--expect 冲突、关联与反查、回收站
+[ ] 命令行：文档列表、按版本保存、旧版本保存被拒、移动、评审与发布
+[ ] 命令行：建表、加字段、`--add-option` 追加选项，原有选项保留
+[ ] 智能体：能建表、加字段和选项、写行和文档；提交评审被拒且说明了原因（可选）
 [ ] Calendar 改期并刷新
 [ ] Gallery 配置并刷新
 [ ] Issues Calendar
