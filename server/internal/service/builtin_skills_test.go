@@ -353,6 +353,8 @@ func TestPlatformSkillDescriptionNamesEveryDomain(t *testing.T) {
 	// autopilot", never as "Core model".
 	triggerWords := map[string]string{
 		"references/issues.md":       "issue",
+		"references/documents.md":    "document",
+		"references/collections.md":  "table",
 		"references/mentions.md":     "mention",
 		"references/agents.md":       "agent",
 		"references/squads.md":       "squad",
@@ -425,6 +427,8 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"Do not read them all",
 				// The router's whole job: name every domain and its file.
 				"references/issues.md",
+				"references/documents.md",
+				"references/collections.md",
 				"references/mentions.md",
 				"references/agents.md",
 				"references/squads.md",
@@ -638,6 +642,74 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				// metadata; every other runtime gets a linked worktree.
 				"Linux and Windows Codex",
 				"task-local Git metadata",
+			},
+		},
+		{
+			// Documents and tables reach an agent only through these two
+			// references: the runtime brief names the domains and nothing else
+			// in the payload explains them. What is pinned below is what an
+			// agent gets wrong without being told — the write contracts, the
+			// approval refusal that is policy rather than a missing permission,
+			// and which table changes destroy data.
+			file: "references/documents.md",
+			want: []string{
+				"multica document list --output json",
+				"multica document get <document> --output json",
+				"multica document save <document> --expected-revision <n>",
+				"multica issue search \"<words>\" --kind doc --output json",
+				// The versioned save, and the one thing not to do on a conflict.
+				"When the save is refused, nothing was written",
+				"Merge your change into the body that is there **now**",
+				"Never retry the same body with the new number",
+				// Approval is a person's signature, not a missing role.
+				"approvals are for people",
+				"This is not a permission you are missing",
+				"multica issue comment add <document>",
+				"returns it to `draft`",
+				// Dispatch and mention semantics differ from an issue's.
+				"Assigning a document to an agent does **not** start a run",
+				"never starts a run",
+			},
+			notWant: []string{
+				// There is no such bypass, and an agent told one exists will use it.
+				"--force",
+			},
+		},
+		{
+			file: "references/collections.md",
+			want: []string{
+				"multica collection get <table> --output json",
+				"multica record list <table> --output json",
+				"multica record update <table> <row> --set",
+				"multica record link <table> <row> --field",
+				"multica issue records <issue> --output json",
+				"Rows are **not** issues",
+				// Structure is open to a run with the rights of its runtime's
+				// owner, and the refusal is a rule about the table, not a fault.
+				"A run acts for the person who owns its runtime",
+				"multica collection create --name \"<name>\" --output json",
+				"multica collection field add <table> --name",
+				"only a table's creator or a workspace",
+				"do not look for another route",
+				// The one structure change a run makes most often has a safe
+				// form; the unsafe form is named as such.
+				"--add-option \"Churned:#ef4444\"",
+				"`--option` **replaces** the whole option list",
+				"keeps the **first** value of each cell",
+				"Nothing restores a table yet",
+				"only when the task says to",
+				// Per-cell writes: partial success is real, and the guard exists.
+				"Already written before this failure",
+				"--expect \"Stage=Scheduled\"",
+				"last-writer-wins",
+				// Relations are links, and dead links are kept on purpose.
+				"A relation cell holds links, not a value",
+				"A link survives its target",
+				"Do not clean these up unasked",
+				// Bounded reads apply to tables too.
+				"next_cursor",
+				"Narrow before you page",
+				"notifies and runs nobody",
 			},
 		},
 		{

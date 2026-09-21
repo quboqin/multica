@@ -832,13 +832,14 @@ func writeSkills(b *strings.Builder, ctx TaskContextForEnv) {
 	platformSlug, _ := builtinSlug(skills, platformSkillName)
 	// One recall hint for the platform skill, because it is the only listed
 	// skill whose trigger is "the platform itself" rather than a task the
-	// agent already knows it is doing. Its single description now covers eight
-	// domains that used to advertise one apiece, so an agent reaching for a
-	// Multica contract has one name to guess instead of eight — this line is
+	// agent already knows it is doing. Its single description now covers every
+	// platform domain — eight that used to advertise one apiece, plus documents
+	// and tables, which the brief says nothing else about — so an agent reaching
+	// for a Multica contract has one name to guess instead of many. This line is
 	// what keeps that consolidation from costing recall, and it must therefore
 	// name the skill that actually holds those contracts.
 	if platformSlug != "" {
-		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, mentions, agents, squads, autopilots, projects, runtimes, skill import — load the `" + platformSlug + "` skill and open the reference(s) its routing table names for the domains your task touches.\n\n")
+		b.WriteString("For a Multica platform action this brief does not fully cover — issue and PR contracts, documents, tables and their rows, mentions, agents, squads, autopilots, projects, runtimes, skill import — load the `" + platformSlug + "` skill and open the reference(s) its routing table names for the domains your task touches.\n\n")
 	}
 }
 
