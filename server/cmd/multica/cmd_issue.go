@@ -662,6 +662,7 @@ func init() {
 	// issue search
 	issueSearchCmd.Flags().Int("limit", 20, "Maximum number of results to return")
 	issueSearchCmd.Flags().Bool("include-closed", false, "Include done and cancelled issues")
+	issueSearchCmd.Flags().String("kind", "", "Only this object kind: task or doc (default: every kind)")
 	issueSearchCmd.Flags().String("output", "table", "Output format: table or json")
 
 	// issue subscriber list
@@ -2743,6 +2744,9 @@ func runIssueSearch(cmd *cobra.Command, args []string) error {
 	}
 	if v, _ := cmd.Flags().GetBool("include-closed"); v {
 		params.Set("include_closed", "true")
+	}
+	if v, _ := cmd.Flags().GetString("kind"); v != "" {
+		params.Set("kind", v)
 	}
 
 	path := "/api/issues/search?" + params.Encode()
