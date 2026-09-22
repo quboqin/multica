@@ -265,6 +265,9 @@ WHERE webhook_delivery.workspace_id = $1
 -- before this step; what is left is keyed by the workspace or by one of the
 -- workspace-scoped id sets below.
 WITH
+deleted_document_access AS (DELETE FROM document_access WHERE workspace_id=$1),
+deleted_document_collaborators AS (DELETE FROM document_collaborator WHERE workspace_id=$1),
+deleted_document_versions AS (DELETE FROM document_version WHERE workspace_id=$1),
 ws_agents AS MATERIALIZED (
     SELECT id FROM agent WHERE workspace_id = $1
 ),

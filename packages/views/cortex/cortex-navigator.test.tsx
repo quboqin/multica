@@ -61,6 +61,7 @@ const doc = (id: string, title: string, parent: string | null = null) =>
     id,
     title,
     description: "",
+    document_owner_id: "user-1",
     parent_issue_id: parent,
     project_id: null,
     position: 0,

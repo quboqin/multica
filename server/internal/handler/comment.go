@@ -3305,6 +3305,9 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.checkDocumentResource(w, r, existing.IssueID, existing.WorkspaceID) {
+		return
+	}
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
 		return
@@ -3571,6 +3574,9 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
+		return
+	}
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
 		return
@@ -3965,6 +3971,9 @@ func (h *Handler) loadCommentForActor(w http.ResponseWriter, r *http.Request) (d
 		return db.Comment{}, "", "", "", false
 	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
+		return db.Comment{}, "", "", "", false
+	}
 	return comment, workspaceID, actorType, actorID, true
 }
 

@@ -116,8 +116,7 @@ export const useDocumentPreferences = create<DocumentPreferences>()(
         })),
       toggleCollapsed: (wsId, id) =>
         set((state) => {
-          const current =
-            state.navigator[wsId] ?? defaultNavigatorPreferences;
+          const current = state.navigator[wsId] ?? defaultNavigatorPreferences;
           return {
             navigator: {
               ...state.navigator,
@@ -137,3 +136,23 @@ export const useDocumentPreferences = create<DocumentPreferences>()(
     },
   ),
 );
+
+export type {
+  DocumentAccess,
+  DocumentSharingInput,
+  DocumentVersion,
+} from "./schema";
+export function documentAccessOptions(
+  wsId: string,
+  id: string,
+  enabled = true,
+) {
+  return queryOptions({
+    queryKey: ["documents", wsId, "access", id],
+    queryFn: ({ signal }) =>
+      api.getDocumentAccess(id, { workspaceId: wsId, signal }),
+    enabled: !!wsId && !!id && enabled,
+    retry: false,
+    refetchInterval: 15000,
+  });
+}

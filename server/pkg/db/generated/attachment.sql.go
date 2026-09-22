@@ -487,6 +487,35 @@ func (q *Queries) GetAttachmentByIDOnly(ctx context.Context, id pgtype.UUID) (At
 	return i, err
 }
 
+const getDocumentAttachmentByLocalKey = `-- name: GetDocumentAttachmentByLocalKey :one
+SELECT a.id, a.workspace_id, a.issue_id, a.comment_id, a.uploader_type, a.uploader_id, a.filename, a.url, a.content_type, a.size_bytes, a.created_at, a.chat_session_id, a.chat_message_id, a.task_id, a.source_context_id FROM attachment a LEFT JOIN comment c ON c.id=a.comment_id AND c.workspace_id=a.workspace_id
+JOIN issue i ON (i.id=a.issue_id OR i.id=c.issue_id) AND i.workspace_id=a.workspace_id AND i.kind='doc'
+WHERE split_part(a.url,'/uploads/',2)=$1 LIMIT 1
+`
+
+func (q *Queries) GetDocumentAttachmentByLocalKey(ctx context.Context, url string) (Attachment, error) {
+	row := q.db.QueryRow(ctx, getDocumentAttachmentByLocalKey, url)
+	var i Attachment
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.IssueID,
+		&i.CommentID,
+		&i.UploaderType,
+		&i.UploaderID,
+		&i.Filename,
+		&i.Url,
+		&i.ContentType,
+		&i.SizeBytes,
+		&i.CreatedAt,
+		&i.ChatSessionID,
+		&i.ChatMessageID,
+		&i.TaskID,
+		&i.SourceContextID,
+	)
+	return i, err
+}
+
 const linkAttachmentsToChatMessage = `-- name: LinkAttachmentsToChatMessage :many
 UPDATE attachment
 SET chat_message_id = $1,

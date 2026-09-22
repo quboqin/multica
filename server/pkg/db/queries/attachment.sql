@@ -301,3 +301,8 @@ ORDER BY id;
 DELETE FROM attachment
 WHERE workspace_id = sqlc.arg(workspace_id)
   AND source_context_id IS NOT NULL;
+
+-- name: GetDocumentAttachmentByLocalKey :one
+SELECT a.* FROM attachment a LEFT JOIN comment c ON c.id=a.comment_id AND c.workspace_id=a.workspace_id
+JOIN issue i ON (i.id=a.issue_id OR i.id=c.issue_id) AND i.workspace_id=a.workspace_id AND i.kind='doc'
+WHERE split_part(a.url,'/uploads/',2)=$1 LIMIT 1;

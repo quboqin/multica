@@ -51,6 +51,7 @@ export class TestApiClient {
   private workspaceId: string | null = null;
   private email: string | null = null;
   private createdIssueIds: string[] = [];
+  private createdMemberIds: string[] = [];
   private createdCollectionIds: string[] = [];
   private createdProjectIds: string[] = [];
   private seededIssueIds: string[] = [];
@@ -184,6 +185,11 @@ export class TestApiClient {
     } finally {
       await client.end();
     }
+  }
+
+  async addTestWorkspaceMember(workspaceId: string, userId: string) {
+    const client=new pg.Client(DATABASE_URL);await client.connect();
+    try {const result=await client.query("INSERT INTO member (workspace_id,user_id,role) VALUES($1,$2,'member') RETURNING id",[workspaceId,userId]);this.createdMemberIds.push(result.rows[0].id);} finally {await client.end();}
   }
 
   async createIssue(title: string, opts?: Record<string, unknown>) {
@@ -377,6 +383,8 @@ export class TestApiClient {
       if (!response.ok && response.status !== 404) throw new Error(`Project cleanup failed: ${response.status}`);
     }
     this.createdProjectIds = [];
+    if(this.createdMemberIds.length){const client=new pg.Client(DATABASE_URL);await client.connect();try {await client.query("DELETE FROM member WHERE id=ANY($1::uuid[])",[this.createdMemberIds]);this.createdMemberIds=[];}finally{await client.end();}}
+
   }
 
   getToken() {

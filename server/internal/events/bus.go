@@ -19,6 +19,9 @@ type Event struct {
 	// without re-deserializing Payload. See MUL-1138 phase 1.
 	TaskID        string
 	ChatSessionID string
+	// Non-nil limits content-bearing events to these users. An empty list
+	// deliberately delivers to nobody instead of falling back to the workspace.
+	RecipientUserIDs []string
 }
 
 // Handler is a function that processes an event.
@@ -29,6 +32,15 @@ type Bus struct {
 	mu             sync.RWMutex
 	listeners      map[string][]Handler
 	globalHandlers []Handler
+	policy         func(Event) (Event, bool)
+}
+
+// SetPolicy installs the authorization projection before any consumer sees
+// events, including notifications, plugins and the realtime forwarder.
+func (b *Bus) SetPolicy(policy func(Event) (Event, bool)) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.policy = policy
 }
 
 // New creates a new event bus.
@@ -59,6 +71,16 @@ func (b *Bus) SubscribeAll(h Handler) {
 // Each handler is called synchronously. Panics in individual handlers are
 // recovered so one failing handler does not prevent others from executing.
 func (b *Bus) Publish(e Event) {
+	b.mu.RLock()
+	policy := b.policy
+	b.mu.RUnlock()
+	if policy != nil {
+		var allowed bool
+		e, allowed = policy(e)
+		if !allowed {
+			return
+		}
+	}
 	b.mu.RLock()
 	handlers := b.listeners[e.Type]
 	globals := b.globalHandlers

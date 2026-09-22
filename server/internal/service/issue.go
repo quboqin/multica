@@ -59,23 +59,24 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
-	Kind          string
-	WorkspaceID   pgtype.UUID
-	Title         string
-	Description   pgtype.Text
-	Status        string
-	Priority      string
-	AssigneeType  pgtype.Text
-	AssigneeID    pgtype.UUID
-	CreatorType   string // "agent" or "member"
-	CreatorID     pgtype.UUID
-	ParentIssueID pgtype.UUID
-	ProjectID     pgtype.UUID
-	StartDate     pgtype.Date
-	DueDate       pgtype.Date
-	OriginType    pgtype.Text
-	OriginID      pgtype.UUID
-	AttachmentIDs []pgtype.UUID
+	DocumentOwnerID pgtype.UUID
+	Kind            string
+	WorkspaceID     pgtype.UUID
+	Title           string
+	Description     pgtype.Text
+	Status          string
+	Priority        string
+	AssigneeType    pgtype.Text
+	AssigneeID      pgtype.UUID
+	CreatorType     string // "agent" or "member"
+	CreatorID       pgtype.UUID
+	ParentIssueID   pgtype.UUID
+	ProjectID       pgtype.UUID
+	StartDate       pgtype.Date
+	DueDate         pgtype.Date
+	OriginType      pgtype.Text
+	OriginID        pgtype.UUID
+	AttachmentIDs   []pgtype.UUID
 	// LabelIDs are the issue-scoped labels to attach to the new issue. They
 	// are validated and written inside the create transaction (see Create),
 	// so the issue is never committed with a partial or wrong label set. An
@@ -230,6 +231,11 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
 	if p.Kind == "doc" {
+		if p.DocumentOwnerID.Valid {
+			if err := qtx.SetDocumentOwner(ctx, util.UUIDToString(p.DocumentOwnerID)); err != nil {
+				return IssueCreateResult{}, err
+			}
+		}
 		if err := qtx.LockDocumentTree(ctx, util.UUIDToString(p.WorkspaceID)); err != nil {
 			return IssueCreateResult{}, err
 		}
@@ -303,6 +309,16 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		if err != nil || !parent.ID.Valid || (parent.Kind == "doc") != (p.Kind == "doc") {
 			return IssueCreateResult{}, ErrParentIssueNotFound
 		}
+		if p.Kind == "doc" {
+			owner := p.DocumentOwnerID
+			if !owner.Valid && p.CreatorType == "member" {
+				owner = p.CreatorID
+			}
+			access, err := qtx.GetDocumentAccess(ctx, db.GetDocumentAccessParams{IssueID: parent.ID, WorkspaceID: p.WorkspaceID})
+			if err != nil || !owner.Valid || access.OwnerID != owner {
+				return IssueCreateResult{}, ErrParentIssueNotFound
+			}
+		}
 		// Back-fill project from parent when the caller did not pin
 		// one explicitly. Matches the long-standing HTTP behavior: a
 		// sub-issue inherits its parent's project unless overridden.
@@ -328,7 +344,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{}, err
 	}
 
-	duplicate, found, err := issueguard.LockAndFindActiveDuplicate(ctx, qtx, p.WorkspaceID, projectID, p.ParentIssueID, p.Title, p.AllowDuplicate)
+	duplicate, found, err := issueguard.LockAndFindActiveDuplicate(ctx, qtx, p.WorkspaceID, projectID, p.ParentIssueID, p.Title, p.AllowDuplicate || p.Kind == "doc")
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("duplicate guard: %w", err)
 	}

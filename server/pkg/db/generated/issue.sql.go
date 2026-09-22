@@ -14,7 +14,7 @@ import (
 const childIssueProgress = `-- name: ChildIssueProgress :many
 SELECT parent_issue_id,
        COUNT(*)::bigint AS total,
-       COUNT(*) FILTER (WHERE status = ANY($2::text[]))::bigint AS done
+       COUNT(*) FILTER (WHERE issue.kind = 'task' AND status = ANY($2::text[]))::bigint AS done
 FROM issue
 WHERE workspace_id = $1
   AND parent_issue_id IS NOT NULL
@@ -58,7 +58,7 @@ SELECT
   assignee_id,
   COUNT(*)::bigint as frequency
 FROM issue
-WHERE workspace_id = $1
+WHERE issue.kind = 'task' AND workspace_id = $1
   AND creator_id = $2
   AND creator_type = 'member'
   AND assignee_type IS NOT NULL
@@ -100,7 +100,7 @@ func (q *Queries) CountCreatedIssueAssignees(ctx context.Context, arg CountCreat
 
 const countIssues = `-- name: CountIssues :one
 SELECT count(*) FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   AND ($2::text IS NULL OR i.status = $2)
   AND ($3::text IS NULL OR i.priority = $3)
   AND ($4::uuid IS NULL OR i.assignee_id = $4)
@@ -554,7 +554,7 @@ func (q *Queries) DetachDirectChildIssues(ctx context.Context, arg DetachDirectC
 
 const findActiveDuplicateIssue = `-- name: FindActiveDuplicateIssue :one
 SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, kind, document_revision FROM issue
-WHERE workspace_id = $1
+WHERE issue.kind = 'task' AND workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains active.
   AND NOT (status = ANY($2::text[]))
   -- An entry waiting in Triage has not been taken on, so it never blocks
@@ -623,7 +623,7 @@ func (q *Queries) FindActiveDuplicateIssue(ctx context.Context, arg FindActiveDu
 
 const findRecentAutopilotDuplicateIssue = `-- name: FindRecentAutopilotDuplicateIssue :one
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.kind, i.document_revision FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains active.
   AND NOT (i.status = ANY($3::text[]))
   -- An entry waiting in Triage has not been taken on, so it never blocks
@@ -1137,7 +1137,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
        i.revision, i.kind, i.document_revision
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   AND ($4::text IS NULL OR i.status = $4)
   AND ($5::text IS NULL OR i.priority = $5)
   AND ($6::uuid IS NULL OR i.assignee_id = $6)
@@ -1304,7 +1304,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
        i.revision, i.kind, i.document_revision
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains visible.
   AND NOT (i.status = ANY($2::text[]))
   AND ($3::text IS NULL OR i.priority = $3)

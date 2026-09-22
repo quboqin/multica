@@ -20,7 +20,7 @@ Read the invariants below, then open the reference(s) your task actually needs
 | Open | When the task is about |
 |---|---|
 | `references/issues.md` | Issues: PR linking vs close intent, reading a linked PR's state, custom properties, status side effects, sub-issues and stages, who else is running |
-| `references/documents.md` | Documents (pages): the tree, versioned body saves and their conflicts, why a run cannot submit or publish one |
+| `references/documents.md` | Documents (pages): private ownership, sharing, versioned saves, history and restore |
 | `references/collections.md` | Tables and rows (collections, records): reading a table's fields, writing cells by name, links to issues, creating a table and changing its fields, which changes cannot be undone |
 | `references/mentions.md` | Writing a `mention://` link: which types enqueue a run, which are inert, why one silently did nothing |
 | `references/agents.md` | Creating, copying or debugging an agent definition: fields, secrets, MCP config, skill binding |

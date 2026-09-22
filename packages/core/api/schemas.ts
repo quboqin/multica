@@ -1249,6 +1249,7 @@ export const CommentSubIssueTaskResponseSchema = z.object({
 export const IssueSchema = z.object({
   kind: z.string().catch("task").default("task"),
   document_revision: z.number().int().positive().default(1),
+  document_owner_id: z.string().optional(),
   id: z.string(),
   workspace_id: z.string(),
   number: z.number(),

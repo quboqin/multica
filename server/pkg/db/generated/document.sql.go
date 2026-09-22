@@ -73,58 +73,66 @@ func (q *Queries) DetachProjectCollections(ctx context.Context, arg DetachProjec
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, kind, document_revision FROM issue
-WHERE workspace_id = $1 AND kind = 'doc'
-  AND ($2::uuid IS NULL OR project_id = $2)
-ORDER BY position, created_at, id
+SELECT issue.id, issue.workspace_id, issue.title, issue.description, issue.status, issue.priority, issue.assignee_type, issue.assignee_id, issue.creator_type, issue.creator_id, issue.parent_issue_id, issue.acceptance_criteria, issue.context_refs, issue.position, issue.due_date, issue.created_at, issue.updated_at, issue.number, issue.project_id, issue.origin_type, issue.origin_id, issue.first_executed_at, issue.start_date, issue.metadata, issue.stage, issue.properties, issue.revision, issue.last_activity_at, issue.triage_state, issue.kind, issue.document_revision, sharing.owner_id FROM issue JOIN document_access sharing ON sharing.issue_id=issue.id AND sharing.workspace_id=issue.workspace_id
+WHERE issue.workspace_id = $1 AND issue.kind = 'doc'
+  AND document_can_read(issue.id, $2::uuid)
+  AND ($3::uuid IS NULL OR issue.project_id = $3 OR EXISTS (SELECT 1 FROM document_access d WHERE d.issue_id=issue.id AND d.project_id=$3))
+ORDER BY issue.position, issue.created_at, issue.id
 `
 
 type ListDocumentsParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
 	ProjectID   pgtype.UUID `json:"project_id"`
 }
 
-func (q *Queries) ListDocuments(ctx context.Context, arg ListDocumentsParams) ([]Issue, error) {
-	rows, err := q.db.Query(ctx, listDocuments, arg.WorkspaceID, arg.ProjectID)
+type ListDocumentsRow struct {
+	Issue   Issue       `json:"issue"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListDocuments(ctx context.Context, arg ListDocumentsParams) ([]ListDocumentsRow, error) {
+	rows, err := q.db.Query(ctx, listDocuments, arg.WorkspaceID, arg.UserID, arg.ProjectID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Issue{}
+	items := []ListDocumentsRow{}
 	for rows.Next() {
-		var i Issue
+		var i ListDocumentsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.Title,
-			&i.Description,
-			&i.Status,
-			&i.Priority,
-			&i.AssigneeType,
-			&i.AssigneeID,
-			&i.CreatorType,
-			&i.CreatorID,
-			&i.ParentIssueID,
-			&i.AcceptanceCriteria,
-			&i.ContextRefs,
-			&i.Position,
-			&i.DueDate,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.Number,
-			&i.ProjectID,
-			&i.OriginType,
-			&i.OriginID,
-			&i.FirstExecutedAt,
-			&i.StartDate,
-			&i.Metadata,
-			&i.Stage,
-			&i.Properties,
-			&i.Revision,
-			&i.LastActivityAt,
-			&i.TriageState,
-			&i.Kind,
-			&i.DocumentRevision,
+			&i.Issue.ID,
+			&i.Issue.WorkspaceID,
+			&i.Issue.Title,
+			&i.Issue.Description,
+			&i.Issue.Status,
+			&i.Issue.Priority,
+			&i.Issue.AssigneeType,
+			&i.Issue.AssigneeID,
+			&i.Issue.CreatorType,
+			&i.Issue.CreatorID,
+			&i.Issue.ParentIssueID,
+			&i.Issue.AcceptanceCriteria,
+			&i.Issue.ContextRefs,
+			&i.Issue.Position,
+			&i.Issue.DueDate,
+			&i.Issue.CreatedAt,
+			&i.Issue.UpdatedAt,
+			&i.Issue.Number,
+			&i.Issue.ProjectID,
+			&i.Issue.OriginType,
+			&i.Issue.OriginID,
+			&i.Issue.FirstExecutedAt,
+			&i.Issue.StartDate,
+			&i.Issue.Metadata,
+			&i.Issue.Stage,
+			&i.Issue.Properties,
+			&i.Issue.Revision,
+			&i.Issue.LastActivityAt,
+			&i.Issue.TriageState,
+			&i.Issue.Kind,
+			&i.Issue.DocumentRevision,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}

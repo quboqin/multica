@@ -6,7 +6,6 @@ import {
   ArrowUp,
   FilePlus,
   FileText,
-  History,
   MoreHorizontal,
   Plus,
   Share2,
@@ -14,8 +13,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "@multica/core/api";
-import { useAuthStore } from "@multica/core/auth";
 import {
+  documentAccessOptions,
   documentKeys,
   documentPath,
   documentTreeOptions,
@@ -27,7 +26,8 @@ import {
 } from "@multica/core/issues/queries";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
-import { memberListOptions } from "@multica/core/workspace/queries";
+import { DocumentSharing } from "./document-sharing";
+import { DocumentVersionPreview, useDocumentHistory } from "./document-history";
 import type { Issue } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -37,11 +37,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@multica/ui/components/ui/tooltip";
 import { cn } from "@multica/ui/lib/utils";
 import { ActorAvatar } from "../common/actor-avatar";
 import { DocumentNavigator } from "../cortex";
@@ -122,16 +117,20 @@ function DocumentView({ documentId }: { documentId: string }) {
   const queryClient = useQueryClient();
   const timeAgo = useTimeAgo();
   const { getActorName } = useActorName();
-  const user = useAuthStore((state) => state.user);
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
-  const role = members.find((member) => member.user_id === user?.id)?.role;
   const { data: documents = [] } = useQuery(documentTreeOptions(wsId));
-  const { data: issue } = useQuery(issueDetailOptions(wsId, documentId));
+  const { data: issue, isError: issueError } = useQuery(
+    issueDetailOptions(wsId, documentId),
+  );
+  const { data: access, isError: accessError } = useQuery(
+    documentAccessOptions(wsId, documentId),
+  );
   const { data: timeline = [] } = useQuery(issueTimelineOptions(documentId));
   const actions = useIssueActions(issue ?? null);
   const command = useDocumentCommand(wsId);
   const creator = useCreateDocument(wsId);
   const [tab, setTab] = useState<DocumentRailTab>("outline");
+  const historyOpen = tab === "versions" && access?.can_edit === true;
+  const history = useDocumentHistory(issue, historyOpen);
   const visit = useDocumentPreferences((state) => state.visit);
   const favorites = useDocumentPreferences(
     (state) => state.favorites[wsId] ?? emptyIds,
@@ -160,16 +159,11 @@ function DocumentView({ documentId }: { documentId: string }) {
   ).length;
   const favorite = favorites.includes(documentId);
   const lifecycle = issue ? documentLifecycle(issue) : "draft";
-  const canPublish = role === "owner" || role === "admin";
+  const canManage = access?.can_manage === true;
   const hasDraft = !!draft;
-  const body = draft?.body ?? issue?.description ?? "";
+  const body =
+    (access?.can_edit ? draft?.body : undefined) ?? issue?.description ?? "";
 
-  const transition = (action: "review" | "publish") => {
-    if (!issue) return;
-    command.mutate(() =>
-      api.transitionDocument(issue.id, action, issue.document_revision ?? 1),
-    );
-  };
   const moveUp = () => {
     if (!issue) return;
     const siblings = documents.filter(
@@ -197,42 +191,33 @@ function DocumentView({ documentId }: { documentId: string }) {
       .querySelector("[data-document-discussion]")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
 
-  const lifecycleLabel = t(($) => $.cortex_docs[`status_${lifecycle}`]);
+  const lifecycleLabel =
+    access?.scope === "workspace"
+      ? t(($) => $.cortex_docs.workspace_share)
+      : access?.scope === "project"
+        ? t(($) => $.cortex_docs.project_share)
+        : access?.collaborators.length || (access && !access.can_manage)
+          ? t(($) => $.cortex_docs.only_collaborators)
+          : t(($) => $.cortex_docs.owner_only);
   const primaryAction =
-    lifecycle === "draft" ? (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <span className="inline-flex">
-              <Button
-                size="sm"
-                disabled={command.isPending || hasDraft || !issue}
-                onClick={() => transition("review")}
-              >
-                {t(($) => $.cortex_docs.submit_review)}
-              </Button>
-            </span>
-          }
-        />
-        {hasDraft && (
-          <TooltipContent side="bottom">
-            {t(($) => $.cortex_docs.unsaved_blocks_transition)}
-          </TooltipContent>
-        )}
-      </Tooltip>
-    ) : lifecycle === "reviewing" && canPublish ? (
-      <Button
-        size="sm"
-        disabled={command.isPending || hasDraft || !issue}
-        onClick={() => transition("publish")}
-      >
-        {t(($) => $.cortex_docs.publish)}
-      </Button>
+    access && canManage ? (
+      <DocumentSharing
+        id={documentId}
+        wsId={wsId}
+        access={access}
+        disabled={hasDraft}
+      />
     ) : null;
+  if (issueError || accessError)
+    return (
+      <main className="flex-1 p-8" role="alert">
+        {t(($) => $.cortex_docs.document_unavailable)}
+      </main>
+    );
 
   return (
-    <>
-      <main className="flex min-w-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <nav
             aria-label={t(($) => $.cortex_docs.breadcrumb)}
@@ -287,17 +272,6 @@ function DocumentView({ documentId }: { documentId: string }) {
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
-            onClick={() => setTab("versions")}
-          >
-            <History />
-            <span className="max-2xl:sr-only">
-              {t(($) => $.cortex_docs.versions)}
-            </span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
             onClick={() => void actions.copyLink()}
           >
             <Share2 />
@@ -319,30 +293,37 @@ function DocumentView({ documentId }: { documentId: string }) {
               }
             />
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={() => toggleFavorite(wsId, documentId)}>
+              <DropdownMenuItem
+                onClick={() => toggleFavorite(wsId, documentId)}
+              >
                 <Star className={cn(favorite && "fill-current")} />
                 {t(($) =>
                   favorite ? $.cortex_docs.unfavorite : $.cortex_docs.favorite,
                 )}
               </DropdownMenuItem>
               <DropdownMenuItem
-                disabled={!issue || creator.isPending}
+                disabled={!issue || !canManage || creator.isPending}
                 onClick={() => {
                   if (issue)
-                    void creator.create({ parent: issue }).catch(() => undefined);
+                    void creator
+                      .create({ parent: issue })
+                      .catch(() => undefined);
                 }}
               >
                 <FilePlus />
                 {t(($) => $.cortex_docs.add_child)}
               </DropdownMenuItem>
-              <DropdownMenuItem disabled={!issue} onClick={moveUp}>
+              <DropdownMenuItem
+                disabled={!issue || !canManage}
+                onClick={moveUp}
+              >
                 <ArrowUp />
                 {t(($) => $.cortex_docs.move_up)}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"
-                disabled={!issue}
+                disabled={!issue || !canManage}
                 onClick={() =>
                   actions.openDeleteConfirm({
                     onDeletedFallbackPath: paths.documents(),
@@ -356,77 +337,100 @@ function DocumentView({ documentId }: { documentId: string }) {
           </DropdownMenu>
         </header>
         {(command.error || creator.error) && (
-          <p role="alert" className="border-b px-4 py-2 text-caption text-destructive">
+          <p
+            role="alert"
+            className="border-b px-4 py-2 text-caption text-destructive"
+          >
             {(command.error ?? creator.error)?.message}
           </p>
         )}
-        <IssueDetail
-          issueId={documentId}
-          variant="document"
-          defaultSidebarOpen={false}
-          onDelete={() => {
-            void queryClient.invalidateQueries({
-              queryKey: documentKeys.all(wsId),
-            });
-            navigation.push(paths.documents());
-          }}
-          documentSlots={
-            issue
-              ? {
-                  beforeTitle: (
-                    <div className="mb-3 flex items-center gap-2 text-caption text-muted-foreground">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "size-2 rounded-full",
-                            LIFECYCLE_DOT[lifecycle],
-                          )}
-                        />
-                        {lifecycleLabel}
-                      </span>
-                      <span aria-hidden>·</span>
-                      <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-micro text-brand">
-                        {t(($) => $.cortex_docs.kind_doc)}
-                      </span>
-                    </div>
-                  ),
-                  afterTitle: (
-                    <AuthorLine
-                      issue={issue}
-                      authorName={getActorName(
-                        issue.creator_type,
-                        issue.creator_id,
-                      )}
-                      edited={timeAgo(issue.updated_at)}
-                      childCount={children.length}
-                      referenceCount={incomingCount}
-                      onReferences={() => setTab("backlinks")}
-                    />
-                  ),
-                  afterBody:
-                    children.length > 0 ? (
-                      <ChildPages pages={children} />
-                    ) : undefined,
-                }
-              : undefined
-          }
-        />
+        {historyOpen && issue && (
+          <DocumentVersionPreview
+            issue={issue}
+            history={history}
+            onClose={() => {
+              history.cancelRestore();
+              setTab("outline");
+            }}
+          />
+        )}
+        <div
+          className={cn(
+            "min-h-0 flex-1 flex-col",
+            historyOpen ? "hidden" : "flex",
+          )}
+        >
+          <IssueDetail
+            issueId={documentId}
+            variant="document"
+            defaultSidebarOpen={false}
+            onDelete={() => {
+              void queryClient.invalidateQueries({
+                queryKey: documentKeys.all(wsId),
+              });
+              navigation.push(paths.documents());
+            }}
+            documentSlots={
+              issue
+                ? {
+                    beforeTitle: (
+                      <div className="mb-3 flex items-center gap-2 text-caption text-muted-foreground">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            aria-hidden
+                            className={cn(
+                              "size-2 rounded-full",
+                              LIFECYCLE_DOT[lifecycle],
+                            )}
+                          />
+                          {lifecycleLabel}
+                        </span>
+                        <span aria-hidden>·</span>
+                        <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-micro text-brand">
+                          {t(($) => $.cortex_docs.kind_doc)}
+                        </span>
+                      </div>
+                    ),
+                    afterTitle: (
+                      <AuthorLine
+                        issue={issue}
+                        authorName={getActorName(
+                          issue.creator_type,
+                          issue.creator_id,
+                        )}
+                        edited={timeAgo(issue.updated_at)}
+                        childCount={children.length}
+                        referenceCount={incomingCount}
+                        onReferences={() => setTab("backlinks")}
+                      />
+                    ),
+                    afterBody:
+                      children.length > 0 ? (
+                        <ChildPages pages={children} />
+                      ) : undefined,
+                  }
+                : undefined
+            }
+          />
+        </div>
       </main>
-      {issue && (
+      {issue && access && (
         <DocumentRail
-          issue={issue}
           body={body}
           documents={documents}
           incoming={incoming}
-          lifecycleLabel={lifecycleLabel}
+          canEdit={access.can_edit}
+          history={history}
           commentCount={commentCount}
           tab={tab}
-          onTabChange={setTab}
+          onTabChange={(nextTab) => {
+            history.cancelRestore();
+            setTab(nextTab);
+          }}
           onJumpToComments={scrollToDiscussion}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -461,7 +465,9 @@ function AuthorLine({
       {childCount > 0 && (
         <>
           <span aria-hidden>·</span>
-          <span>{t(($) => $.cortex_docs.child_count, { count: childCount })}</span>
+          <span>
+            {t(($) => $.cortex_docs.child_count, { count: childCount })}
+          </span>
         </>
       )}
       <span aria-hidden>·</span>

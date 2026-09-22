@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  DocumentVersionList,
+  type DocumentHistoryState,
+} from "./document-history";
 import { useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AtSign, FileText, LayoutGrid } from "lucide-react";
@@ -15,7 +19,7 @@ import {
   TabsTrigger,
 } from "@multica/ui/components/ui/tabs";
 import { AppLink } from "../navigation";
-import { useT, useTimeAgo } from "../i18n";
+import { useT } from "../i18n";
 import {
   parseOutline,
   parseReferences,
@@ -26,22 +30,22 @@ import {
 export type DocumentRailTab = "outline" | "backlinks" | "versions" | "comments";
 
 export function DocumentRail({
-  issue,
   body,
   documents,
   incoming,
-  lifecycleLabel,
   commentCount,
   tab,
   onTabChange,
   onJumpToComments,
+  canEdit = false,
+  history,
 }: {
-  issue: Issue;
+  canEdit?: boolean;
+  history: DocumentHistoryState;
   /** The body as the author currently sees it (local draft or saved). */
   body: string;
   documents: readonly Issue[];
   incoming: { doc: Issue; count: number }[];
-  lifecycleLabel: string;
   commentCount: number;
   tab: DocumentRailTab;
   onTabChange: (tab: DocumentRailTab) => void;
@@ -52,7 +56,7 @@ export function DocumentRail({
   return (
     <aside
       aria-label={t(($) => $.cortex_docs.rail)}
-      className="hidden w-[280px] shrink-0 flex-col border-l xl:flex"
+      className="flex max-h-64 w-full shrink-0 flex-col border-t md:max-h-none md:w-[280px] md:border-l md:border-t-0"
     >
       <Tabs
         value={tab}
@@ -75,15 +79,32 @@ export function DocumentRail({
             </RailTrigger>
           </TabsList>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div
+          className={
+            tab === "versions"
+              ? "flex min-h-0 flex-1 flex-col"
+              : "min-h-0 flex-1 overflow-y-auto p-3"
+          }
+        >
           <TabsContent value="outline">
             <Outline body={body} />
           </TabsContent>
           <TabsContent value="backlinks" className="space-y-4">
             <Backlinks body={body} documents={documents} incoming={incoming} />
           </TabsContent>
-          <TabsContent value="versions">
-            <Versions issue={issue} lifecycleLabel={lifecycleLabel} />
+          <TabsContent
+            value="versions"
+            className={
+              tab === "versions" ? "flex min-h-0 flex-1 flex-col" : "hidden"
+            }
+          >
+            {canEdit ? (
+              <DocumentVersionList history={history} />
+            ) : (
+              <p className="p-3 text-caption text-muted-foreground">
+                {t(($) => $.cortex_docs.can_read)}
+              </p>
+            )}
           </TabsContent>
           <TabsContent value="comments" className="space-y-3">
             <p className="text-body">
@@ -211,7 +232,10 @@ function Backlinks({
           <ul className="space-y-2">
             {incoming.map(({ doc, count }) => (
               <li key={doc.id}>
-                <AppLink href={paths.documentDetail(doc.id)} className={cardClass}>
+                <AppLink
+                  href={paths.documentDetail(doc.id)}
+                  className={cardClass}
+                >
                   <span className="flex items-center gap-1.5 text-label font-medium">
                     <FileText className="size-3.5 shrink-0 text-brand" />
                     <span className="truncate">
@@ -245,7 +269,9 @@ function IssueReferenceCard({
   const doc = documents.find((item) => item.id === reference.id);
   return (
     <AppLink
-      href={doc ? paths.documentDetail(doc.id) : paths.issueDetail(reference.id)}
+      href={
+        doc ? paths.documentDetail(doc.id) : paths.issueDetail(reference.id)
+      }
       className={cardClass}
     >
       <span className="flex items-center gap-1.5 text-label font-medium">
@@ -288,43 +314,5 @@ function ViewReferenceCard({ reference }: { reference: DocumentReference }) {
         {t(($) => $.cortex_docs.live_view)}
       </span>
     </AppLink>
-  );
-}
-
-function Versions({
-  issue,
-  lifecycleLabel,
-}: {
-  issue: Issue;
-  lifecycleLabel: string;
-}) {
-  const { t } = useT("issues");
-  const timeAgo = useTimeAgo();
-  const rows: [string, string][] = [
-    [
-      t(($) => $.cortex_docs.version_current),
-      `r${issue.document_revision ?? 1}`,
-    ],
-    [t(($) => $.cortex_docs.version_status), lifecycleLabel],
-    [t(($) => $.cortex_docs.version_edited), timeAgo(issue.updated_at)],
-    [
-      t(($) => $.cortex_docs.version_created),
-      new Date(issue.created_at).toLocaleDateString(),
-    ],
-  ];
-  return (
-    <div className="space-y-3">
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-label">
-        {rows.map(([label, value]) => (
-          <div key={label} className="contents">
-            <dt className="text-muted-foreground">{label}</dt>
-            <dd className="truncate tabular-nums">{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <p className="text-caption text-muted-foreground">
-        {t(($) => $.cortex_docs.version_history_pending)}
-      </p>
-    </div>
   );
 }

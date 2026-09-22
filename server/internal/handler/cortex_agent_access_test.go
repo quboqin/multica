@@ -357,17 +357,13 @@ func TestAgentTokenWritesDocumentsButCannotApproveThem(t *testing.T) {
 		t.Errorf("a refused transition left %d approval records", recorded)
 	}
 
-	// A person approves; an agent's later edit withdraws that approval, because
-	// it covered the text that was there.
-	human := func(action string) *http.Request {
-		return withURLParam(newRequest("POST", "/api/documents/"+doc.ID+"/transition", map[string]any{"action": action, "expected_document_revision": 2}), "id", doc.ID)
-	}
-	testutil.Call(t, testHandler.TransitionDocument, human("review")).Want(200)
-	testutil.Call(t, testHandler.TransitionDocument, human("publish")).Want(200)
+	// The human owner shares explicitly; an agent's later edits stay shared.
+	shareDocument(t, doc.ID, "workspace", "view", nil, nil, 1, 200)
+	wantRefusalCode(t, "sharing", testutil.Call(t, testHandler.UpdateDocumentAccess, on("PUT", "/api/documents/"+doc.ID+"/access", map[string]any{"scope": "workspace", "expected_revision": 2})), "document_transition_requires_human")
 	var edited IssueResponse
 	testutil.Call(t, testHandler.UpdateIssue, on("PUT", "/api/issues/"+doc.ID, map[string]any{"description": "v3, after publication", "expected_document_revision": 2})).Want(200).JSON(&edited)
-	if edited.Status != "draft" || edited.DocumentRevision != 3 {
-		t.Errorf("after an agent edits a published document = %s rev %d, want draft rev 3", edited.Status, edited.DocumentRevision)
+	if edited.Status != "published" || edited.DocumentRevision != 3 {
+		t.Errorf("after an agent edits a published document = %s rev %d, want published rev 3", edited.Status, edited.DocumentRevision)
 	}
 
 	// The refusal body is what the CLI branches on; keep it parseable.

@@ -1,14 +1,14 @@
 # Documents
 
 A document is a page in the workspace's document tree: a title, a Markdown
-body, a place in the tree, and a lifecycle status. Underneath it is an issue of
+body, a place in the tree, and explicit sharing settings. Underneath it is an issue of
 kind `doc`, so it has a key like `MUL-12`, comments, attachments and
 subscribers — but it never runs anyone, and its body is versioned.
 
 - [Core model](#core-model)
 - [CLI](#cli)
 - [Saving is versioned](#saving-is-versioned)
-- [Status is an approval, and approvals are for people](#status-is-an-approval-and-approvals-are-for-people)
+- [Sharing and history](#sharing-and-history)
 - [The tree](#the-tree)
 - [Comments, mentions and search](#comments-mentions-and-search)
 - [Side effects](#side-effects)
@@ -16,14 +16,14 @@ subscribers — but it never runs anyone, and its body is versioned.
 
 ## Core model
 
-| Field | Meaning |
-|---|---|
-| `identifier` | The document's key, e.g. `MUL-12`. Every `<document>` argument takes the key or the full id. |
-| `description` | The body, as Markdown. |
-| `document_revision` | The body's version. Starts at 1 and goes up by one on every body save. |
-| `status` | `draft`, `reviewing` or `published`. A new document is always `draft`. |
-| `parent_issue_id` | The page above it, or null at the top level. |
-| `project_id` | The project whose tree it lives in, or null for the workspace tree. |
+| Field               | Meaning                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| `identifier`        | The document's key, e.g. `MUL-12`. Every `<document>` argument takes the key or the full id. |
+| `description`       | The body, as Markdown.                                                                       |
+| `document_revision` | The body's version. Starts at 1 and goes up by one on every body save.                       |
+| `status`            | `draft` when private to the owner, `published` when shared. There is no review workflow.     |
+| `parent_issue_id`   | The page above it, or null at the top level.                                                 |
+| `project_id`        | The project whose tree it lives in, or null for the workspace tree.                          |
 
 Documents do not appear in `multica issue list`, which lists tasks only. Find
 them with `multica document list` or `multica issue search --kind doc`.
@@ -46,7 +46,10 @@ multica document save <document> --expected-revision <n> --title "<new title>" -
 multica document move <document> --parent <document> --output json
 multica document move <document> --root --first --output json
 multica document move <document> --before <sibling-document> --output json
-multica document status <document> reviewing --expected-revision <n>    # people only — see below
+multica document share <document>                         # current sharing
+multica document versions <document>                      # editors and owner
+multica document version <document> <version>              # historical title and body
+multica document restore <document> <version> --expected-revision <revision>
 ```
 
 `--content`, `--content-stdin` and `--content-file` are mutually exclusive.
@@ -84,38 +87,45 @@ the document instead of guessing.
 A title-only save (`--title` without content) still needs the revision but does
 not raise it.
 
-## Status is an approval, and approvals are for people
+## Sharing and history
 
-`draft → reviewing → published` records that a person submitted a specific
-revision for review and that a workspace owner or admin approved that exact
-text. `multica document status` therefore refuses a run's task token, whatever
-role the person behind the runtime has:
+Documents start private to their creator/owner, including existing documents
+migrated to this model. Workspace administrators have no implicit access to
+someone else's private document. Runs use their runtime owner's access; the
+history still attributes their writes to the agent.
 
-```text
-submitting, publishing and withdrawing a document are approvals signed by a person
-```
-
-This is not a permission you are missing. Do not look for another way to set
-the status — `multica issue status` and `multica issue update --status` refuse
-documents too. When a draft is ready:
+The human document owner manages sharing in Publish or with `document share`.
+A direct collaborator, project audience, or workspace audience can receive
+`view` or `edit`; all new grants default to `view`. Grants are additive, so a
+wider read grant does not remove a collaborator's edit grant. Projects currently
+have the workspace's audience; project sharing is not a private project team.
 
 ```bash
-multica issue comment add <document> --content "Draft is ready for review: <what changed, what to check>"
+multica document share <document> --collaborator <user-uuid>:edit
+multica document share <document> --scope workspace --permission view
+multica document share <document> --scope project --project <project-id> --permission edit
+multica document share <document> --remove-collaborator <user-uuid>
+multica document share <document> --scope private
 ```
 
-Mention a specific member only when the user asked you to bring that person in;
-see `mentions.md` for what a mention does.
+`--scope private` removes the broader audience, preserving direct collaborators.
+Remove their grants too to return to owner-only visibility. Sharing changes
+require the human owner: task tokens cannot grant or revoke access. A mention
+or a document-tree move never grants access.
 
-**Editing the body of a `reviewing` or `published` document returns it to
-`draft`.** The approval covered the text that was there, so changing the text
-withdraws it, and a person has to review again. Before saving over a published
-page, make sure a changed body is what the task wants — fixing a typo in a
-published page un-publishes it. When the task only needs a note attached to the
-page, comment instead.
+Editors can save, comment, inspect history and restore. Readers can read the
+current page and comments. Only the owner moves or deletes a document. Sharing persists through saves and restores. The old `document status` review actions
+are removed; do not try alternate credentials or direct issue status writes.
+
+History records accepted title/body changes. Restore creates a new snapshot
+without deleting later history or changing sharing. For `restore`, pass the
+current **revision** from `document get`; for `save`, continue using
+**document_revision**. A stale restore is rejected. Migrated documents start
+with a baseline of their current content; past edit snapshots are not invented.
 
 ## The tree
 
-`multica document list` prints the whole tree in order, each entry with a
+`multica document list` prints the accessible tree in order, each entry with a
 `depth`. It carries no bodies, so it is safe to run on a large workspace; read a
 body with `document get`.
 
@@ -126,7 +136,7 @@ body with `document get`.
 - `--first` / `--before <sibling>` choose the position; with neither, it lands
   last.
 
-The new parent must be a document of the same project, and never the page
+The new parent must be a document with the same owner and project, and never the page
 itself or one of its descendants. Moving a page moves its whole subtree with
 it. The CLI does not delete documents; people do that in the app, and deleting a
 page does not delete the pages under it — they move to the top level.
@@ -153,21 +163,19 @@ multica issue search "<words>" --output json                # tasks and document
 
 ## Side effects
 
-- `create`, `save` and `move` are immediately visible to everyone in the
-  workspace and refresh open editors.
-- A body save on a `reviewing` or `published` document withdraws its approval
-  and cancels a pending knowledge-base ingestion of the old text.
+- `create`, `save` and `move` refresh editors for authorized readers only.
+- A body save preserves sharing. This sharing model does not queue knowledge-base ingestion.
 - Nothing here starts a run. The only notification a save can send is to a
   member newly mentioned in the body. Comments do what comments do.
 
 ## When something looks wrong
 
-| Symptom | Cause |
-|---|---|
-| `nothing was written: MUL-12 is at revision 6, and this command named revision 4` | Someone saved in between. Re-read, merge, save against 6. |
-| `--expected-revision is required` | A save always names the revision it read. Read the document first. |
-| `MUL-9 is a task, not a document` | The key belongs to a task. Use `multica issue get`. |
-| `parent must be a document in the same project` | Move or create under a page of the same project, or use `--root`. |
-| `a document cannot be moved into its own subtree` | The chosen parent is the page itself or one of its descendants. |
-| The status will not change from a run | Expected: approvals are for people. Comment and ask. |
-| A published page is a draft again | Its body was edited after publication. That is the contract, not a bug. |
+| Symptom                                                                           | Cause                                                                                         |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `nothing was written: MUL-12 is at revision 6, and this command named revision 4` | Someone saved in between. Re-read, merge, save against 6.                                     |
+| `--expected-revision is required`                                                 | A save always names the revision it read. Read the document first.                            |
+| `MUL-9 is a task, not a document`                                                 | The key belongs to a task. Use `multica issue get`.                                           |
+| `parent must be a document in the same project`                                   | Move or create under a page of the same project, or use `--root`.                             |
+| `a document cannot be moved into its own subtree`                                 | The chosen parent is the page itself or one of its descendants.                               |
+| The status will not change from a run                                             | Sharing belongs to the human document owner.                                                  |
+| A document disappears                                                             | Its owner revoked access, the shared project was deleted, or your workspace membership ended. |

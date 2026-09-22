@@ -1910,8 +1910,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/records/{recordID}/backlinks", h.ListCollectionRecordBacklinks)
 				})
 			})
-			// Documents share issue authorization and comments, but have explicit lifecycle commands.
+			// Documents have owner-controlled sharing and immutable version history.
 			r.Get("/api/documents", h.ListDocuments)
+			r.Get("/api/documents/{id}/access", h.GetDocumentAccess)
+			r.Put("/api/documents/{id}/access", h.UpdateDocumentAccess)
+			r.Get("/api/documents/{id}/versions", h.ListDocumentVersions)
+			r.Get("/api/documents/{id}/versions/{version}", h.GetDocumentVersion)
+			r.Post("/api/documents/{id}/versions/{version}/restore", h.RestoreDocumentVersion)
 			r.Post("/api/documents/{id}/move", h.MoveDocument)
 			r.Post("/api/documents/{id}/transition", h.TransitionDocument)
 			// Issues

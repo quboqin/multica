@@ -655,6 +655,40 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project views")
 		return
 	}
+	sharedDocs, err := qtx.ListProjectSharedDocuments(r.Context(), db.ListProjectSharedDocumentsParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID})
+	if err != nil {
+		writeError(w, 500, "failed to read project sharing")
+		return
+	}
+	var previousReaders []pgtype.UUID
+	if len(sharedDocs) > 0 {
+		previousReaders, err = qtx.ListDocumentReaders(r.Context(), db.ListDocumentReadersParams{IssueID: sharedDocs[0].ID, WorkspaceID: project.WorkspaceID})
+		if err != nil {
+			writeError(w, 500, "failed to read project audience")
+			return
+		}
+	}
+	if err := qtx.RevokeDeletedProjectDocumentShares(r.Context(), db.RevokeDeletedProjectDocumentSharesParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, 500, "failed to revoke project document sharing")
+		return
+	}
+	for _, doc := range sharedDocs {
+		people, err := qtx.ListDocumentCollaborators(r.Context(), db.ListDocumentCollaboratorsParams{IssueID: doc.ID, WorkspaceID: doc.WorkspaceID})
+		if err != nil {
+			writeError(w, 500, "failed to read remaining collaborators")
+			return
+		}
+		if len(people) == 0 {
+			if err = qtx.AuthorizeDocumentTransition(r.Context(), uuidToString(doc.ID)); err != nil {
+				writeError(w, 500, "failed to authorize document withdrawal")
+				return
+			}
+			if _, err = qtx.TransitionDocument(r.Context(), db.TransitionDocumentParams{ID: doc.ID, WorkspaceID: doc.WorkspaceID, Status: "draft"}); err != nil {
+				writeError(w, 500, "failed to withdraw project document")
+				return
+			}
+		}
+	}
 	if err := qtx.DetachProjectCollections(r.Context(), db.DetachProjectCollectionsParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
 		writeError(w, 500, "failed to detach project collections")
 		return
@@ -669,6 +703,9 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit project delete")
 		return
+	}
+	for _, doc := range sharedDocs {
+		h.publishDocumentAccessChanged(doc, previousReaders, "member", userID)
 	}
 	h.publish(protocol.EventProjectDeleted, workspaceID, "member", userID, map[string]any{"project_id": uuidToString(project.ID)})
 	w.WriteHeader(http.StatusNoContent)

@@ -189,6 +189,7 @@ export interface Issue {
   assignee_id: string | null;
   creator_type: IssueAssigneeType;
   creator_id: string;
+  document_owner_id?: string;
   parent_issue_id: string | null;
   project_id: string | null;
   position: number;

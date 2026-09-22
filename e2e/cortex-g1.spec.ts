@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { createTestApi, loginAsDefault } from "./helpers";
-import type { TestApiClient } from "./fixtures";
+import { TestApiClient } from "./fixtures";
 
 test.describe("Cortex G1 P0", () => {
   test.describe.configure({ timeout: 120000 });
@@ -14,9 +14,39 @@ test.describe("Cortex G1 P0", () => {
     await api.cleanup();
   });
 
-  test("document body saves, conflicts preserve a draft, review and publication persist", async ({
+  test("named collaborators move from no access to reading, editing, then revoked",async({page,browser})=>{
+    const doc=await api.createIssue(`Private document ${Date.now()}`,{kind:"doc",description:"Private paragraph"});
+    const reader=new TestApiClient();const identity=await reader.login(`doc-reader-${Date.now()}@multica.ai`,"Document Reader");
+    await api.addTestWorkspaceMember(doc.workspace_id,identity.user.id);
+    reader.setWorkspaceId(doc.workspace_id);reader.setWorkspaceSlug(slug);await reader.markUserOnboarded();
+    const ctx=await browser.newContext();
+    try {
+      await ctx.addInitScript(token=>{localStorage.setItem("multica_token",token!);localStorage.setItem("multica:chat:isOpen","false")},reader.getToken());
+      const viewer=await ctx.newPage();await viewer.goto(`/${slug}/documents/${doc.id}`);
+      await expect(viewer.getByText("This document is unavailable or you no longer have access.")).toBeVisible();
+      expect((await reader.cortexRequest(`/api/issues/${doc.id}`)).status).toBe(404);
+      await page.goto(`/${slug}/documents/${doc.id}`);await page.getByRole("button",{name:"Publish",exact:true}).click();
+      const sharing=page.getByRole("dialog",{name:"Share document"});await sharing.getByRole("button",{name:/Document Reader/}).click();
+      await expect(sharing.getByRole("combobox",{name:"Permission"})).toContainText("Can read");
+      await page.screenshot({path:"test-results/document-sharing.png",fullPage:true});
+      await sharing.getByRole("button",{name:"Save sharing"}).click();await expect(sharing).toHaveCount(0);
+      await viewer.reload();await expect(viewer.locator("[data-document-body]")).toContainText("Private paragraph");
+      await expect(viewer.locator('[data-document-body] [contenteditable="true"]')).toHaveCount(0);
+      await expect(viewer.getByRole("button",{name:"Publish",exact:true})).toHaveCount(0);
+      expect((await reader.cortexRequest(`/api/issues/${doc.id}`,"PUT",{title:"Forbidden"})).status).toBe(403);
+      expect((await api.cortexRequest(`/api/documents/${doc.id}/access`,"PUT",{scope:"private",scope_role:"view",expected_revision:2,collaborators:[{user_id:identity.user.id,role:"edit"}]})).status).toBe(200);
+      const editor=viewer.locator('[data-document-body] [contenteditable="true"]');await expect(editor).toBeVisible();
+      const saved=viewer.waitForResponse(r=>r.request().method()==="PUT"&&r.url().endsWith(`/api/issues/${doc.id}`));
+      await editor.fill("Collaborator saved this");await editor.press("Tab");expect((await saved).status()).toBe(200);
+      expect((await api.cortexRequest(`/api/documents/${doc.id}/access`,"PUT",{scope:"private",scope_role:"view",expected_revision:3,collaborators:[]})).status).toBe(200);
+      await expect(viewer.getByText("This document is unavailable or you no longer have access.")).toBeVisible();
+    } finally {await ctx.close();await reader.cleanup();}
+  });
+
+  test("document sharing and history preserve access and concurrent drafts", async ({
     page,
   }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
     const doc = await api.createIssue(`G1 document ${Date.now()}`, {
       kind: "doc",
       description: "Original paragraph",
@@ -43,24 +73,43 @@ test.describe("Cortex G1 P0", () => {
     expect(current.document_revision).toBe(2);
     await page.reload();
     await expect(editor).toContainText("Saved in the browser");
-    await page
-      .getByRole("button", { name: "Submit for review", exact: true })
-      .click();
-    await expect(
-      page.getByRole("button", { name: "Publish", exact: true }),
-    ).toBeEnabled();
-    await page.getByRole("button", { name: "Publish", exact: true }).click();
-    // The top bar's contextual action disappears once the doc is published,
-    // and the status chip / meta line switch to the published label.
-    await expect(
-      page.getByRole("button", { name: "Publish", exact: true }),
-    ).toHaveCount(0);
-    await expect(
-      page.getByText("Published", { exact: true }).first(),
-    ).toBeVisible();
-    expect((await api.cortexRequest(`/api/issues/${doc.id}`)).body.status).toBe(
-      "published",
-    );
+    await expect(page.getByRole("button",{name:"Submit for review",exact:true})).toHaveCount(0);
+    await page.getByRole("button",{name:"Publish",exact:true}).click();
+    const sharing=page.getByRole("dialog",{name:"Share document"});
+    await sharing.getByRole("combobox",{name:"Share with"}).click();
+    await page.getByRole("option",{name:"Workspace",exact:true}).click();
+    await expect(sharing.getByRole("combobox",{name:"Permission"})).toContainText("Can read");
+    await sharing.getByRole("button",{name:"Save sharing"}).click();
+    await expect(sharing).toHaveCount(0);
+    const access=await api.cortexRequest(`/api/documents/${doc.id}/access`);
+    expect(access.body).toMatchObject({scope:"workspace",scope_role:"view"});
+    await expect(page.getByRole("button", { name: "Versions", exact: true })).toHaveCount(0);
+    await page.getByRole("tab", { name: "Versions", exact: true }).click();
+    const versions = page.getByRole("tabpanel", { name: "Versions", exact: true });
+    const history = page.getByRole("region", { name: "Version preview", exact: true });
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await versions.getByRole("button", { name: /^v1 ·/ }).click();
+    await expect(history.getByText("Original paragraph", { exact: true })).toBeVisible();
+    await versions.getByRole("switch", { name: "Compare with current" }).click();
+    await expect(history.getByText("Saved in the browser", { exact: true })).toBeVisible();
+    await expect(history.getByText("Current saved version", { exact: true })).toBeVisible();
+    await page.screenshot({ path: "test-results/document-history-inline.png", fullPage: true });
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await expect(versions.getByRole("switch", { name: "Compare with current" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: "test-results/document-history-narrow.png", fullPage: true });
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await versions.getByRole("button", { name: /^v2 ·/ }).click();
+    await expect(history.getByText("Original paragraph", { exact: true })).toHaveCount(0);
+    await versions.getByRole("button", { name: /^v1 ·/ }).click();
+    await versions.getByRole("switch", { name: "Compare with current" }).click();
+    await expect(history.getByText("Current saved version", { exact: true })).toHaveCount(0);
+    await history.getByRole("button", { name: "Restore this version" }).click();
+    await history.getByRole("button", { name: "Confirm restore" }).click();
+    await expect(versions.getByRole("button", { name: /^v3 ·/ })).toBeVisible();
+    await history.getByRole("button", { name: "Back to document" }).click();
+    await expect(editor).toContainText("Original paragraph");
+    expect((await api.cortexRequest(`/api/issues/${doc.id}`)).body.status).toBe("published");
     const legacy = await api.cortexRequest(`/api/issues/${doc.id}`, "PUT", {
       description: "unversioned overwrite",
     });
@@ -86,6 +135,11 @@ test.describe("Cortex G1 P0", () => {
       page.getByRole("textbox", { name: "Your draft — edit to merge" }),
     ).toHaveValue("My draft must survive");
     await page.reload();
+    await expect(editor).toContainText("My draft must survive");
+    await page.getByRole("tab", { name: "Versions", exact: true }).click();
+    await versions.getByRole("button", { name: /^v1 ·/ }).click();
+    await expect(history.getByRole("button", { name: "Restore this version" })).toBeDisabled();
+    await history.getByRole("button", { name: "Back to document" }).click();
     await expect(editor).toContainText("My draft must survive");
   });
 

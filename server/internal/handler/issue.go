@@ -35,6 +35,7 @@ import (
 
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
+	DocumentOwnerID  string  `json:"document_owner_id,omitempty"`
 	Kind             string  `json:"kind"`
 	DocumentRevision int64   `json:"document_revision"`
 	ID               string  `json:"id"`
@@ -1023,10 +1024,12 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 		// Filter before ranking and pagination, never after LIMIT.
 		sqlQuery = strings.Replace(sqlQuery, "i.workspace_id = $4", "i.workspace_id = $4 AND i.kind = '"+kind+"'", 1)
 	}
+	args = append(args, parseUUID(requestUserID(r)))
+	sqlQuery = strings.Replace(sqlQuery, "i.workspace_id = $4", fmt.Sprintf("i.workspace_id = $4 AND (i.kind <> 'doc' OR document_can_read(i.id,$%d::uuid))", len(args)), 1)
 	// Fill placeholder args: $4 = workspace_id, last two = limit, offset
 	args[3] = wsUUID
-	args[len(args)-2] = limit
-	args[len(args)-1] = offset
+	args[len(args)-3] = limit
+	args[len(args)-2] = offset
 
 	var results []searchResult
 	err := runSearchQuery(ctx, h.TxStarter, sqlQuery, args, func(rows pgx.Rows) error {
@@ -2379,6 +2382,7 @@ func (h *Handler) ListChildIssues(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list child issues")
 		return
 	}
+	children = h.readableDocuments(r, children)
 	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
 	ids := make([]pgtype.UUID, len(children))
 	for i, child := range children {
@@ -2465,6 +2469,7 @@ func (h *Handler) ListChildrenByParents(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "failed to list child issues")
 		return
 	}
+	children = h.readableDocuments(r, children)
 	prefix := h.getIssuePrefix(r.Context(), wsUUID)
 	ids := make([]pgtype.UUID, len(children))
 	for i, child := range children {
@@ -3138,26 +3143,27 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
-		Kind:           req.Kind,
-		WorkspaceID:    wsUUID,
-		Title:          req.Title,
-		Description:    ptrToText(req.Description),
-		Status:         status,
-		Priority:       priority,
-		AssigneeType:   assigneeType,
-		AssigneeID:     assigneeID,
-		CreatorType:    creatorType,
-		CreatorID:      parseUUID(actualCreatorID),
-		ParentIssueID:  parentIssueID,
-		ProjectID:      projectID,
-		StartDate:      startDate,
-		DueDate:        dueDate,
-		OriginType:     originType,
-		OriginID:       originID,
-		Stage:          ptrToInt4(req.Stage),
-		AttachmentIDs:  attachmentIDs,
-		LabelIDs:       labelIDs,
-		AllowDuplicate: req.AllowDuplicate,
+		Kind:            req.Kind,
+		DocumentOwnerID: parseUUID(creatorID),
+		WorkspaceID:     wsUUID,
+		Title:           req.Title,
+		Description:     ptrToText(req.Description),
+		Status:          status,
+		Priority:        priority,
+		AssigneeType:    assigneeType,
+		AssigneeID:      assigneeID,
+		CreatorType:     creatorType,
+		CreatorID:       parseUUID(actualCreatorID),
+		ParentIssueID:   parentIssueID,
+		ProjectID:       projectID,
+		StartDate:       startDate,
+		DueDate:         dueDate,
+		OriginType:      originType,
+		OriginID:        originID,
+		Stage:           ptrToInt4(req.Stage),
+		AttachmentIDs:   attachmentIDs,
+		LabelIDs:        labelIDs,
+		AllowDuplicate:  req.AllowDuplicate,
 	}, service.IssueCreateOpts{
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
@@ -3366,9 +3372,6 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 	// This path opens its own transaction, so it carries the archive-race guard
 	// itself rather than going through runWithIssueStatusGuard. The catalog lock
 	// must precede both attachment and issue row locks everywhere. (MUL-6243)
-	if documentRevision != nil {
-		statusKey = "draft"
-	}
 	if err := assertIssueStatusStillActive(ctx, qtx, workspaceID, statusKey); err != nil {
 		return db.Issue{}, db.Issue{}, false, err
 	}
@@ -3388,6 +3391,18 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 		return db.Issue{}, db.Issue{}, false, fmt.Errorf("lock issue for update: %w", err)
 	}
 
+	if current.Kind == "doc" {
+		if actor, ok := ctx.Value(documentActorKey{}).(documentActor); ok {
+			permission := h.documentPermission(ctx, qtx, current, actor.UserID)
+			if permission != "owner" && permission != "edit" {
+				return db.Issue{}, current, false, errDocumentAccessRevoked
+			}
+			if err := qtx.SetDocumentAuditActor(ctx, db.SetDocumentAuditActorParams{ActorType: actor.Type, ActorID: actor.ID, Action: "edit"}); err != nil {
+				return db.Issue{}, current, false, err
+			}
+		}
+	}
+
 	if current.Kind == "doc" && params.Description.Valid {
 		if documentRevision == nil || *documentRevision != current.DocumentRevision {
 			return db.Issue{}, current, false, errDocumentConflict
@@ -3395,17 +3410,9 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 		if err := qtx.AuthorizeDocumentWrite(ctx, uuidToString(current.ID)+":"+strconv.FormatInt(current.DocumentRevision, 10)); err != nil {
 			return db.Issue{}, current, false, err
 		}
-		if params.Description.String != current.Description.String && current.Status != "draft" {
-			if err := qtx.AuthorizeDocumentTransition(ctx, uuidToString(current.ID)); err != nil {
-				return db.Issue{}, current, false, err
-			}
-			params.Status = pgtype.Text{String: "draft", Valid: true}
-			if err := qtx.CancelDocumentIngestion(ctx, db.CancelDocumentIngestionParams{WorkspaceID: current.WorkspaceID, IssueID: current.ID}); err != nil {
-				return db.Issue{}, current, false, err
-			}
-		}
 
 	}
+
 	if params.Title.Valid && titleBase != nil && current.Title != *titleBase && current.Title != params.Title.String {
 		return db.Issue{}, current, false, errIssueFieldConflict
 	}
@@ -3484,6 +3491,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	r = h.documentActorRequest(r, uuidToString(prevIssue.WorkspaceID))
 	userID := requestUserID(r)
 	workspaceID := uuidToString(prevIssue.WorkspaceID)
 
@@ -3509,7 +3517,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			writeDocumentConflict(w, prevIssue, "document_version_required")
 			return
 		}
-		for _, field := range []string{"status", "parent_issue_id", "position", "project_id"} {
+		for _, field := range []string{"status", "parent_issue_id", "position", "project_id", "creator_id", "creator_type"} {
 			if _, touched := rawFields[field]; touched {
 				writeError(w, 400, "use document transition or move for "+field)
 				return
@@ -3717,7 +3725,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 
 	var issue db.Issue
 	attachmentsChanged := false
-	if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
+	if prevIssue.Kind == "doc" || req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
 		var lockedPrev db.Issue
 		issue, lockedPrev, attachmentsChanged, err = h.updateIssueAtomically(
 			r.Context(), prevIssue.WorkspaceID, params, rawFields, req.TitleBase, req.DescriptionBase, attachmentIDs, statusKeyForGuard, req.ExpectedDocumentRevision,
@@ -3734,6 +3742,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if writeIssueStatusRaceError(w, err) {
+			return
+		}
+		if errors.Is(err, errDocumentAccessRevoked) {
+			writeError(w, 403, err.Error())
 			return
 		}
 		if errors.Is(err, errDocumentConflict) {
@@ -4065,6 +4077,9 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if issue.Kind == "doc" && !h.requireDocumentOwner(w, r, issue) {
+		return
+	}
 
 	h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 	// Fail any linked autopilot runs before delete (ON DELETE SET NULL clears issue_id).
@@ -4178,6 +4193,15 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 			}
 		} else if !errors.Is(contextErr, pgx.ErrNoRows) {
 			return issueDeleteResult{}, fmt.Errorf("load issue source context for delete: %w", contextErr)
+		}
+		if err := qtx.ClearDocumentCollaborators(ctx, db.ClearDocumentCollaboratorsParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID}); err != nil {
+			return issueDeleteResult{}, err
+		}
+		if err := qtx.DeleteDocumentVersions(ctx, db.DeleteDocumentVersionsParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID}); err != nil {
+			return issueDeleteResult{}, err
+		}
+		if err := qtx.DeleteDocumentAccess(ctx, db.DeleteDocumentAccessParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID}); err != nil {
+			return issueDeleteResult{}, err
 		}
 		if err := qtx.DeleteDocumentPublications(ctx, db.DeleteDocumentPublicationsParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID}); err != nil {
 			return issueDeleteResult{}, err
@@ -4642,6 +4666,10 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		if issue.Kind == "doc" && h.documentPermission(r.Context(), h.Queries, issue, userID) != "owner" {
+			writeError(w, 403, "only document owners can delete documents")
+			return
+		}
 		seenIssueIDs[issueUUID] = struct{}{}
 		issues = append(issues, issue)
 		excludedIDs = append(excludedIDs, issue.ID)

@@ -6,7 +6,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -40,6 +39,9 @@ func createTestDocument(t *testing.T, parent string) IssueResponse {
 	testutil.Call(t, testHandler.CreateIssue, newRequest("POST", "/api/issues", req)).Want(201).JSON(&doc)
 	dbfx.Cleanup(t, "DELETE FROM issue WHERE id=$1", doc.ID)
 	dbfx.Cleanup(t, "DELETE FROM document_publication WHERE issue_id=$1", doc.ID)
+	dbfx.Cleanup(t, "DELETE FROM document_access WHERE issue_id=$1", doc.ID)
+	dbfx.Cleanup(t, "DELETE FROM document_collaborator WHERE issue_id=$1", doc.ID)
+	dbfx.Cleanup(t, "DELETE FROM document_version WHERE issue_id=$1", doc.ID)
 	if doc.Kind != "doc" || doc.DocumentRevision != 1 || doc.Status != "draft" {
 		t.Fatalf("document defaults: %+v", doc)
 	}
@@ -121,27 +123,15 @@ func TestDocumentTreeMovesWholeSubtreeAndRejectsCycles(t *testing.T) {
 	}
 
 }
-func TestDocumentAuthorizedVersionedPublication(t *testing.T) {
+func TestDocumentExplicitSharingReplacesApproval(t *testing.T) {
 	doc := createTestDocument(t, "")
-	transition := func(action string, status int) *http.Request {
-		return withURLParam(newRequest("POST", "/api/documents/"+doc.ID+"/transition", map[string]any{"action": action, "expected_document_revision": 1}), "id", doc.ID)
-	}
-	testutil.Call(t, testHandler.TransitionDocument, transition("publish", 409)).Want(409)
-	testutil.Call(t, testHandler.TransitionDocument, transition("review", 200)).Want(200)
-	machine := transition("publish", 403)
-	machine.Header.Set("X-Actor-Source", "task_token")
-	testutil.Call(t, testHandler.TransitionDocument, machine).Want(403)
+	testutil.Call(t, testHandler.TransitionDocument, withURLParam(newRequest("POST", "/api/documents/"+doc.ID+"/transition", map[string]any{"action": "review"}), "id", doc.ID)).Want(400)
 	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest("PUT", "/api/issues/"+doc.ID, map[string]any{"status": "published"}), "id", doc.ID)).Want(400)
-	testutil.Call(t, testHandler.TransitionDocument, transition("publish", 200)).Want(200)
-	var count int
-	dbfx.QueryRow(t, "SELECT count(*) FROM document_publication WHERE issue_id=$1 AND document_revision=1 AND actor_id=$2 AND action='publish' AND ingestion_state='pending'", doc.ID, testUserID).Scan(&count)
-	if count != 1 {
-		t.Fatalf("publication audit/outbox count=%d", count)
-	}
+	shareDocument(t, doc.ID, "workspace", "view", nil, nil, 1, 200)
 	var updated IssueResponse
-	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest("PUT", "/api/issues/"+doc.ID, map[string]any{"description": "New revision after approval", "expected_document_revision": 1}), "id", doc.ID)).Want(200).JSON(&updated)
-	if updated.Status != "draft" || updated.DocumentRevision != 2 {
-		t.Fatalf("editing approved content did not invalidate approval: %+v", updated)
+	testutil.Call(t, testHandler.UpdateIssue, withURLParam(newRequest("PUT", "/api/issues/"+doc.ID, map[string]any{"description": "Still shared", "expected_document_revision": 1}), "id", doc.ID)).Want(200).JSON(&updated)
+	if updated.Status != "published" || updated.DocumentRevision != 2 {
+		t.Fatalf("edit changed publication: %+v", updated)
 	}
 }
 

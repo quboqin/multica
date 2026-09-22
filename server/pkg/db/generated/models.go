@@ -674,6 +674,24 @@ type DingtalkGroupRoute struct {
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
+type DocumentAccess struct {
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
+	Scope       string             `json:"scope"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	ScopeRole   string             `json:"scope_role"`
+	Revision    int64              `json:"revision"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DocumentCollaborator struct {
+	IssueID     pgtype.UUID `json:"issue_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	Role        string      `json:"role"`
+}
+
 type DocumentPublication struct {
 	IssueID          pgtype.UUID        `json:"issue_id"`
 	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
@@ -683,6 +701,19 @@ type DocumentPublication struct {
 	Body             string             `json:"body"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	IngestionState   string             `json:"ingestion_state"`
+}
+
+type DocumentVersion struct {
+	IssueID      pgtype.UUID        `json:"issue_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	Version      int64              `json:"version"`
+	Title        string             `json:"title"`
+	Body         string             `json:"body"`
+	ActorType    string             `json:"actor_type"`
+	ActorID      pgtype.UUID        `json:"actor_id"`
+	Action       string             `json:"action"`
+	RestoredFrom pgtype.Int8        `json:"restored_from"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 }
 
 type Feedback struct {

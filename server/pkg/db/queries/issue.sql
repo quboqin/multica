@@ -10,7 +10,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
        i.revision, i.kind, i.document_revision
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -332,7 +332,7 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
 
 -- name: FindActiveDuplicateIssue :one
 SELECT * FROM issue
-WHERE workspace_id = $1
+WHERE issue.kind = 'task' AND workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains active.
   AND NOT (status = ANY(sqlc.arg('terminal_status_keys')::text[]))
   -- An entry waiting in Triage has not been taken on, so it never blocks
@@ -347,7 +347,7 @@ LIMIT 1;
 
 -- name: FindRecentAutopilotDuplicateIssue :one
 SELECT i.* FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains active.
   AND NOT (i.status = ANY(sqlc.arg('terminal_status_keys')::text[]))
   -- An entry waiting in Triage has not been taken on, so it never blocks
@@ -402,7 +402,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
        i.revision, i.kind, i.document_revision
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains visible.
   AND NOT (i.status = ANY(sqlc.arg('terminal_status_keys')::text[]))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
@@ -505,7 +505,7 @@ ORDER BY i.position ASC, i.created_at DESC;
 -- name: CountIssues :one
 -- See ListIssues for the semantics of involves_user_id.
 SELECT count(*) FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -590,7 +590,7 @@ SELECT
   assignee_id,
   COUNT(*)::bigint as frequency
 FROM issue
-WHERE workspace_id = $1
+WHERE issue.kind = 'task' AND workspace_id = $1
   AND creator_id = $2
   AND creator_type = 'member'
   AND assignee_type IS NOT NULL
@@ -600,7 +600,7 @@ GROUP BY assignee_type, assignee_id;
 -- name: ChildIssueProgress :many
 SELECT parent_issue_id,
        COUNT(*)::bigint AS total,
-       COUNT(*) FILTER (WHERE status = ANY(sqlc.arg('terminal_status_keys')::text[]))::bigint AS done
+       COUNT(*) FILTER (WHERE issue.kind = 'task' AND status = ANY(sqlc.arg('terminal_status_keys')::text[]))::bigint AS done
 FROM issue
 WHERE workspace_id = $1
   AND parent_issue_id IS NOT NULL

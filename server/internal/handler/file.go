@@ -475,6 +475,9 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusForbidden, "invalid issue_id")
 				return
 			}
+			if !h.checkDocumentAccess(w, r, issue) {
+				return
+			}
 			params.IssueID = issue.ID
 		}
 		if commentID := r.FormValue("comment_id"); commentID != "" {
@@ -486,6 +489,9 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			// A deleted comment's tombstone takes no attachments.
 			if err != nil || uuidToString(comment.WorkspaceID) != workspaceID || comment.DeletedAt.Valid {
 				writeError(w, http.StatusForbidden, "invalid comment_id")
+				return
+			}
+			if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
 				return
 			}
 			params.CommentID = comment.ID
@@ -770,7 +776,7 @@ func (h *Handler) loadAttachmentForRequest(w http.ResponseWriter, r *http.Reques
 		return db.Attachment{}, false
 	}
 
-	return att, true
+	return att, h.checkDocumentAttachment(w, r, att)
 }
 
 // loadAttachmentForDownload is a workspace-self-resolving variant used by the
@@ -817,14 +823,14 @@ func (h *Handler) loadAttachmentForDownload(w http.ResponseWriter, r *http.Reque
 		return db.Attachment{}, false
 	}
 	if h.MembershipCache.Get(r.Context(), userID, workspaceID) {
-		return att, true
+		return att, h.checkDocumentAttachment(w, r, att)
 	}
 	if _, err := h.getWorkspaceMember(r.Context(), userID, workspaceID); err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
 		return db.Attachment{}, false
 	}
 	h.MembershipCache.Set(r.Context(), userID, workspaceID)
-	return att, true
+	return att, h.checkDocumentAttachment(w, r, att)
 }
 
 // ---------------------------------------------------------------------------
@@ -963,7 +969,18 @@ func (h *Handler) ServeLocalUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setAttachmentPreviewSecurityHeaders(w)
-	key := strings.TrimPrefix(r.URL.Path, "/uploads/")
+	key := path.Clean(strings.TrimPrefix(r.URL.Path, "/uploads/"))
+	if h.Queries != nil {
+		att, err := h.Queries.GetDocumentAttachmentByLocalKey(r.Context(), key)
+		if err == nil {
+			http.Redirect(w, r, "/api/attachments/"+uuidToString(att.ID)+"/download", http.StatusTemporaryRedirect)
+			return
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, 500, "failed to authorize attachment")
+			return
+		}
+	}
 	local.ServeFile(w, r, key)
 }
 
@@ -1435,6 +1452,9 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	if !h.checkDocumentAttachment(w, r, att) {
 		return
 	}
 	// Captured-context attachments are immutable historical copies. They are

@@ -44,6 +44,9 @@ func SubscribePluginEvents(bus *events.Bus, dispatcher EventSink) {
 	// check, where it costs nothing anyone is waiting for.
 	forward := func(pluginEvent string) events.Handler {
 		return func(e events.Event) {
+			if e.RecipientUserIDs != nil {
+				return
+			}
 			dispatcher.Dispatch(pluginEvent, e.WorkspaceID, e.Payload)
 		}
 	}
@@ -60,6 +63,9 @@ func SubscribePluginEvents(bus *events.Bus, dispatcher EventSink) {
 	// event, and lets a plugin subscribe to the specific thing it cares about
 	// instead of filtering every field change itself.
 	bus.Subscribe(protocol.EventIssueUpdated, func(e events.Event) {
+		if e.RecipientUserIDs != nil {
+			return
+		}
 		dispatcher.Dispatch(plugincontract.EventIssueUpdated, e.WorkspaceID, e.Payload)
 		// A map lookup, not a parse: cheap enough for the request goroutine.
 		if payloadFlag(e.Payload, "status_changed") {

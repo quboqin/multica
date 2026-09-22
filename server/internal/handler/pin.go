@@ -79,6 +79,12 @@ func (h *Handler) ListPins(w http.ResponseWriter, r *http.Request) {
 		if p.ItemType == "view" && !includeViews {
 			continue
 		}
+		if p.ItemType == "issue" {
+			issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
+			if err != nil || (issue.Kind == "doc" && h.documentPermission(r.Context(), h.Queries, issue, userID) == "") {
+				continue
+			}
+		}
 		resp = append(resp, pinnedItemToResponse(p))
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -117,6 +123,11 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 	// Verify the item exists in this workspace
 	switch req.ItemType {
 	case "issue":
+		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: itemUUID, WorkspaceID: wsUUID})
+		if err != nil || (issue.Kind == "doc" && h.documentPermission(r.Context(), h.Queries, issue, userID) == "") {
+			writeError(w, 404, "issue not found")
+			return
+		}
 		if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 			ID: itemUUID, WorkspaceID: wsUUID,
 		}); err != nil {

@@ -506,7 +506,7 @@
       <ol class="sub">
         <li><a href="#cortex-model">两类对象，两种取舍</a></li>
         <li><a href="#cortex-er">数据模型与迁移</a></li>
-        <li><a href="#cortex-doc">文档：版本与批准</a></li>
+        <li><a href="#cortex-doc">文档：共享与版本</a></li>
         <li><a href="#cortex-collection">集合：字段与逐格写入</a></li>
         <li><a href="#cortex-link">关联边</a></li>
         <li><a href="#cortex-api">接口一览</a></li>
@@ -2296,7 +2296,7 @@ erDiagram
 </tbody></table></div>
 
 <h3 id="main-sync-open">Cortex 的设计范围与未完成事项</h3>
-<p>在 <strong>main</strong> 上，<a href="cortex-prd.html">Cortex PRD</a> 的全部对象仍是设计内容；<a href="cortex-ui-prototype.html">UI 原型</a> 使用模拟数据，不证明这些能力已在 main 实现。功能分支上，文档（<code>issue.kind</code>、版本化正文、批准）与集合（collection / record / 关联边）已经实现，连同给智能体用的 CLI，见 <a href="#cortex">§11</a>；知识投递和可视化 Workflow 在分支上也尚未开始。阶段一覆盖 Web / Desktop，移动端单独设计与验收。</p>
+<p>在 <strong>main</strong> 上，<a href="cortex-prd.html">Cortex PRD</a> 的全部对象仍是设计内容；<a href="cortex-ui-prototype.html">UI 原型</a> 使用模拟数据，不证明这些能力已在 main 实现。功能分支上，文档（<code>issue.kind</code>、版本化正文、共享）与集合（collection / record / 关联边）已经实现，连同给智能体用的 CLI，见 <a href="#cortex">§11</a>；知识投递和可视化 Workflow 在分支上也尚未开始。阶段一覆盖 Web / Desktop，移动端单独设计与验收。</p>
 <p>拟议文档状态映射为 <code>draft → unstarted</code>、<code>reviewing → started</code>、<code>published → done</code>；知识条目为 <code>candidate → unstarted</code>、<code>reviewing → started</code>、<code>promoted → done</code>、<code>rejected → closed</code>。这只定义生命周期分类。文档不执行、评审控制和发布写入约束必须另行设计；把 draft 放到 unstarted 不会继承内建 backlog 的停放行为。</p>
 <p>当前 Triage 队列守卫不等于完整的分诊产品。mention 代码示例过滤仍未实现，相关评论入口的示例继续使用占位符。Cortex 的多写入者冲突检测也不能借用 claim 的 issue_snapshot：分支上的做法是独立的 <code>document_revision</code> 加数据库触发器兜底（<a href="#cortex-doc">§11.3</a>），冲突响应和所有写入口的覆盖仍需在目标部署上独立验收。</p>
 </section>
@@ -2338,7 +2338,7 @@ graph TB
   LINK -.to: record.-> REC
   TASK --> FT
   FLD --> FT
-</pre><figcaption><b>图 11-1 · 对象关系。</b>实线是归属，虚线是引用；文档的批准记录见图 11-2 与 §11.3。保存视图同时服务两种数据源：<code>collection_id</code> 为空的仍是任务视图。任务属性与表格字段共用一套类型与校验，但目录、配额和管理权限各自独立：任务属性每工作区 20 个，表格字段每表 50 个。</figcaption></figure>
+</pre><figcaption><b>图 11-1 · 对象关系。</b>实线是归属，虚线是引用；图 11-2 保留旧批准模型供迁移对照；当前共享与历史模型见 §11.3。保存视图同时服务两种数据源：<code>collection_id</code> 为空的仍是任务视图。任务属性与表格字段共用一套类型与校验，但目录、配额和管理权限各自独立：任务属性每工作区 20 个，表格字段每表 50 个。</figcaption></figure>
 
 <h3 id="cortex-er"><span class="sec">11.2</span>数据模型与迁移</h3>
 <figure class="fig"><pre class="mermaid">
@@ -2360,7 +2360,7 @@ erDiagram
     text body "被批准的那一版正文"
     text ingestion_state "not_requested|pending|complete"
   }
-</pre><figcaption><b>图 11-2 · 文档一侧。</b>文档没有自己的表：它是 <code>issue</code> 的一种 <code>kind</code>，外加一张批准记录。</figcaption></figure>
+</pre><figcaption><b>图 11-2 · 旧文档模型（供迁移对照）。</b>文档主体仍是 <code>issue.kind=doc</code>。2026-09-22 后不再使用批准流程，新增授权、协作者和历史三张表，见 §11.3；旧批准记录仅保留存量数据。</figcaption></figure>
 <figure class="fig"><pre class="mermaid">
 erDiagram
   collection ||..o{ collection_field : collection_id
@@ -2411,11 +2411,12 @@ erDiagram
     <tr><td><span class="num">509</span></td><td>触发器扩展到 <code>INSERT</code>：父子同类、同工作区、文档同项目；文档树不成环</td><td>改父节点时取工作区级 advisory lock，两个并发移动不会各自通过校验后合成一个环</td></tr>
     <tr><td><span class="num">510</span></td><td><code>collection.title_name</code></td><td>首列显示的是行标题，不是目录里的字段，列名存在表上</td></tr>
     <tr><td><span class="num">511–515</span></td><td><code>record_link</code> 与三个索引；字段类型约束放宽到含 <code>relation</code></td><td>边唯一 <code>(from_record_id, from_field_id, to_type, to_id)</code>；反查索引 <code>(workspace_id, to_type, to_id)</code>；<code>NOT VALID</code> 放宽，回滚前先归档 relation 字段</td></tr>
+    <tr><td><span class="num">517–521</span></td><td>文档授权、协作者、历史快照与独立并发索引</td><td>旧文档默认私有，当前内容建立基线；移除旧评审状态，取消待处理入库请求</td></tr>
   </tbody>
 </table></div>
-<p>工作区删除已把五张新表（含 <code>document_publication</code>）纳入 <code>DeleteWorkspace</code> 与删除清单测试。项目删除时，项目级的表不删除，而是回到工作区级（<code>project_id</code> 置空）。</p>
+<p>工作区删除已把集合表、旧批准表以及新的文档授权、协作者和历史表纳入 <code>DeleteWorkspace</code> 与删除清单测试。项目删除时，项目级的表不删除，而是回到工作区级（<code>project_id</code> 置空）。</p>
 
-<h3 id="cortex-doc"><span class="sec">11.3</span>文档：版本化写入与只属于人的批准</h3>
+<h3 id="cortex-doc"><span class="sec">11.3</span>文档：私有默认、共享与版本历史</h3>
 <p>issue 的描述写入在 main 上是最后写入者覆盖。文档正文不能这样，于是多了一层：<strong>每次正文写入都要说出自己读到的版本</strong>，服务端在行锁内比较，数据库触发器再兜底一次。</p>
 <figure class="fig"><pre class="mermaid">
 sequenceDiagram
@@ -2438,9 +2439,9 @@ sequenceDiagram
   <thead><tr><th>规则</th><th>实现</th></tr></thead>
   <tbody>
     <tr><td>正文版本与 issue 的 <code>revision</code> 分开</td><td>改标题、移动、改负责人不动 <code>document_revision</code>；迟到的附件合并走单独的 <code>multica.document_media</code> 通道，同样不计版本，避免给编辑者制造假冲突</td></tr>
-    <tr><td>状态只能经转换接口改</td><td><code>POST /api/documents/{id}/transition</code>，动作 <code>review</code> / <code>publish</code> / <code>draft</code>，同样要带版本。通用的 <code>PUT /api/issues/{id}</code> 与批量更新对文档的 <code>status</code>、<code>parent_issue_id</code>、<code>position</code>、<code>project_id</code> 一律 400；触发器另用 <code>multica.document_transition</code> 把关</td></tr>
-    <tr><td>批准针对某一版文字</td><td>发布要求文档正处于 reviewing，且由工作区 owner / admin 执行。每次转换写一行 <code>document_publication</code>（批准人、版本、正文快照）；发布同时置 <code>ingestion_state = pending</code>，留给将来的知识入库</td></tr>
-    <tr><td>改了正文，批准就失效</td><td>非 draft 文档的正文一旦变化，同一事务内状态回到 draft，并撤销尚未消费的入库请求。对人和智能体一视同仁</td></tr>
+    <tr><td>Publish 改为共享（2026-09-22）</td><td><code>GET / PUT /api/documents/{id}/access</code> 管理授权。<code>document_access</code> 保存 owner、共享范围、范围权限及共享 revision；<code>document_collaborator</code> 保存成员的 view / edit。默认仅 owner 可见，Workspace 管理员没有额外读取权。项目目前对所有 Workspace 成员开放，项目共享不会建立独立成员组。只有人类文档 owner 可以改共享</td></tr>
+    <tr><td>共享不随编辑或还原撤销</td><td>不再提供送审；旧 transition 请求明确拒绝。private 且无协作者映射 draft，其余映射 published；新共享不排知识入库任务。直接读写、搜索、列表、评论、附件和通知检查文档授权；实时事件按可读成员发送，撤权事件也发给原读者以清理缓存</td></tr>
+    <tr><td>完整历史与恢复</td><td><code>document_version</code> 在已接受的标题／正文写入后追加快照，带执行者类型和 ID。GET versions 每页 50 条，GET versions/{version} 读取快照；POST versions/{version}/restore 检查 issue revision 后生成新版本。所有者和编辑者可以还原，阅读者只读当前页。迁移 517～521 为存量页建立当前基线并取消待处理旧入库请求；不补造旧历史</td></tr>
     <tr><td>文档不派发运行</td><td>指派、改状态的入队判断对 <code>kind != task</code> 直接返回。正文里的 agent mention 是引用，不触发；评论里的显式点名照常触发一次运行</td></tr>
     <tr><td>文档树</td><td><code>GET /api/documents</code> 返回整棵树（按 <code>position</code>），<code>POST …/move</code> 在工作区级 advisory lock 内校验同项目、不成环，并把兄弟节点重排为 1024 的倍数</td></tr>
   </tbody>
@@ -2483,7 +2484,7 @@ sequenceDiagram
   <tbody>
     <tr><td class="wrap"><code>/api/issues</code>（<code>kind=doc</code>）、<code>/api/issues/{id}</code></td><td>POST · GET · PUT · DELETE</td><td>文档的创建、读取、带版本的正文保存、删除（子页移到顶层）。评论、附件、订阅沿用 issue 的接口</td></tr>
     <tr><td class="wrap"><code>/api/issues/search?kind=</code></td><td>GET</td><td>全文搜索，按类型过滤发生在排序与分页之前</td></tr>
-    <tr><td class="wrap"><code>/api/documents</code> · <code>/api/documents/{id}/move</code> · <code>/api/documents/{id}/transition</code></td><td>GET · POST · POST</td><td>文档树；移动与排序；送审 / 发布 / 退回草稿</td></tr>
+    <tr><td class="wrap"><code>/api/documents</code> · <code>/api/documents/{id}/move</code> · <code>/api/documents/{id}/access</code></td><td>GET · POST · GET/PUT</td><td>文档树；所有者移动与排序；读取授权或所有者修改共享</td></tr>
     <tr><td class="wrap"><code>/api/collections</code> · <code>/api/collections/{c}</code></td><td>GET · POST · PATCH</td><td>列表（含行数）、详情（表 + 字段 + 能力声明）、改名 / 改首列名 / 归档</td></tr>
     <tr><td class="wrap"><code>/api/collections/{c}/fields</code> · <code>…/fields/{f}</code></td><td>POST · PATCH</td><td>字段目录：新增、改名、选项、安全类型转换、调序、归档</td></tr>
     <tr><td class="wrap"><code>/api/collections/{c}/records</code> · <code>…/records/{r}</code> · <code>…/records/{r}/fields/{f}</code></td><td>GET · POST · PUT · DELETE</td><td>分页读、建行（可带初始值）、改标题、逐格写入、软删除</td></tr>
@@ -2495,23 +2496,22 @@ sequenceDiagram
 <p>集合接口的请求体拒绝未知字段。这对已安装的旧桌面端是硬边界：旧服务端遇到新客户端多带的字段会回 400，而不是忽略——新增请求字段时要按这个前提设计客户端的降级。</p>
 
 <h3 id="cortex-perm"><span class="sec">11.7</span>权限与机器凭证</h3>
-<p>§4 与 §5.1 已经说明：任务令牌 <code>mat_</code> 在中间件里被换成「运行时主人的用户 ID + 服务端盖章的 <code>X-Actor-Source: task_token</code>」。默认契约是智能体与人可互换。表格完全沿用这条契约——行和结构都按运行时主人的身份判定；Cortex 只在<strong>文档批准</strong>这一处明确不互换，并且用<strong>凭证类型</strong>而不是角色来判断——主人是管理员也不放行。</p>
+<p>§4 与 §5.1 已经说明：任务令牌 <code>mat_</code> 在中间件里被换成「运行时主人的用户 ID + 服务端盖章的 <code>X-Actor-Source: task_token</code>」。默认契约是智能体与人可互换。表格完全沿用这条契约——行和结构都按运行时主人的身份判定；Cortex 只在<strong>修改文档共享</strong>这一处明确不互换，并且用<strong>凭证类型</strong>而不是角色来判断——主人是管理员也不放行。</p>
 <div class="tbl-wrap"><table class="tbl">
   <thead><tr><th>操作</th><th><span class="tok human">成员</span></th><th><span class="tok human">表的创建者 / owner·admin</span></th><th><span class="tok machine">任务令牌</span></th></tr></thead>
   <tbody>
-    <tr><td>读表、字段、行、回收站、文档树与正文</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    <tr><td>读表、字段、行、回收站</td><td>✓</td><td>✓</td><td>✓</td></tr>
     <tr><td>建行、写格、改标题、删行 / 恢复、关联 / 取消关联、反查</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>建文档、带版本保存、移动、评论</td><td>✓</td><td>✓</td><td>✓（评论作者为智能体）</td></tr>
+    <tr><td>文档读取 / 保存与评论 / 移动</td><td>阅读者 / 编辑者 / 所有者</td><td>同左，不绕过文档授权</td><td>按运行时主人权限，历史和评论记真实执行者</td></tr>
     <tr><td>建表</td><td>✓</td><td>✓</td><td>✓（<code>created_by</code> 记运行时主人）</td></tr>
     <tr><td>改表名 / 首列名、归档表；增改、归档字段与选项</td><td>✗ <code>collection_schema_forbidden</code></td><td>✓</td><td>按运行时主人判定：主人是表的创建者或 owner·admin 则 ✓，否则 ✗ <code>collection_schema_forbidden</code></td></tr>
-    <tr><td>送审、退回草稿</td><td>✓</td><td>✓</td><td>✗ <code>document_transition_requires_human</code></td></tr>
-    <tr><td>发布</td><td>✗</td><td>owner·admin ✓</td><td>✗ <code>document_transition_requires_human</code></td></tr>
+    <tr><td>Publish 修改共享</td><td>仅文档所有者</td><td>仅文档所有者</td><td>✗ <code>document_transition_requires_human</code></td></tr>
   </tbody>
 </table></div>
 <p><strong>表结构为什么没有「智能体专属」的门。</strong>分支最初按凭证类型拒绝任务令牌建表和改字段（<code>collection_schema_requires_human</code>）；2026-09-21 按用户决定去掉（PRD 修订九、Q-U3 的 schema 部分）。现在 <code>requireCollectionManager</code>（<code>collection_manage.go</code>）只问一件事：调用者的用户 ID 是不是 <code>collection.created_by</code>，或者该用户是不是 owner / admin。任务令牌的用户 ID 就是运行时主人，所以管理员名下的运行可以改任何表，普通成员名下的运行只能改该成员建的表——包括他名下的运行替他建的表，界面上的 <code>canManage</code> 用同一个判断，两边不会不一致。云节点 PAT（<code>cloud_pat</code>）同理。通过后用 <code>resolveActor</code> 取执行者，<code>collection:updated</code> 事件因此记在智能体名下；建表现在也发这条事件，否则 CLI 或智能体建的表要等客户端下一次重取才出现。任务字段定义（<code>requirePropertyAdmin</code>）没有跟着放开，仍然拒绝智能体。</p>
-<p>两类拒绝都带稳定的 <code>code</code>。原因在 CLI 一侧：<code>cli.FormatError</code> 有意把所有 403 折叠成同一句「无权访问」，以免拒绝本身泄露资源是否存在；命令只有按 <code>code</code> 显式认领某一种拒绝，才会换成具体的话。对智能体来说这不是体验问题——通用文案会让它去找别的凭证，具体文案告诉它「这张表谁能改，你可以去写行、自建一张表」或「批准归人做，你可以留评论请人评审」。</p>
+<p>两类拒绝都带稳定的 <code>code</code>。原因在 CLI 一侧：<code>cli.FormatError</code> 有意把所有 403 折叠成同一句「无权访问」，以免拒绝本身泄露资源是否存在；命令只有按 <code>code</code> 显式认领某一种拒绝，才会换成具体的话。对智能体来说这不是体验问题——通用文案会让它去找别的凭证，具体文案告诉它「这张表谁能改，你可以去写行、自建一张表」或「共享由文档所有者管理」。</p>
 <div class="risk"><span class="t">放开表结构之后，风险在哪</span>不在「谁能改」，而在「改了收不回」。字段配置的接口只收整份选项列表，被移除的选项由 <code>StripCollectionFieldOptions</code> 从所有行（含回收站）清除；多选转单选只保留每格第一个值；表和字段归档保留数据，现已提供已归档列表与恢复；字段重名或达到配额时返回冲突。所以 CLI 给最常见的结构变更单独做了安全形态：<code>collection field update --add-option</code> 把既有选项按 ID 原样带回再追加，调用者不必、也不会因为漏键一个选项而清掉别人的数据；内置技能要求智能体只在任务明说时才移除、转换、归档。归档恢复不等于撤销选项移除或类型转换，后两者仍需事先明确授权。</div>
-<div class="risk"><span class="t">为什么文档批准不能放给任务令牌</span><code>document_publication.actor_id</code> 记的是用户 ID，而任务令牌通过认证后的用户 ID 就是运行时主人。放行等于让智能体以那个人的名义在批准记录上签字。要开放「智能体送审」，得先给批准记录加执行者类型（PRD Q-U5）。矩阵由 <code>server/internal/handler/cortex_agent_access_test.go</code> 固定，包括「主人为 owner / admin / 普通成员三种情形下智能体与本人得到同样结果」和「被拒的转换不留下任何批准记录」。</div>
+<div class="note"><span class="t">2026-09-22 共享修订</span>取消送审和批准。共享是文档所有者主动授予访问的动作，任务令牌不能修改共享；内容操作按运行时主人授权。<code>document_publication</code> 保留旧记录，新编辑历史使用 <code>document_version</code> 的执行者类型与 ID。保存和还原不撤销共享。</div>
 
 <h3 id="cortex-agent"><span class="sec">11.8</span>智能体通道：CLI 与内置技能</h3>
 <figure class="fig">
@@ -2528,7 +2528,7 @@ sequenceDiagram
   <tbody>
     <tr><td><code>collection</code></td><td class="wrap"><code>list</code> · <code>get</code> · <code>create</code> · <code>update</code> · <code>archive</code> · <code>field list|add|update|archive</code></td><td><code>cmd_collection.go</code>。表的解析顺序是 ID → 名称 → ID 前缀，名称先于前缀，名为 <code>cafe</code> 的表不会被某个以 cafe 开头的 ID 抢走。<code>--add-option</code> 追加选项（既有选项按 ID 带回）；<code>--option</code> 整体替换，按名称保留旧 ID，漏掉的选项会被清除；两者不能同用</td></tr>
     <tr><td><code>record</code></td><td class="wrap"><code>list</code> · <code>get</code> · <code>create</code> · <code>update</code> · <code>delete</code> · <code>restore</code> · <code>trash</code> · <code>link</code> · <code>unlink</code> · <code>backlinks</code></td><td><code>cmd_record.go</code>。值编码复用任务属性的编码器。<code>update</code> 先解析完全部参数再开始写；中途失败时在 stderr 列出已写入的格。关联列的过滤与排序在客户端直接拒绝，因为服务端会静默退回默认顺序</td></tr>
-    <tr><td><code>document</code></td><td class="wrap"><code>list</code> · <code>get</code> · <code>create</code> · <code>save</code> · <code>move</code> · <code>status</code></td><td><code>cmd_document.go</code>。<code>list</code> 丢弃正文；<code>save</code> 必须带 <code>--expected-revision</code>；冲突响应带着整篇正文、常被错误体上限截断，所以 CLI 改为回读当前版本再生成提示；<code>move --first</code> 用远小于零的位置，因为新建 issue 的 <code>position</code> 是负数</td></tr>
+    <tr><td><code>document</code></td><td class="wrap"><code>list</code> · <code>get</code> · <code>create</code> · <code>save</code> · <code>move</code> · <code>share</code> · <code>versions</code> · <code>version</code> · <code>restore</code></td><td><code>cmd_document.go</code> / <code>cmd_document_sharing.go</code>。<code>list</code> 丢弃正文；<code>save</code> 必须带 <code>--expected-revision</code>；冲突响应带着整篇正文、常被错误体上限截断，所以 CLI 改为回读当前版本再生成提示；<code>move --first</code> 用远小于零的位置，因为新建 issue 的 <code>position</code> 是负数</td></tr>
     <tr><td><code>issue</code></td><td class="wrap"><code>records &lt;issue&gt;</code> · <code>search --kind</code></td><td>任务侧反查；搜索按对象类型过滤</td></tr>
   </tbody>
 </table></div>

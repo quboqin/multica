@@ -5385,6 +5385,7 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 		rows, err := h.Queries.ListActiveTasksByIssueFamily(r.Context(), db.ListActiveTasksByIssueFamilyParams{
 			WorkspaceID: issue.WorkspaceID,
 			RootIssueID: root,
+			UserID:      parseUUID(requestUserID(r)),
 			RowLimit:    familyActiveRunCap + 1,
 		})
 		if err != nil {
@@ -5577,6 +5578,10 @@ func (h *Handler) ListTaskMessagesByUser(w http.ResponseWriter, r *http.Request)
 	// be indistinguishable from one that does not exist.
 	if wsID == "" || wsID != middleware.WorkspaceIDFromContext(r.Context()) {
 		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	if !h.checkDocumentResource(w, r, task.IssueID, parseUUID(wsID)) {
 		return
 	}
 

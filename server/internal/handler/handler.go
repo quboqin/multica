@@ -1041,7 +1041,7 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 	// silently returns false for non-identifier strings, falling through to
 	// the UUID path below.
 	if issue, ok := h.resolveIssueByIdentifier(r.Context(), issueID, workspaceID); ok {
-		return issue, true
+		return issue, h.checkDocumentAccess(w, r, issue)
 	}
 
 	issueUUID, err := util.ParseUUID(issueID)
@@ -1064,7 +1064,7 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 		writeError(w, http.StatusNotFound, "issue not found")
 		return db.Issue{}, false
 	}
-	return issue, true
+	return issue, h.checkDocumentAccess(w, r, issue)
 }
 
 // resolveIssueByIdentifier tries to look up an issue by "PREFIX-NUMBER" format.

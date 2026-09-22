@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/database"
 	"github.com/multica-ai/multica/server/internal/dbreader"
 	"github.com/multica-ai/multica/server/internal/dbstartup"
+	"github.com/multica-ai/multica/server/internal/documentaccess"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
@@ -589,6 +590,7 @@ func main() {
 	defer analyticsClient.Close()
 
 	queries := db.New(pool)
+	bus.SetPolicy(documentaccess.EventPolicy(queries))
 	hub.SetAuthorizer(newScopeAuthorizer(queries))
 	// Order matters: subscriber listeners must register BEFORE notification listeners.
 	// The notification listener queries the subscriber table to determine recipients,

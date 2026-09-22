@@ -1,3 +1,4 @@
+import { DocumentAccessSchema, DocumentSnapshotSchema, DocumentVersionsSchema, type DocumentSharingInput, type DocumentAccess, type DocumentSnapshot, type DocumentVersions } from "../documents/schema";
 import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, RecordBacklinksSchema, type CollectionFieldInput, type CollectionFieldPatch, type CollectionPatch, type CollectionQuery, type RecordBacklink } from "../collections";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
@@ -1737,6 +1738,34 @@ export class ApiClient {
     });
   }
 
+  async getDocumentAccess(id: string, options: {workspaceId: string; signal?: AbortSignal}) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/access`, {signal: options.signal, headers: {"X-Workspace-ID": options.workspaceId}});
+    const result = parseWithFallback<DocumentAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "GET /api/documents/:id/access"});
+    if (!result) throw new Error("Invalid document sharing response");
+    return result;
+  }
+  async updateDocumentAccess(id: string, input: DocumentSharingInput, workspaceId: string) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/access`, {method:"PUT",headers:{"X-Workspace-ID":workspaceId},body:JSON.stringify(input)});
+    const result = parseWithFallback<DocumentAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "PUT /api/documents/:id/access"});
+    if (!result) throw new Error("Invalid document sharing response");
+    return result;
+  }
+  async listDocumentVersions(id: string, workspaceId: string, before?: number) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/versions${before ? `?before=${before}` : ""}`, {headers:{"X-Workspace-ID":workspaceId}});
+    const result = parseWithFallback<DocumentVersions | null>(raw, DocumentVersionsSchema, null, {endpoint: "GET /api/documents/:id/versions"});
+    if (!result) throw new Error("Invalid document versions response");
+    return result;
+  }
+  async getDocumentVersion(id: string, version: number, workspaceId: string) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/versions/${version}`, {headers:{"X-Workspace-ID":workspaceId}});
+    const result = parseWithFallback<DocumentSnapshot | null>(raw, DocumentSnapshotSchema, null, {endpoint: "GET /api/documents/:id/versions/:version"});
+    if (!result) throw new Error("Invalid document version response");
+    return result;
+  }
+  async restoreDocumentVersion(id: string, version: number, revision: number) {
+    return this.documentCommand(id, `versions/${version}/restore`, {expected_revision: revision});
+  }
+
   async moveDocument(
     id: string,
     parentId: string | null,
@@ -1763,7 +1792,7 @@ export class ApiClient {
 
   private async documentCommand(
     id: string,
-    command: "move" | "transition",
+    command: "move" | "transition" | `versions/${number}/restore`,
     body: unknown,
   ): Promise<Issue> {
     const raw = await this.fetch<unknown>(`/api/documents/${id}/${command}`, {

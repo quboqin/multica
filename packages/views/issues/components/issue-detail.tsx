@@ -38,6 +38,8 @@ import { Button } from "@multica/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { documentAccessOptions } from "@multica/core/documents";
+import { ReadonlyContent } from "../../editor/readonly-content";
 import { DocumentBodyEditor } from "../../documents/document-body-editor";
 import { ContentEditor, type ContentEditorRef, TitleEditor, type TitleEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useEditorUpload, ImageSequenceProvider } from "../../editor";
 import { collectImageSequence, type ImageSequenceBlock } from "@multica/core/attachments/image-sequence";
@@ -1388,6 +1390,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
+  const documentAccess = useQuery(documentAccessOptions(wsId,issue?.id ?? id,issue?.kind === "doc"));
+  const documentReadOnly = issue?.kind === "doc" && documentAccess.data?.can_edit !== true;
   const descriptionSourceId = `description:${id}`;
   const descriptionAnnotations = useCommentAnnotations({
     draftKey: `new:${id}`,
@@ -1395,7 +1399,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     enabled: !!user && !!issue,
     editable: true,
   });
-  const canAnnotateDescription = !!user;
+  const canAnnotateDescription = !!user && !documentReadOnly;
   const descriptionSelectionAction = useMemo(() => canAnnotateDescription ? {
     label: t(($) => $.reply.annotations.add_comment),
     onSelect: descriptionAnnotations.addSelection,
@@ -2084,7 +2088,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   const handleDescriptionUpload = useCallback(
     async (file: File) => {
-      const result = await uploadWithToast(file);
+      const result = await uploadWithToast(file, issue?.kind === "doc" ? {issueId: id} : undefined);
       if (result) {
         descPendingAttachmentsRef.current = [
           ...descPendingAttachmentsRef.current,
@@ -2094,7 +2098,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       }
       return result;
     },
-    [uploadWithToast],
+    [uploadWithToast, issue?.kind, id],
   );
 
   useEffect(() => {
@@ -2263,7 +2267,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     return <IssueDetailSkeleton leading={leadingAction} />;
   }
 
-  if (!issue) {
+  if (!issue || (issue.kind === "doc" && documentAccess.isError)) {
     return <IssueNotFound showBackLink={!onDelete} leading={leadingAction} />;
   }
 
@@ -2688,6 +2692,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
       );
     }
+    if (item.kind === "comment" && documentReadOnly) {
+      return <div className="space-y-3 pb-3" id={`comment-${item.id}`}>
+        {[item.entry, ...(timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES)].map(entry => <article key={entry.id} className="rounded-md border p-3">
+          <p className="mb-2 text-caption text-muted-foreground">{getActorName(entry.actor_type,entry.actor_id)} · {timeAgo(entry.created_at)}</p>
+          <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments}/>
+        </article>)}
+      </div>;
+    }
     if (item.kind === "comment") {
       const isResolved = !!item.entry.resolved_at;
       return (
@@ -2907,7 +2919,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             floats — once the reader scrolls to the bottom. */}
         <div className={cn("mx-auto w-full px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8", isDocumentVariant ? "max-w-[784px] md:pt-10" : "max-w-4xl")}>
           {documentSlots?.beforeTitle}
-          {titleLazy.active && (
+          {documentReadOnly && <h1 className="text-display-sm font-bold leading-snug tracking-tight">{issue.title}</h1>}
+          {!documentReadOnly && titleLazy.active && (
             <div className={titleLazy.ready ? undefined : "hidden"}>
               <TitleEditor
                 key={`title-${id}-${titleResetToken}`}
@@ -2938,7 +2951,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             </div>
           )}
-          {!titleLazy.ready && (
+          {!documentReadOnly && !titleLazy.ready && (
             <div
               role="button"
               tabIndex={0}
@@ -3078,7 +3091,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           >
             {descriptionAnnotations.popup}
             <div data-comment-content={descriptionSourceId} data-document-body={isDocumentVariant ? "" : undefined}>
-              {issue.kind === "doc" ? <DocumentBodyEditor
+              {documentReadOnly ? <ReadonlyContent content={issue.description ?? ""} attachments={issueAttachments}/> : issue.kind === "doc" ? <DocumentBodyEditor
                 key={id} issue={issue}
                 attachmentIds={(markdown)=>descPendingAttachmentsRef.current.filter(a=>contentReferencesAttachment(markdown,a)).map(a=>a.id)}
                 onUploadFile={handleDescriptionUpload} debounceMs={1500} flushPendingOnUnmount
@@ -3490,13 +3503,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 keeps the previous issue's in-memory content and the
                 next keystroke would flush it into the new issue's
                 draft key. */}
-            <CommentInput
+            {!documentReadOnly && <CommentInput
               key={id}
               issueId={id}
               onSubmit={submitComment}
               onAccepted={scrollToTimelineBottom}
               onEditAnnotation={(annotationId) => descriptionAnnotations.editAnnotation(annotationId, true)}
-            />
+            />}
           </div>
         </div>
         </div>

@@ -258,6 +258,8 @@ export interface DocumentNavigatorProps {
 
 /** Second column of the documents pages: the workspace's document tree. */
 export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) {
+  const userId=useAuthStore(s=>s.user?.id);
+  const owns=(doc:Issue)=> !!userId && (doc.document_owner_id ?? (doc.creator_type === "member" ? doc.creator_id : null))===userId;
   const { t } = useT("issues");
   const wsId = useCurrentWorkspace()?.id ?? "";
   const paths = useWorkspacePaths();
@@ -402,8 +404,9 @@ export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) 
             dropTarget === `into:${doc.id}` && "ring-1 ring-brand",
           )}
           style={{ paddingInlineStart: 4 + depth * 14 }}
-          draggable
+          draggable={owns(doc)}
           onDragStart={(event) => {
+            if(!owns(doc)){event.preventDefault();return;}
             event.dataTransfer.setData(DRAG_TYPE, doc.id);
             event.dataTransfer.effectAllowed = "move";
             setDragId(doc.id);
@@ -418,7 +421,7 @@ export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) 
           }}
           onDrop={(event) => {
             const id = readDrag(event);
-            if (id && id !== doc.id) move(id, doc.id, 0);
+            if (id && id !== doc.id && owns(doc)) move(id, doc.id, 0);
           }}
         >
           {kids.length ? (
@@ -463,7 +466,7 @@ export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) 
             size="icon-xs"
             aria-label={t(($) => $.cortex_docs.add_child)}
             className={ROW_ACTION}
-            disabled={creator.isPending}
+            disabled={creator.isPending || !owns(doc)}
             onClick={() => {
               if (collapsed.has(doc.id)) toggleCollapsed(wsId, doc.id);
               void creator.create({ parent: doc }).catch(() => undefined);
@@ -471,11 +474,11 @@ export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) 
           >
             <Plus />
           </Button>
-          <RowMenu
+{owns(doc) &&           <RowMenu
             label={t(($) => $.cortex_docs.row_actions, { name: titleOf(doc) })}
             deleteLabel={t(($) => $.cortex_docs.delete)}
             onDelete={() => askDelete(doc)}
-          />
+          />}
         </div>
         {kids.length > 0 && open && (
           <ul role="group">{kids.map((child) => row(child, depth + 1))}</ul>

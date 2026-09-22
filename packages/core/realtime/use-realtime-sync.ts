@@ -798,7 +798,10 @@ export function useRealtimeSync(
       },
       project: () => {
         const wsId = getCurrentWsId();
-        if (wsId) qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+        if (wsId) {
+          qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+          void qc.resetQueries({ queryKey: ["documents", wsId] });
+        }
       },
       squad: () => {
         const wsId = getCurrentWsId();
@@ -1024,6 +1027,28 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) void refreshDataSource(qc, ["documents", wsId]);
     };
+    const unsubDocumentAccessChanged = ws.on(
+      "document:access_changed",
+      (payload) => {
+        if (
+          !payload || typeof payload !== "object" ||
+          !("document_id" in payload) || typeof payload.document_id !== "string"
+        ) return;
+        const { document_id } = payload;
+        const wsId = getCurrentWsId();
+        if (!wsId) return;
+        // Remove cached bodies before refetch: former readers receive this event too.
+        void qc.resetQueries({ queryKey: issueKeys.detail(wsId, document_id) });
+        void qc.resetQueries({ queryKey: issueKeys.timeline(document_id) });
+        void qc.resetQueries({ queryKey: ["documents", wsId] });
+        void qc.resetQueries({ queryKey: issueKeys.attachments(document_id) });
+        void qc.resetQueries({ queryKey: issueKeys.tasks(document_id) });
+        void qc.resetQueries({ queryKey: agentTasksKeys.all(wsId) });
+        void qc.resetQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+        void qc.resetQueries({ queryKey: chatKeys.taskMessagesAll() });
+        qc.invalidateQueries({ queryKey: ["inbox"] });
+      },
+    );
     const unsubRecordUpdated=ws.on("record:updated",refreshCollections);
     const unsubCollectionUpdated=ws.on("collection:updated",refreshCollections);
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
@@ -1756,6 +1781,7 @@ export function useRealtimeSync(
 
     return () => {
       unsubAny();
+      unsubDocumentAccessChanged();
       unsubIssueUpdated();
       unsubRecordUpdated();
       unsubCollectionUpdated();

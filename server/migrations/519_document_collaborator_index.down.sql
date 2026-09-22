@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS document_collaborator_issue_user_idx;

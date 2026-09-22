@@ -1,8 +1,9 @@
 -- name: ListDocuments :many
-SELECT * FROM issue
-WHERE workspace_id = sqlc.arg(workspace_id) AND kind = 'doc'
-  AND (sqlc.narg(project_id)::uuid IS NULL OR project_id = sqlc.narg(project_id))
-ORDER BY position, created_at, id;
+SELECT sqlc.embed(issue), sharing.owner_id FROM issue JOIN document_access sharing ON sharing.issue_id=issue.id AND sharing.workspace_id=issue.workspace_id
+WHERE issue.workspace_id = sqlc.arg(workspace_id) AND issue.kind = 'doc'
+  AND document_can_read(issue.id, sqlc.arg(user_id)::uuid)
+  AND (sqlc.narg(project_id)::uuid IS NULL OR issue.project_id = sqlc.narg(project_id) OR EXISTS (SELECT 1 FROM document_access d WHERE d.issue_id=issue.id AND d.project_id=sqlc.narg(project_id)))
+ORDER BY issue.position, issue.created_at, issue.id;
 
 -- name: AuthorizeDocumentWrite :exec
 SELECT set_config('multica.document_write', sqlc.arg(document_write)::text, true);

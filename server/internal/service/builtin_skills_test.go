@@ -662,10 +662,10 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"Merge your change into the body that is there **now**",
 				"Never retry the same body with the new number",
 				// Approval is a person's signature, not a missing role.
-				"approvals are for people",
-				"This is not a permission you are missing",
+				"Sharing and history",
+				"task tokens cannot grant or revoke access",
 				"multica issue comment add <document>",
-				"returns it to `draft`",
+				"Sharing persists through saves and restores",
 				// Dispatch and mention semantics differ from an issue's.
 				"Assigning a document to an agent does **not** start a run",
 				"never starts a run",

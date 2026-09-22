@@ -26,6 +26,9 @@ func writeDocumentConflict(w http.ResponseWriter, current db.Issue, code string)
 }
 
 func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requireUserID(w, r); !ok {
+		return
+	}
 	ws, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace_id")
 	if !ok {
 		return
@@ -37,7 +40,7 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	docs, err := h.Queries.ListDocuments(r.Context(), db.ListDocumentsParams{WorkspaceID: ws, ProjectID: project})
+	docs, err := h.Queries.ListDocuments(r.Context(), db.ListDocumentsParams{WorkspaceID: ws, ProjectID: project, UserID: parseUUID(requestUserID(r))})
 	if err != nil {
 		writeError(w, 500, "failed to list documents")
 		return
@@ -45,7 +48,8 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 	result := make([]IssueResponse, 0, len(docs))
 	prefix := h.getIssuePrefix(r.Context(), ws)
 	for _, doc := range docs {
-		resp := issueToResponse(doc, prefix)
+		resp := issueToResponse(doc.Issue, prefix)
+		resp.DocumentOwnerID = uuidToString(doc.OwnerID)
 		h.fillStatusCategory(r.Context(), ws, &resp)
 		result = append(result, resp)
 	}
@@ -65,6 +69,9 @@ func (h *Handler) MoveDocument(w http.ResponseWriter, r *http.Request) {
 	}
 	if doc.Kind != "doc" {
 		writeError(w, 400, "not a document")
+		return
+	}
+	if !h.requireDocumentOwner(w, r, doc) {
 		return
 	}
 	var req struct {
@@ -94,7 +101,7 @@ func (h *Handler) MoveDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to lock tree")
 		return
 	}
-	docs, err := q.ListDocuments(r.Context(), db.ListDocumentsParams{WorkspaceID: doc.WorkspaceID})
+	docs, err := q.ListOwnedDocuments(r.Context(), db.ListOwnedDocumentsParams{WorkspaceID: doc.WorkspaceID, OwnerID: parseUUID(user)})
 	if err != nil {
 		writeError(w, 500, "failed to read tree")
 		return
@@ -178,11 +185,9 @@ func (h *Handler) MoveDocument(w http.ResponseWriter, r *http.Request) {
 	h.respondDocument(w, r, moved, user)
 }
 
+// TransitionDocument keeps installed clients from accidentally publishing to an
+// implicit audience. Sharing requires an explicit, versioned access update.
 func (h *Handler) TransitionDocument(w http.ResponseWriter, r *http.Request) {
-	user, ok := requireUserID(w, r)
-	if !ok {
-		return
-	}
 	doc, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
 		return
@@ -191,97 +196,11 @@ func (h *Handler) TransitionDocument(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "not a document")
 		return
 	}
-	// Review, publication and withdrawal are recorded against the person who
-	// made them. A task token authenticates as its runtime's owner, so letting
-	// one through would sign that person's name to an agent's decision.
 	if isMachineCredentialActor(r) {
-		writeErrorCode(w, 403, documentTransitionRequiresHuman, "document approval requires a human actor")
+		writeErrorCode(w, 403, documentTransitionRequiresHuman, "document sharing requires a human owner")
 		return
 	}
-	var req struct {
-		Action   string `json:"action"`
-		Revision int64  `json:"expected_document_revision"`
-	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req) != nil {
-		writeError(w, 400, "invalid transition")
-		return
-	}
-	status := ""
-	switch req.Action {
-	case "review":
-		status = "reviewing"
-	case "publish":
-		status = "published"
-	case "draft":
-		status = "draft"
-	default:
-		writeError(w, 400, "action must be review, publish, or draft")
-		return
-	}
-	if req.Action == "publish" {
-		if _, ok := h.requireWorkspaceRole(w, r, uuidToString(doc.WorkspaceID), "workspace not found", "owner", "admin"); !ok {
-			return
-		}
-	}
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, 500, "failed to begin transition")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	q := h.Queries.WithTx(tx)
-	if err = assertIssueStatusStillActive(r.Context(), q, doc.WorkspaceID, status); err != nil {
-		writeError(w, 409, "document status is unavailable; restore the document status in workspace settings")
-		return
-	}
-	entry, err := q.GetIssueStatusEntryByKey(r.Context(), db.GetIssueStatusEntryByKeyParams{WorkspaceID: doc.WorkspaceID, Key: status})
-	category := map[string]string{"draft": "unstarted", "reviewing": "started", "published": "done"}[status]
-	if err != nil || entry.Category != category {
-		writeError(w, 409, "document status has an incompatible lifecycle category")
-		return
-	}
-	doc, err = q.LockIssueForDescriptionUpdate(r.Context(), db.LockIssueForDescriptionUpdateParams{ID: doc.ID, WorkspaceID: doc.WorkspaceID})
-	if err != nil {
-		writeError(w, 404, "document not found")
-		return
-	}
-	if req.Revision != doc.DocumentRevision {
-		writeDocumentConflict(w, doc, "document_conflict")
-		return
-	}
-	if req.Action == "publish" && doc.Status != "reviewing" {
-		writeError(w, 409, "submit this version for review before publishing")
-		return
-	}
-	if req.Action != "publish" {
-		if err = q.CancelDocumentIngestion(r.Context(), db.CancelDocumentIngestionParams{WorkspaceID: doc.WorkspaceID, IssueID: doc.ID}); err != nil {
-			writeError(w, 500, "failed to withdraw ingestion")
-			return
-		}
-	}
-	if err = q.AuthorizeDocumentTransition(r.Context(), uuidToString(doc.ID)); err != nil {
-		writeError(w, 500, "failed to authorize transition")
-		return
-	}
-	updated, err := q.TransitionDocument(r.Context(), db.TransitionDocumentParams{ID: doc.ID, WorkspaceID: doc.WorkspaceID, Status: status})
-	if err != nil {
-		writeError(w, 500, "failed to transition document")
-		return
-	}
-	ingestion := "not_requested"
-	if req.Action == "publish" {
-		ingestion = "pending"
-	}
-	err = q.RecordDocumentTransition(r.Context(), db.RecordDocumentTransitionParams{IssueID: doc.ID, WorkspaceID: doc.WorkspaceID, DocumentRevision: doc.DocumentRevision, ActorID: parseUUID(user), Action: req.Action, Body: doc.Description.String, IngestionState: ingestion})
-	if err != nil {
-		writeError(w, 500, "failed to record approval")
-		return
-	}
-	if err = tx.Commit(r.Context()); err != nil {
-		writeError(w, 500, "failed to commit transition")
-		return
-	}
-	h.respondDocument(w, r, updated, user)
+	writeErrorCode(w, 400, "document_sharing_required", "review has been removed; publish with explicit sharing settings")
 }
 
 func (h *Handler) respondDocument(w http.ResponseWriter, r *http.Request, doc db.Issue, user string) {

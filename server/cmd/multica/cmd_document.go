@@ -27,9 +27,8 @@ import (
 //     caller, who re-reads and merges.
 //   - The tree is its own structure: `list` prints it, `move` reparents and
 //     reorders inside it.
-//   - Review, publication and withdrawal are decisions a person signs. A run's
-//     task token is refused with a stable code, which documentStatusRequestError
-//     turns into a sentence an agent can act on.
+//   - Documents start private. The human owner manages audiences with share.
+//     Editors can read and restore history; sharing survives content edits.
 
 const (
 	documentKind = "doc"
@@ -100,8 +99,8 @@ When someone else saved first, nothing is written. Read the document again,
 merge your change into the current body, and save against the new revision —
 never retry with the new number alone, which would overwrite their work.
 
-Saving a changed body of a reviewing or published document returns it to draft:
-an approval covers the exact text that was approved.`,
+Saving a shared document preserves its audience. Use document versions to inspect
+history, and document restore to restore title and body as a new version.`,
 	Args: exactArgs(1),
 	RunE: runDocumentSave,
 }
@@ -118,18 +117,11 @@ project, and never one of the document's own descendants.`,
 }
 
 var documentStatusCmd = &cobra.Command{
-	Use:   "status <document> <draft|reviewing|published>",
-	Short: "Submit a document for review, publish it, or return it to draft (people only)",
-	Long: `Change a document's lifecycle status against the revision you read.
-
-  reviewing   any member submits the current revision for review
-  published   a workspace owner or admin publishes a revision that is in review
-  draft       returns the document to draft
-
-These are approvals recorded against the person who made them, so a run's task
-token cannot make them: an agent leaves a comment asking a member instead.`,
-	Args: exactArgs(2),
-	RunE: runDocumentStatus,
+	Use:        "status <document> <status>",
+	Short:      "Removed: use document share for explicit audience settings",
+	Deprecated: "review was removed; use document share",
+	Hidden:     true,
+	Args:       exactArgs(2), RunE: runDocumentStatus,
 }
 
 func init() {
