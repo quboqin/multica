@@ -295,3 +295,25 @@ when used. A conflict aborts the batch: read again and explicitly decide whether
 to retry. A response count confirms the committed number of rows. Delete
 requires `--yes` and keeps rows in the trash for 30 days. Restore works only
 within that retention window. No batch starts an agent run.
+
+## Formula fields
+
+A formula computes one read-only value per row on the server. Create or edit it
+with the same table-manager permission as other fields:
+
+```bash
+multica collection field add Orders --name Total --type formula --expression '{Quantity} * {Price}'
+multica collection field update Orders Total --expression 'ROUND({Quantity} * {Price}, 2)'
+```
+
+Use `{field name}` (or `{field UUID}`), `{title}` for the first column, double-quoted
+strings, and `==` for equality. References bind to IDs and survive renaming.
+Supported functions: IF, IFERROR, AND, OR, NOT, SUM, AVG, MIN, MAX, ROUND, ABS,
+CEIL, FLOOR, CONCAT, LEN, LOWER, UPPER, TRIM, ISBLANK, COALESCE, VALUE. SUM/AVG
+operate on arguments from the same row, not a whole column. Blank numeric inputs
+count as zero. Use VALUE for explicit text-to-number conversion.
+
+Record reads return formula results with other cells, including #REF!, #DIV/0!,
+#VALUE! or #NUM! for failing formulas. Never write or unset a formula cell, or
+include it in a CSV import. Change its inputs or its expression instead. Formula
+sort/filter/group, cross-record rollup and Excel formula translation are not supported.

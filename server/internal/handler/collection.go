@@ -130,6 +130,9 @@ func (h *Handler) GetCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	result := make([]map[string]any, 0, len(fields))
 	for _, field := range fields {
+		if field.Type == "formula" {
+			field.Config = formulaDisplayConfig(field.Config, fields)
+		}
 		result = append(result, collectionFieldResponse(field))
 	}
 	writeJSON(w, 200, map[string]any{"collection": collection, "fields": result, "capabilities": map[string]any{"layouts": []string{"table", "calendar", "gallery"}, "side_effects": false, "max_page_size": 100}})
@@ -165,7 +168,7 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 	var config []byte
 	if req.Type == fields.TypeRelation {
 		config, err = h.relationFieldConfig(r.Context(), collection, req.Config)
-	} else {
+	} else if req.Type != fields.TypeFormula {
 		config, err = fields.ValidateConfig(req.Type, req.Config, validateLabelName, normalizeColor)
 	}
 	if err != nil {
@@ -191,6 +194,13 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 	if len(catalog) >= 50 {
 		writeError(w, 400, "a collection may have at most 50 fields")
 		return
+	}
+	if req.Type == fields.TypeFormula {
+		config, err = validateFormulaConfig(catalog, collection, "new", req.Config)
+		if err != nil {
+			writeError(w, 400, err.Error())
+			return
+		}
 	}
 	field, err := q.CreateCollectionField(r.Context(), db.CreateCollectionFieldParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, Name: name, Type: req.Type, Config: config, Position: float64(len(catalog))})
 	if err != nil {
@@ -278,6 +288,10 @@ func (h *Handler) SetCollectionRecordField(w http.ResponseWriter, r *http.Reques
 	}
 	// Clearing takes the same path as setting, so relations are turned away
 	// before either: their cells are edges, not entries in the value bag.
+	if definition.Type == fields.TypeFormula {
+		writeError(w, 400, "formula fields are read-only")
+		return
+	}
 	if definition.Type == fields.TypeRelation {
 		writeError(w, 400, "a relation field is edited through record links, not as a value")
 		return
@@ -326,6 +340,9 @@ func (h *Handler) SetCollectionRecordField(w http.ResponseWriter, r *http.Reques
 }
 func (h *Handler) respondCollectionRecord(w http.ResponseWriter, r *http.Request, record db.Record, status int) {
 	response := collectionRecordResponse(record)
+	if err := h.attachFormulaValues(r.Context(), h.Queries, record.WorkspaceID, record.CollectionID, []map[string]any{response}); err != nil {
+		slog.Warn("read formula values failed", "error", err)
+	}
 	// The write has already happened, so a failed link read must not turn it
 	// into an error. The payload goes out without "links" and the client's next
 	// read brings them back.
@@ -553,6 +570,10 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 		encoded := base64.RawURLEncoding.EncodeToString(raw)
 		next = &encoded
 	}
+	if err := h.attachFormulaValues(r.Context(), h.Queries.WithTx(tx), collection.WorkspaceID, collection.ID, records); err != nil {
+		writeError(w, 500, "failed to evaluate formulas")
+		return
+	}
 	writeJSON(w, 200, map[string]any{"records": records, "total": total, "groups": groups, "next_cursor": next})
 }
 
@@ -573,6 +594,10 @@ func (h *Handler) collectionSortExpression(w http.ResponseWriter, r *http.Reques
 	def, err := h.Queries.GetCollectionField(r.Context(), db.GetCollectionFieldParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
 	if err != nil {
 		writeError(w, 400, "sort_by must name a field")
+		return "", false
+	}
+	if def.Type == fields.TypeFormula {
+		writeError(w, 400, "formula fields do not support sorting yet")
 		return "", false
 	}
 	key := add(uuidToString(id))

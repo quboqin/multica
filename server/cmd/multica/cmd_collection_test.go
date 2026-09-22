@@ -265,6 +265,11 @@ func TestRunCollectionFieldAddBuildsTheConfigForItsType(t *testing.T) {
 			flags: []string{"name", "Seats", "type", "number"},
 			want:  map[string]any{"name": "Seats", "type": "number"},
 		},
+		{
+			name:  "a formula sends its expression",
+			flags: []string{"name", "Double", "type", "formula", "expression", "{Seats} * 2"},
+			want:  map[string]any{"name": "Double", "type": "formula", "config": map[string]any{"formula": map[string]any{"expression": "{Seats} * 2"}}},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newCortexTestServer(t, func(req cortexRequest) (int, any) {
@@ -411,4 +416,38 @@ func jsonEqual(a, b any) bool {
 	left, _ := json.Marshal(a)
 	right, _ := json.Marshal(b)
 	return string(left) == string(right)
+}
+
+func TestCollectionFormulaCLIUpdateAndErrors(t *testing.T) {
+	formula := collectionFieldDTO{ID: testTagsID, Name: "Total", Type: "formula"}
+	if err := json.Unmarshal([]byte(`{"expression":"{Seats} * 2","bindings":{"Seats":"`+testSeatsID+`"}}`), &formula.Config.Formula); err != nil {
+		t.Fatal(err)
+	}
+	srv := newCortexTestServer(t, func(req cortexRequest) (int, any) {
+		if req.Method == http.MethodGet && req.Path == "/api/collections/"+testRequestsID {
+			detail := testRequestsDetail()
+			detail.Fields = append(detail.Fields, formula)
+			return 200, detail
+		}
+		if req.Method == http.MethodPatch {
+			return 200, formula
+		}
+		return requestsCatalog(req)
+	})
+	cmd := testCmdLike(t, collectionFieldUpdateCmd, "expression", "ROUND({Seats} / 3, 2)", "output", "json")
+	if _, err := captureStdout(t, func() error { return runCollectionFieldUpdate(cmd, []string{"Requests", "Total"}) }); err != nil {
+		t.Fatal(err)
+	}
+	writes := srv.writes()
+	if len(writes) != 1 {
+		t.Fatal(writes)
+	}
+	cfg := writes[0].Body["config"].(map[string]any)["formula"].(map[string]any)
+	if cfg["expression"] != "ROUND({Seats} / 3, 2)" || cfg["bindings"].(map[string]any)["Seats"] != testSeatsID {
+		t.Fatal(cfg)
+	}
+	rows := buildRecordRows([]collectionFieldDTO{formula}, recordDTO{FormulaErrors: map[string]string{testTagsID: "#REF!"}}, nil)
+	if len(rows) != 1 || rows[0].Display != "#REF!" {
+		t.Fatal(rows)
+	}
 }

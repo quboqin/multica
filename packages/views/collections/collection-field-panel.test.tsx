@@ -37,6 +37,55 @@ function commandsWith(
 afterEach(cleanup);
 
 describe("field panel", () => {
+  it("creates a formula with field references and preserves the draft on validation errors", async () => {
+    const user = userEvent.setup();
+    const commands = commandsWith();
+    vi.mocked(commands.createField.mutateAsync).mockRejectedValueOnce(
+      new Error("unknown or archived field"),
+    );
+    const onOpenChange = vi.fn();
+    const quantity: CollectionField = {
+      id: "quantity",
+      name: "Quantity",
+      type: "number",
+      position: 0,
+      config: { options: [] },
+    };
+    renderWithI18n(
+      <CollectionFieldPanel
+        open
+        anchor={null}
+        target={{ kind: "new", type: "formula" }}
+        fields={[quantity]}
+        fieldCount={1}
+        commands={commands}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    await user.type(screen.getByLabelText("Name"), "Total");
+    expect(screen.getByRole("button", { name: "Create field" })).toBeDisabled();
+    await user.click(
+      screen.getByRole("button", { name: "Quantity" }),
+    );
+    expect(screen.getByLabelText("Expression")).toHaveValue("{Quantity}");
+    fireEvent.change(screen.getByLabelText("Expression"), {
+      target: { value: "{Quantity} * 10" },
+    });
+    await user.click(screen.getByRole("button", { name: "Create field" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "unknown or archived field",
+    );
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Expression")).toHaveValue("{Quantity} * 10");
+    await user.click(screen.getByRole("button", { name: "Create field" }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(commands.createField.mutateAsync).toHaveBeenLastCalledWith({
+      name: "Total",
+      type: "formula",
+      config: { formula: { expression: "{Quantity} * 10" } },
+    });
+  });
+
   it("creates a select field with its options from one panel", async () => {
     const user = userEvent.setup();
     const commands = commandsWith();

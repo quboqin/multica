@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
+	"github.com/multica-ai/multica/server/internal/formula"
 	"net/url"
 	"sort"
 	"strings"
@@ -37,11 +38,13 @@ type PropertyConfig struct {
 	// Relation is set only on collection relation fields. Issue properties
 	// never carry it: their type whitelist has no relation.
 	Relation *RelationConfig `json:"relation,omitempty"`
+	Formula  *formula.Config `json:"formula,omitempty"`
 }
 
 // TypeRelation is the collection-only field type whose values are edges in
 // record_link rather than entries in a record's value bag.
 const TypeRelation = "relation"
+const TypeFormula = "formula"
 
 // Relation targets, stored as record_link.to_type.
 const (
@@ -68,6 +71,9 @@ func ParseRelationConfig(raw []byte) (RelationConfig, bool) {
 // ValidateRelationConfig canonicalizes a new relation field's target. Whether
 // the named collection exists is the caller's check; this one is syntax only.
 func ValidateRelationConfig(cfg *PropertyConfig) (RelationConfig, error) {
+	if cfg != nil && cfg.Formula != nil {
+		return RelationConfig{}, errors.New("relation fields do not accept a formula")
+	}
 	if cfg == nil || cfg.Relation == nil {
 		return RelationConfig{}, errors.New("relation fields require a target: config.relation.to_type must be \"issue\" or \"record\"")
 	}
@@ -102,6 +108,9 @@ func parsePropertyConfig(raw []byte) PropertyConfig {
 }
 
 func ValidateConfig(propType string, cfg *PropertyConfig, validateLabelName func(string) (string, error), normalizeColor func(string) (string, error)) ([]byte, error) {
+	if cfg != nil && cfg.Formula != nil {
+		return nil, fmt.Errorf("type %q does not accept a formula", propType)
+	}
 	if cfg != nil && cfg.Relation != nil {
 		return nil, fmt.Errorf("type %q does not accept a relation target", propType)
 	}
@@ -367,6 +376,8 @@ func ValidateValue(def Definition, raw json.RawMessage) ([]byte, error) {
 		// A relation has no entry in the value bag; its edges have their own
 		// write path and their own table.
 		return nil, errors.New("a relation field is edited through record links, not as a value")
+	case TypeFormula:
+		return nil, errors.New("formula fields are read-only")
 	default:
 		return nil, fmt.Errorf("unsupported property type %q", def.Type)
 	}

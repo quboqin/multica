@@ -197,6 +197,13 @@ func (h *Handler) UpdateCollectionField(w http.ResponseWriter, r *http.Request) 
 	}
 	var nextConfig []byte
 	switch {
+	case req.Config != nil && targetType == fields.TypeFormula:
+		catalog, loadErr := q.ListCollectionFields(r.Context(), db.ListCollectionFieldsParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID})
+		if loadErr != nil {
+			writeError(w, 500, "failed to read fields")
+			return
+		}
+		nextConfig, err = validateFormulaConfig(catalog, collection, uuidToString(fieldID), req.Config)
 	case req.Config != nil:
 		nextConfig, err = fields.ValidateConfig(targetType, req.Config, validateLabelName, normalizeColor)
 	case targetType != existing.Type:
@@ -304,6 +311,10 @@ func (h *Handler) ListCollectionTrash(w http.ResponseWriter, r *http.Request) {
 		response["deleted_at"] = timestampToString(record.DeletedAt)
 		out = append(out, response)
 	}
+	if err := h.attachFormulaValues(r.Context(), h.Queries, collection.WorkspaceID, collection.ID, out); err != nil {
+		writeError(w, 500, "failed to evaluate formulas")
+		return
+	}
 	writeJSON(w, 200, map[string]any{"records": out, "total": count, "retention_days": 30})
 }
 
@@ -312,9 +323,6 @@ func (h *Handler) ListCollectionTrash(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) initialRecordFields(w http.ResponseWriter, r *http.Request, collection db.Collection, raw map[string]json.RawMessage) ([]byte, bool) {
 	values := map[string]json.RawMessage{}
 	for key, value := range raw {
-		if string(value) == "null" {
-			continue
-		}
 		fieldID, ok := parseUUIDOrBadRequest(w, key, "field_id")
 		if !ok {
 			return nil, false
@@ -323,6 +331,13 @@ func (h *Handler) initialRecordFields(w http.ResponseWriter, r *http.Request, co
 		if err != nil {
 			writeError(w, 400, "field not found")
 			return nil, false
+		}
+		if definition.Type == fields.TypeFormula {
+			writeError(w, 400, "formula fields are read-only")
+			return nil, false
+		}
+		if string(value) == "null" {
+			continue
 		}
 		stored, err := fields.ValidateValue(fields.Definition{Type: definition.Type, Config: definition.Config}, value)
 		if err != nil {

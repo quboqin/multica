@@ -7,6 +7,7 @@ import {
   CheckSquare,
   CircleDot,
   Hash,
+  Sigma,
   Link2,
   ListChecks,
   Type,
@@ -35,12 +36,13 @@ export const ISSUE_PROPERTY_QUOTA = 20;
 /** A relation's cells are links to tasks or to another table's records. */
 export const RELATION_TYPE = "relation";
 /**
- * Types a table field can have: the task-property catalog plus relation, which
- * only tables have.
+ * Types a table field can have: the task-property catalog plus the
+ * collection-only relation and formula types.
  */
 export const COLLECTION_FIELD_TYPES: readonly string[] = [
   ...ISSUE_PROPERTY_TYPES,
   RELATION_TYPE,
+  "formula",
 ];
 
 const TYPE_ICONS: Record<string, LucideIcon> = {
@@ -54,6 +56,7 @@ const TYPE_ICONS: Record<string, LucideIcon> = {
   actor: AtSign,
   multi_actor: Users,
   relation: ArrowUpRight,
+  formula: Sigma,
 };
 
 export function FieldTypeIcon({
@@ -72,9 +75,10 @@ export function FieldTypeIcon({
   );
 }
 
-/** Name of a field type; relation is the one the task-property catalog lacks. */
+/** Field type labels, including types unavailable to task properties. */
 export function FieldTypeLabel({ type }: { type: string }) {
   const { t } = useT("issues");
+  if (type === "formula") return <>{t(($) => $.cortex_formula.type)}</>;
   if (type === RELATION_TYPE) return <>{t(($) => $.cortex_table.type_relation)}</>;
   return <PropertyTypeLabel type={type} />;
 }
@@ -89,11 +93,11 @@ export function relatesToTasks(field: CollectionField): boolean {
 }
 
 /**
- * Relation cells are not sortable, groupable or filterable yet: their values
- * live in their own table, outside the record's value bag the queries read.
+ * Relation and formula cells are excluded from scalar query controls:
+ * their values live outside the persisted record value bag.
  */
 export function fieldIsQueryable(field: CollectionField): boolean {
-  return !isRelation(field);
+  return !isRelation(field) && field.type !== "formula";
 }
 
 const NO_LINKS: RecordLink[] = [];

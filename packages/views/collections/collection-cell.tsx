@@ -9,7 +9,7 @@ import type { IssuePropertyValue } from "@multica/core/types";
 import { formatDateOnly } from "@multica/core/issues/date";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { cn } from "@multica/ui/lib/utils";
-import { useLocale } from "../i18n";
+import { useLocale, useT } from "../i18n";
 import { ActorPropertyDisplay } from "../issues/components/pickers/actor-property-picker";
 import { CustomPropertyValueInput } from "../issues/components/pickers/custom-property-picker";
 import {
@@ -38,7 +38,11 @@ export function CollectionValue({
   switch (field.type) {
     case "select": {
       const option = field.config.options.find((item) => item.id === value);
-      return option ? <OptionChip name={option.name} color={option.color} /> : empty;
+      return option ? (
+        <OptionChip name={option.name} color={option.color} />
+      ) : (
+        empty
+      );
     }
     case "multi_select": {
       const ids = Array.isArray(value) ? value : [];
@@ -49,7 +53,11 @@ export function CollectionValue({
       return (
         <span className="flex min-w-0 flex-wrap items-center gap-1">
           {options.map((option) => (
-            <OptionChip key={option.id} name={option.name} color={option.color} />
+            <OptionChip
+              key={option.id}
+              name={option.name}
+              color={option.color}
+            />
           ))}
         </span>
       );
@@ -62,7 +70,11 @@ export function CollectionValue({
         <span className="tabular-nums">
           {typeof value === "string"
             ? compact
-              ? formatDateOnly(value, { month: "short", day: "numeric" }, locale)
+              ? formatDateOnly(
+                  value,
+                  { month: "short", day: "numeric" },
+                  locale,
+                )
               : value
             : String(value)}
         </span>
@@ -99,10 +111,18 @@ export function RecordValue({
   field: CollectionField;
   compact?: boolean;
 }) {
+  if (field.type === "formula")
+    return <FormulaValue record={record} field={field} compact={compact} />;
   if (isRelation(field))
-    return <RelationChips links={recordLinks(record, field)} compact={compact} />;
+    return (
+      <RelationChips links={recordLinks(record, field)} compact={compact} />
+    );
   return (
-    <CollectionValue field={field} value={recordValue(record, field)} compact={compact} />
+    <CollectionValue
+      field={field}
+      value={recordValue(record, field)}
+      compact={compact}
+    />
   );
 }
 
@@ -111,6 +131,7 @@ export function hasRecordValue(
   record: CollectionRecord,
   field: CollectionField,
 ): boolean {
+  if (record.formula_errors?.[field.id]) return true;
   return isRelation(field)
     ? recordLinks(record, field).length > 0
     : recordValue(record, field) !== undefined;
@@ -119,7 +140,11 @@ export function hasRecordValue(
 /** How a relation cell writes: one edge at a time, never as a value. */
 export interface RelationActions {
   link: (recordId: string, fieldId: string, toId: string) => Promise<unknown>;
-  unlink: (recordId: string, fieldId: string, linkId: string) => Promise<unknown>;
+  unlink: (
+    recordId: string,
+    fieldId: string,
+    linkId: string,
+  ) => Promise<unknown>;
 }
 
 /**
@@ -150,6 +175,18 @@ export function CollectionFieldEditor({
 }) {
   const value = recordValue(record, field);
   const label = `${field.name}: ${record.title}`;
+  if (field.type === "formula")
+    return (
+      <div
+        aria-label={label}
+        className={cn(
+          "flex h-full min-h-8 min-w-0 items-center px-2 text-label",
+          className,
+        )}
+      >
+        <FormulaValue record={record} field={field} />
+      </div>
+    );
   if (isRelation(field)) {
     const chips = <RelationChips links={recordLinks(record, field)} />;
     if (readOnly || !relation)
@@ -217,6 +254,46 @@ export function CollectionFieldEditor({
           )}
         />
       }
+    />
+  );
+}
+
+/** Formula errors remain visible in every layout and the record panel. */
+function FormulaValue({
+  record,
+  field,
+  compact = false,
+}: {
+  record: CollectionRecord;
+  field: CollectionField;
+  compact?: boolean;
+}) {
+  const { t } = useT("issues");
+  const error = record.formula_errors?.[field.id];
+  if (error) {
+    const message =
+      error === "#REF!"
+        ? t(($) => $.cortex_formula.error_ref)
+        : error === "#DIV/0!"
+          ? t(($) => $.cortex_formula.error_div)
+          : error === "#NUM!"
+            ? t(($) => $.cortex_formula.error_num)
+            : t(($) => $.cortex_formula.error_value);
+    return (
+      <span
+        className="text-destructive"
+        title={message}
+        aria-label={`${error}: ${message}`}
+      >
+        {error}
+      </span>
+    );
+  }
+  return (
+    <CollectionValue
+      field={field}
+      value={recordValue(record, field)}
+      compact={compact}
     />
   );
 }

@@ -53,6 +53,10 @@ type collectionFieldDTO struct {
 	Config   struct {
 		Options  []propertyOptionDTO    `json:"options,omitempty"`
 		Relation *collectionRelationDTO `json:"relation,omitempty"`
+		Formula  *struct {
+			Expression string            `json:"expression"`
+			Bindings   map[string]string `json:"bindings,omitempty"`
+		} `json:"formula,omitempty"`
 	} `json:"config"`
 }
 
@@ -86,7 +90,7 @@ const (
 	collectionSchemaForbiddenCode = "collection_schema_forbidden"
 )
 
-var collectionFieldTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", collectionRelationType}
+var collectionFieldTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", collectionRelationType, "formula"}
 
 var collectionCmd = &cobra.Command{
 	Use:   "collection",
@@ -161,7 +165,7 @@ var collectionFieldAddCmd = &cobra.Command{
 	Use:   "add <table>",
 	Short: "Add a field (the table's creator, or a workspace owner/admin)",
 	Long: `Add a field. Types: text, number, select, multi_select, date, checkbox, url,
-actor, multi_actor, relation. A table holds at most 50 fields.
+actor, multi_actor, relation, formula. A table holds at most 50 fields.
 
 Select types take repeatable --option flags (the ":#rrggbb" color is optional):
   multica collection field add Customers --name Stage --type select \
@@ -237,6 +241,7 @@ func init() {
 	collectionFieldAddCmd.Flags().String("name", "", "Field name (required)")
 	collectionFieldAddCmd.Flags().String("type", "", "Field type: "+strings.Join(collectionFieldTypes, ", ")+" (required)")
 	collectionFieldAddCmd.Flags().StringArray("option", nil, `Select option as "Name" or "Name:#rrggbb" (repeatable; select types only)`)
+	collectionFieldAddCmd.Flags().String("expression", "", `Formula expression, e.g. "{Quantity} * {Price}" (formula type only)`)
 	collectionFieldAddCmd.Flags().String("relation-to", "", `Relation target: "issues", or a table name or id (relation type only)`)
 
 	collectionFieldUpdateCmd.Flags().String("output", "table", "Output format: table or json")
@@ -244,6 +249,7 @@ func init() {
 	collectionFieldUpdateCmd.Flags().String("type", "", "Convert to this type (safe conversions only)")
 	collectionFieldUpdateCmd.Flags().StringArray("add-option", nil, `Option to append as "Name" or "Name:#rrggbb" (repeatable); existing options and row values are kept`)
 	collectionFieldUpdateCmd.Flags().StringArray("option", nil, `Replacement option list as "Name" or "Name:#rrggbb" (repeatable); an option left out is cleared from every row`)
+	collectionFieldUpdateCmd.Flags().String("expression", "", "New formula expression")
 	collectionFieldUpdateCmd.Flags().Float64("position", 0, "New position among the table's fields")
 
 	collectionFieldArchiveCmd.Flags().String("output", "table", "Output format: table or json")
@@ -708,6 +714,16 @@ func runCollectionFieldAdd(cmd *cobra.Command, args []string) error {
 	if fieldType == "" {
 		return fmt.Errorf("--type is required; one of %s", strings.Join(collectionFieldTypes, ", "))
 	}
+	expression, _ := cmd.Flags().GetString("expression")
+	if fieldType == "formula" && strings.TrimSpace(expression) == "" {
+		return fmt.Errorf("--expression is required for a formula field")
+	}
+	if fieldType != "formula" && cmd.Flags().Changed("expression") {
+		return fmt.Errorf("--expression only applies to formula fields")
+	}
+	if fieldType == "formula" && (cmd.Flags().Changed("option") || cmd.Flags().Changed("relation-to")) {
+		return fmt.Errorf("formula fields cannot have options or relation targets")
+	}
 	optionFlags, _ := cmd.Flags().GetStringArray("option")
 	relationTo, _ := cmd.Flags().GetString("relation-to")
 	if fieldType == collectionRelationType && relationTo == "" {
@@ -730,6 +746,8 @@ func runCollectionFieldAdd(cmd *cobra.Command, args []string) error {
 	}
 	body := map[string]any{"name": name, "type": fieldType}
 	switch {
+	case fieldType == "formula":
+		body["config"] = map[string]any{"formula": map[string]any{"expression": expression}}
 	case fieldType == collectionRelationType:
 		relation := map[string]any{"to_type": "issue"}
 		if !strings.EqualFold(relationTo, "issues") && !strings.EqualFold(relationTo, "issue") {
@@ -791,12 +809,26 @@ func runCollectionFieldUpdate(cmd *cobra.Command, args []string) error {
 		}
 		body["config"] = map[string]any{"options": options}
 	}
+	if cmd.Flags().Changed("expression") {
+		if field.Type != "formula" {
+			return fmt.Errorf("--expression only applies to formula fields")
+		}
+		if cmd.Flags().Changed("option") || cmd.Flags().Changed("add-option") {
+			return fmt.Errorf("formula fields cannot have options")
+		}
+		expression, _ := cmd.Flags().GetString("expression")
+		config := map[string]any{"expression": expression}
+		if field.Config.Formula != nil {
+			config["bindings"] = field.Config.Formula.Bindings
+		}
+		body["config"] = map[string]any{"formula": config}
+	}
 	if cmd.Flags().Changed("position") {
 		position, _ := cmd.Flags().GetFloat64("position")
 		body["position"] = position
 	}
 	if len(body) == 0 {
-		return fmt.Errorf("nothing to update; pass --name, --type, --add-option, --option, or --position")
+		return fmt.Errorf("nothing to update; pass --name, --type, --expression, --add-option, --option, or --position")
 	}
 	var updated collectionFieldDTO
 	path := "/api/collections/" + detail.Collection.ID + "/fields/" + field.ID

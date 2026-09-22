@@ -44,15 +44,16 @@ type recordLinkDTO struct {
 }
 
 type recordDTO struct {
-	ID           string                     `json:"id"`
-	CollectionID string                     `json:"collection_id"`
-	Title        string                     `json:"title"`
-	Fields       map[string]any             `json:"fields"`
-	Links        map[string][]recordLinkDTO `json:"links"`
-	Revision     int64                      `json:"revision"`
-	CreatedAt    string                     `json:"created_at"`
-	UpdatedAt    string                     `json:"updated_at"`
-	DeletedAt    string                     `json:"deleted_at,omitempty"`
+	FormulaErrors map[string]string          `json:"formula_errors,omitempty"`
+	ID            string                     `json:"id"`
+	CollectionID  string                     `json:"collection_id"`
+	Title         string                     `json:"title"`
+	Fields        map[string]any             `json:"fields"`
+	Links         map[string][]recordLinkDTO `json:"links"`
+	Revision      int64                      `json:"revision"`
+	CreatedAt     string                     `json:"created_at"`
+	UpdatedAt     string                     `json:"updated_at"`
+	DeletedAt     string                     `json:"deleted_at,omitempty"`
 }
 
 type recordPageDTO struct {
@@ -380,6 +381,10 @@ func recordLinkLabel(link recordLinkDTO) string {
 func buildRecordRows(fields []collectionFieldDTO, record recordDTO, actorNames map[string]string) []recordFieldRow {
 	rows := make([]recordFieldRow, 0, len(fields))
 	for _, field := range fields {
+		if message := record.FormulaErrors[field.ID]; message != "" {
+			rows = append(rows, recordFieldRow{FieldID: field.ID, Name: field.Name, Type: field.Type, Value: message, Display: message})
+			continue
+		}
 		if field.isRelation() {
 			links := record.Links[field.ID]
 			if len(links) == 0 {
@@ -701,6 +706,9 @@ func encodeRecordCell(ctx context.Context, client *cli.APIClient, directory *mem
 	if err != nil {
 		return collectionFieldDTO{}, nil, err
 	}
+	if field.Type == "formula" {
+		return collectionFieldDTO{}, nil, fmt.Errorf("formula field %q is read-only", field.Name)
+	}
 	if field.isRelation() {
 		return collectionFieldDTO{}, nil, fmt.Errorf("--%s %s: a relation cell holds links, not a value; use `multica record link` / `multica record unlink`", flag, field.Name)
 	}
@@ -886,6 +894,9 @@ func runRecordUpdate(cmd *cobra.Command, args []string) error {
 		field, err := resolveCollectionFieldRef(detail, ref)
 		if err != nil {
 			return err
+		}
+		if field.Type == "formula" {
+			return fmt.Errorf("formula field %q is read-only", field.Name)
 		}
 		if field.isRelation() {
 			return fmt.Errorf("--unset %s: a relation cell holds links; remove them with `multica record unlink`", field.Name)

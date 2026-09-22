@@ -142,7 +142,7 @@ export function CollectionBulkTools({
               const header = [
                 "title",
                 ...fields
-                  .filter((f) => f.type !== "relation")
+                  .filter((f) => f.type !== "relation" && f.type !== "formula")
                   .map((f) => f.name),
               ]
                 .map((s) => '"' + s.replaceAll('"', '""') + '"')
@@ -208,7 +208,7 @@ export function CollectionBulkTools({
           >
             <option value="">{t(($) => $.cortex_bulk.field)}</option>
             {fields
-              .filter((f) => f.type !== "relation")
+              .filter((f) => f.type !== "relation" && f.type !== "formula")
               .map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}

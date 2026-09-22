@@ -562,7 +562,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
   <tbody>
     <tr><td><strong>D-1</strong></td><td>多维表格的行是<strong>独立 record</strong>（抽 Collection 层），不是 issue</td><td>表格行没有评论区、没有 agent 可寻址性；需要讨论的行经 relation 桥接到 issue。新增独立集合层、权限与迁移工作，须按 §12 重新估算，不能沿用补布局的工期</td></tr>
     <tr><td><strong>D-2</strong></td><td><strong>OpenViking 作为待 PoC 确认的默认自托管后端</strong></td><td>选定版本的许可、隔离能力与部署成本必须重新核验；历史单用户定位记录尚未复核（<code>Q-1</code>）</td></tr>
-    <tr><td><strong>D-3</strong></td><td><strong>rollup / formula 推二期</strong>，一期只做 relation</td><td><code>record_link</code> 一期即显式落表，二期计算层不必改表结构</td></tr>
+    <tr><td><strong>D-3</strong></td><td><strong>rollup 推二期</strong>；公式字段按 2026-09-22 用户要求提前交付</td><td><code>record_link</code> 一期即显式落表，二期计算层不必改表结构</td></tr>
   </tbody>
 </table></div>
 
@@ -607,7 +607,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
   <tbody>
     <tr><td>NG-1</td><td>不自建 IM / 即时通讯</td><td>五套 IM 集成已在生产代码中，重复建设无收益</td></tr>
     <tr><td>NG-2</td><td>不做实时协同编辑（一期）</td><td>见 <code>A-1</code>；真要做直接上 Yjs，不自研 OT</td></tr>
-    <tr><td>NG-3</td><td>不做 rollup / formula（一期）</td><td><code>D-3</code>；计算层不是存储层，表结构预留即可</td></tr>
+    <tr><td>NG-3</td><td>不做 rollup（一期）；同行公式已于 2026-09-22 提前实现</td><td><code>D-3</code>；计算层不是存储层，表结构预留即可</td></tr>
     <tr><td>NG-4</td><td>不自建向量库 / embedding 服务</td><td>自研短期打不过成熟方案，且不是差异化所在</td></tr>
     <tr><td>NG-5</td><td>不引入 BPMN / 独立工作流执行引擎</td><td>阶段屏障 + 依赖边 + 自定义状态已能表达绝大多数审批与评审流</td></tr>
     <tr><td>NG-6</td><td>不做无限画布 / 白板</td><td>与「知识与工作流」定位无关</td></tr>
@@ -700,7 +700,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td>视图：table / board / gantt / 泳道</td><td>✓</td><td>✓</td><td>✓</td><td>部分</td><td>✗</td><td><strong>✓ 已有</strong></td></tr>
     <tr><td>视图：calendar / gallery</td><td>✓</td><td>✓</td><td>✓</td><td>部分</td><td>✗</td><td>✓ P0</td></tr>
     <tr><td>relation 关联字段</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✗</td><td>✓ P0</td></tr>
-    <tr><td>rollup / formula</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✗</td><td>✗ <code>NG-3</code></td></tr>
+    <tr><td>rollup / formula</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td><td>✗</td><td>同行公式 ✓；rollup 待实现 <code>FR-02B</code></td></tr>
     <tr><td><strong>文档内嵌活视图</strong></td><td>✓</td><td>✓</td><td>有限</td><td>✗</td><td>✗</td><td><strong>✓ P0 核心差异化</strong></td></tr>
     <tr><td>任务系统一等公民</td><td>部分</td><td>✓</td><td>部分</td><td>✗</td><td>✗</td><td><strong>✓ 已有</strong></td></tr>
     <tr><td>可视化工作流编排</td><td>有限</td><td>✓</td><td>✓</td><td>有限</td><td>✗</td><td>✓ P1</td></tr>
@@ -789,7 +789,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td><strong>FR-028</strong></td><td><span class="pill bad">P0</span></td><td><code>relation</code> 字段：可指向另一个 collection 或<strong>指向 issue</strong>；关联边显式落表，支持反向引用展示</td><td>「需求池」一行可关联到实施它的 issue，并在 issue 侧看到反向引用</td></tr>
     <tr><td><strong>FR-029</strong></td><td><span class="pill">P1</span></td><td>表单视图：生成只写不读的表单入口，提交即建行</td><td>生成表单链接，按权限设置可提交，提交后新行出现在表中</td></tr>
     <tr><td><strong>FR-02A</strong></td><td><span class="pill">P1</span></td><td>行详情面板：点击行打开侧滑详情，字段纵向编辑</td><td>可编辑有写权限的字段，失败保留草稿；提供关联/新建任务出口。无评论区的说明仅在用户需要讨论或转换时呈现，不常驻重复说明</td></tr>
-    <tr><td><strong>FR-02B</strong></td><td><span class="pill">P2</span></td><td><code>rollup</code> / <code>formula</code> 字段类型</td><td>见 <code>D-3</code>；表结构已预留</td></tr>
+    <tr><td><strong>FR-02B</strong></td><td><span class="pill">P2</span></td><td><code>rollup</code> / <code>formula</code> 字段类型；同行公式按用户要求提前交付</td><td>公式支持字段引用、四则运算、条件与文本函数、依赖检查、只读结果和错误显示；Web / Desktop / CLI 共用服务端计算。rollup 与公式排序/筛选仍待实现。见 <a href="cortex-formulas.md">公式说明与验收</a></td></tr>
     <tr><td><strong>FR-02C</strong></td><td><span class="pill">P2</span></td><td>记录级 / 字段级权限</td><td>见 <code>A-2</code> / <code>NG-7</code></td></tr>
   </tbody>
 </table></div>
@@ -1335,6 +1335,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
 <tr><td>FR-022 ~ FR-024</td><td><span class="pill ok">已实现</span></td><td>每表独立字段目录（上限 50）、九类字段 + relation、安全类型转换、<code>record</code> 行（无编号 / status / assignee，软删除）</td><td>actor 是否开放 agent / squad 待 <code>Q-U3</code></td></tr>
 <tr><td>FR-025 CRUD 与批量</td><td><span class="pill ok">已实现</span></td><td>单行增删改、逐格原子写入与冲突检测、回收站 30 天内恢复；Excel / CSV 预览后原子创建新表、字段和记录；已有表 CSV 全量预校验与原子追加，最多 500 行批量编辑/删除/恢复。服务端 1 万行 × 20 字段与浏览器 1 万行导入、500 行修改/删除/恢复通过</td><td>用户验收待确认；见 <a href="cortex-p2a-development.md">P2a 验证记录</a></td></tr>
 <tr><td>FR-026 集合视图</td><td><span class="pill">部分</span></td><td>table / board / calendar / gallery；过滤、排序、分组、列显隐独立保存</td><td>list / gantt / swimlane 尚未接到集合数据源</td></tr>
+<tr><td>FR-02B 公式（2026-09-22）</td><td><span class="pill ok">同行公式已实现</span></td><td>只读公式字段、服务端表达式解释器、稳定字段引用、链式计算、循环检查与错误显示；CLI 支持 --expression</td><td>跨行/跨表 rollup、公式排序/筛选、Excel 公式转换未实现</td></tr>
 <tr><td>FR-027、FR-061 ~ FR-065、FR-064A</td><td><span class="pill ok">已实现</span></td><td><code>multica collection / record / document</code>、<code>issue records</code>、<code>issue search --kind</code>；按名称寻址与紧凑输出；稳定错误码；智能体按运行时主人的身份建表与管理字段，<code>--add-option</code> 安全追加选项；内置技能「文档」「表格」两篇参考；权限矩阵的服务端测试</td><td><code>FR-066</code> 的比较/关联过滤、关联排序、批量与 CSV 命令已补齐；mention 输出降级随 FR-031 留在 P2b</td></tr>
 <tr><td>FR-028 relation</td><td><span class="pill ok">已实现</span></td><td><code>record_link</code> 显式落表；关联任务 / 另一张表；失效关联保留并标记；任务侧与行侧反查；行详情「转为任务」</td><td>关联列的排序 / 过滤 / 分组；双向关联字段；批量删任务时的提示</td></tr>
 <tr><td>FR-029 表单视图</td><td><span class="pill bad">未开始</span></td><td>—</td><td>全部</td></tr>

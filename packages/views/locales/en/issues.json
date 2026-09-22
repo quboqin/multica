@@ -1291,5 +1291,17 @@
     "field_limit": "Keep at most 50 fields plus the title column; uncheck columns to skip them.",
     "create": "Create table",
     "creating": "Creating table…"
+  },
+  "cortex_formula": {
+    "type": "Formula",
+    "expression": "Expression",
+    "placeholder": "{Quantity} * {Price}",
+    "help": "Calculates each row automatically. Reference fields with {name}; use double quotes for text. Blank numbers count as 0. Results are read-only.",
+    "insert_field": "Insert field",
+    "functions": "Functions and examples",
+    "error_ref": "A referenced field is missing, archived or unsupported.",
+    "error_div": "Cannot divide by zero.",
+    "error_num": "The result is outside the supported number range.",
+    "error_value": "Check the input types and formula result length."
   }
 }

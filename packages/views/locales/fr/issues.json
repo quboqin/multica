@@ -1291,5 +1291,17 @@
     "field_limit": "Gardez au plus 50 champs et la colonne de titre. Décochez les colonnes à ignorer.",
     "create": "Créer la table",
     "creating": "Création…"
+  },
+  "cortex_formula": {
+    "type": "Formule",
+    "expression": "Expression",
+    "placeholder": "{Quantité} * {Prix}",
+    "help": "Calcul automatique par ligne. Référencez les champs avec {nom} et utilisez des guillemets doubles pour le texte. Les nombres vides valent 0. Résultats en lecture seule.",
+    "insert_field": "Insérer un champ",
+    "functions": "Fonctions et exemples",
+    "error_ref": "Un champ référencé est absent, archivé ou non pris en charge.",
+    "error_div": "Division par zéro impossible.",
+    "error_num": "Le résultat dépasse la plage numérique prise en charge.",
+    "error_value": "Vérifiez les types des entrées et la longueur du résultat."
   }
 }

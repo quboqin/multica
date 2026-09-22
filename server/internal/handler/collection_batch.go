@@ -210,6 +210,10 @@ func (h *Handler) BatchCollectionRecords(w http.ResponseWriter, r *http.Request)
 		}
 		for id, value := range req.Fields {
 			f, exists := defs[id]
+			if exists && f.Type == fields.TypeFormula {
+				writeError(w, 400, "formula fields are read-only")
+				return
+			}
 			if !exists || f.Type == fields.TypeRelation {
 				writeError(w, 400, "field not found or requires record links")
 				return
@@ -430,6 +434,10 @@ func (h *Handler) ImportCollectionCSV(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, "unknown or duplicate CSV column: "+header)
 			return
 		}
+		if def.Type == fields.TypeFormula {
+			writeError(w, 400, "formula fields are read-only; omit the CSV column: "+header)
+			return
+		}
 		seen[uuidToString(def.ID)] = true
 		columns[i] = def
 	}
@@ -539,6 +547,10 @@ func (h *Handler) collectionFilterPredicate(w http.ResponseWriter, r *http.Reque
 		def, err := h.Queries.GetCollectionField(r.Context(), db.GetCollectionFieldParams{WorkspaceID: c.WorkspaceID, CollectionID: c.ID, ID: id})
 		if err != nil {
 			writeError(w, 400, "filter field not found")
+			return "", false
+		}
+		if def.Type == fields.TypeFormula {
+			writeError(w, 400, "formula fields do not support filtering yet")
 			return "", false
 		}
 		if def.Type != fields.TypeRelation {

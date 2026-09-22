@@ -803,6 +803,7 @@ export function CollectionDetailPage({
         anchor={fieldPanel.anchor}
         target={fieldPanel.target}
         fieldCount={allFields.length}
+        fields={allFields}
         tables={tables}
         commands={commands}
       />

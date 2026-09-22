@@ -47,6 +47,13 @@ export interface RelationTable {
 /** The "link to" choice that means workspace tasks rather than a table. */
 const TASKS = "issue";
 
+// Formula function names are language-independent expression syntax.
+const FORMULA_FUNCTIONS = [
+  "IF", "IFERROR", "AND", "OR", "NOT", "SUM", "AVG", "MIN", "MAX", "ROUND",
+  "ABS", "CEIL", "FLOOR", "CONCAT", "LEN", "LOWER", "UPPER", "TRIM",
+  "ISBLANK", "COALESCE", "VALUE",
+];
+
 /** What the panel edits. */
 export type FieldPanelTarget =
   /** A new field; `type` preselects what the caller is missing. */
@@ -69,6 +76,7 @@ export function CollectionFieldPanel({
   anchor,
   target,
   fieldCount,
+  fields = [],
   tables = [],
   commands,
 }: {
@@ -77,6 +85,7 @@ export function CollectionFieldPanel({
   anchor: Element | null;
   target: FieldPanelTarget;
   fieldCount: number;
+  fields?: CollectionField[];
   /** Tables a relation field may point at, this one included. */
   tables?: RelationTable[];
   commands: CollectionCommands;
@@ -99,6 +108,7 @@ export function CollectionFieldPanel({
         <FieldForm
           target={target}
           fieldCount={fieldCount}
+          fields={fields}
           tables={tables}
           commands={commands}
           onClose={() => onOpenChange(false)}
@@ -111,12 +121,14 @@ export function CollectionFieldPanel({
 function FieldForm({
   target,
   fieldCount,
+  fields,
   tables,
   commands,
   onClose,
 }: {
   target: FieldPanelTarget;
   fieldCount: number;
+  fields: CollectionField[];
   tables: RelationTable[];
   commands: CollectionCommands;
   onClose: () => void;
@@ -149,6 +161,10 @@ function FieldForm({
     if (!relation || relation.to_type === TASKS) return TASKS;
     return relation.collection_id;
   });
+  const [expression, setExpression] = useState(
+    field?.config.formula?.expression ?? "",
+  );
+  const formulaInput = useRef<HTMLTextAreaElement>(null);
   const [error, setError] = useState<string | null>(null);
   const optionList = useRef<HTMLDivElement>(null);
 
@@ -166,7 +182,12 @@ function FieldForm({
     ...tables.map((table) => ({ value: table.id, name: table.name })),
     // The table an existing relation points at may since have been deleted.
     ...(linkTo !== TASKS && !tables.some((table) => table.id === linkTo)
-      ? [{ value: linkTo, name: t(($) => $.cortex_table.relation_table_deleted) }]
+      ? [
+          {
+            value: linkTo,
+            name: t(($) => $.cortex_table.relation_table_deleted),
+          },
+        ]
       : []),
   ].map((choice) => ({
     value: choice.value,
@@ -174,9 +195,15 @@ function FieldForm({
     label: (
       <>
         {choice.value === TASKS ? (
-          <ListTodo aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <ListTodo
+            aria-hidden
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
         ) : (
-          <Table2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+          <Table2
+            aria-hidden
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
         )}
         <span className="truncate">{choice.name}</span>
       </>
@@ -197,6 +224,7 @@ function FieldForm({
     // An empty title label is a valid choice: it restores the default.
     (isTitle || name.trim().length > 0) &&
     (!showOptions || valid.length > 0) &&
+    (type !== "formula" || !!expression.trim()) &&
     !pending &&
     !full;
 
@@ -206,22 +234,33 @@ function FieldForm({
       { name: "", color: presetColor(current.length) },
     ]);
     requestAnimationFrame(() => {
-      const inputs = optionList.current?.querySelectorAll<HTMLInputElement>("input");
+      const inputs =
+        optionList.current?.querySelectorAll<HTMLInputElement>("input");
       inputs?.[inputs.length - 1]?.focus();
     });
   };
   const submit = async () => {
     if (!canSubmit) return;
     setError(null);
-    const config = showOptions
-      ? {
-          options: valid.map((option) => ({
-            ...(option.id ? { id: option.id } : {}),
-            name: option.name.trim(),
-            color: option.color,
-          })),
-        }
-      : undefined;
+    const config =
+      type === "formula"
+        ? {
+            formula: {
+              expression: expression.trim(),
+              ...(field?.config.formula?.bindings
+                ? { bindings: field.config.formula.bindings }
+                : {}),
+            },
+          }
+        : showOptions
+          ? {
+              options: valid.map((option) => ({
+                ...(option.id ? { id: option.id } : {}),
+                name: option.name.trim(),
+                color: option.color,
+              })),
+            }
+          : undefined;
     const relation: CollectionFieldInput["config"] = showLinkTo
       ? {
           relation:
@@ -338,6 +377,94 @@ function FieldForm({
           </p>
         )}
       </div>
+      {type === "formula" && (
+        <div className="space-y-2">
+          <Label htmlFor="collection-formula">
+            {t(($) => $.cortex_formula.expression)}
+          </Label>
+          <textarea
+            ref={formulaInput}
+            id="collection-formula"
+            className="min-h-24 w-full resize-y rounded-md border bg-transparent px-3 py-2 font-mono text-label outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={expression}
+            maxLength={4096}
+            placeholder={t(($) => $.cortex_formula.placeholder)}
+            onChange={(event) => setExpression(event.target.value)}
+            aria-describedby="collection-formula-help"
+          />
+          <p
+            id="collection-formula-help"
+            className="text-caption text-muted-foreground"
+          >
+            {t(($) => $.cortex_formula.help)}
+          </p>
+          <div
+            role="group"
+            className="flex max-h-28 flex-wrap gap-1 overflow-y-auto"
+            aria-label={t(($) => $.cortex_formula.insert_field)}
+          >
+            {[
+              { id: "title", name: "title", type: "text" },
+              ...fields.filter(
+                (f) =>
+                  f.id !== field?.id &&
+                  [
+                    "text",
+                    "number",
+                    "checkbox",
+                    "date",
+                    "url",
+                    "select",
+                    "formula",
+                  ].includes(f.type),
+              ),
+            ].map((f) => (
+              <Button
+                key={f.id}
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  const reference =
+                    "{" +
+                    (f.name === "title" ? f.id : f.name)
+                      .replaceAll("\\", "\\\\")
+                      .replaceAll("}", "\\}") +
+                    "}";
+                  const start =
+                    formulaInput.current?.selectionStart ?? expression.length;
+                  const end = formulaInput.current?.selectionEnd ?? start;
+                  setExpression(
+                    expression.slice(0, start) +
+                      reference +
+                      expression.slice(end),
+                  );
+                  requestAnimationFrame(() => {
+                    formulaInput.current?.focus();
+                    formulaInput.current?.setSelectionRange(
+                      start + reference.length,
+                      start + reference.length,
+                    );
+                  });
+                }}
+              >
+                {f.name}
+              </Button>
+            ))}
+          </div>
+          <details className="text-caption text-muted-foreground">
+            <summary className="cursor-pointer">
+              {t(($) => $.cortex_formula.functions)}
+            </summary>
+            <p className="mt-1 break-words">
+              {FORMULA_FUNCTIONS.join(" · ")}
+            </p>
+            <pre className="mt-1 whitespace-pre-wrap">
+              {'IF({title} == "", 0, 1)\nROUND(10 / 3, 2)'}
+            </pre>
+          </details>
+        </div>
+      )}
       {showLinkTo && (
         <div className="space-y-1.5">
           <Label>{t(($) => $.cortex_table.relation_link_to)}</Label>
@@ -370,13 +497,18 @@ function FieldForm({
         <div className="space-y-1.5" ref={optionList}>
           <Label>{t(($) => $.cortex_table.options)}</Label>
           {options.map((option, index) => (
-            <div key={option.id ?? `new-${index}`} className="flex items-center gap-2">
+            <div
+              key={option.id ?? `new-${index}`}
+              className="flex items-center gap-2"
+            >
               <GripVertical className="size-4 shrink-0 text-muted-foreground/50" />
               <ColorPicker
                 value={option.color}
                 onChange={(color) =>
                   setOptions((current) =>
-                    current.map((item, i) => (i === index ? { ...item, color } : item)),
+                    current.map((item, i) =>
+                      i === index ? { ...item, color } : item,
+                    ),
                   )
                 }
                 trigger={
@@ -391,19 +523,27 @@ function FieldForm({
                 }
               />
               <Input
-                aria-label={t(($) => $.cortex_table.option_name, { index: index + 1 })}
+                aria-label={t(($) => $.cortex_table.option_name, {
+                  index: index + 1,
+                })}
                 className="h-8"
                 maxLength={32}
                 value={option.name}
                 onChange={(event) =>
                   setOptions((current) =>
                     current.map((item, i) =>
-                      i === index ? { ...item, name: event.target.value } : item,
+                      i === index
+                        ? { ...item, name: event.target.value }
+                        : item,
                     ),
                   )
                 }
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && index === options.length - 1 && option.name.trim()) {
+                  if (
+                    event.key === "Enter" &&
+                    index === options.length - 1 &&
+                    option.name.trim()
+                  ) {
                     event.preventDefault();
                     addOption();
                   }

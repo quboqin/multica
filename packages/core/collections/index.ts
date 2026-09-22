@@ -41,6 +41,16 @@ export const CollectionFieldSchema = z.object({
           }),
         )
         .default([]),
+      formula: z
+        .object({
+          expression: z.string(),
+          bindings: z
+            .record(z.string(), z.string())
+            .optional()
+            .catch(undefined),
+        })
+        .optional()
+        .catch(undefined),
       /** Set on relation fields only. */
       relation: RelationTargetSchema.optional().catch(undefined),
     })
@@ -70,6 +80,7 @@ export const CollectionRecordSchema = z.object({
   collection_id: z.string(),
   title: z.string(),
   fields: z.record(z.string(), z.unknown()).catch({}),
+  formula_errors: z.record(z.string(), z.string()).optional().catch(undefined),
   /** Relation cells by field id. Empty on servers that predate relations. */
   links: z.record(z.string(), z.array(RecordLinkSchema).catch([])).catch({}),
   revision: z.number().int().positive(),
@@ -137,14 +148,21 @@ export interface CollectionFieldInput {
   name: string;
   type: string;
   config?:
+    | { formula: { expression: string; bindings?: Record<string, string> } }
     | { options: { name: string; color: string }[] }
     /** Relation fields name their target once; it cannot change later. */
-    | { relation: { to_type: "issue" } | { to_type: "record"; collection_id: string } };
+    | {
+        relation:
+          | { to_type: "issue" }
+          | { to_type: "record"; collection_id: string };
+      };
 }
 export interface CollectionFieldPatch {
   name?: string;
   type?: string;
-  config?: { options: { id?: string; name: string; color: string }[] };
+  config?:
+    | { options: { id?: string; name: string; color: string }[] }
+    | { formula: { expression: string; bindings?: Record<string, string> } };
   position?: number;
   archived?: boolean;
 }
@@ -160,8 +178,13 @@ export const collectionKeys = {
 };
 export function collectionListOptions(wsId: string, archived = false) {
   return queryOptions({
-    queryKey: [...collectionKeys.all(wsId), "list", ...(archived ? ["archived"] : [])],
-    queryFn: ({ signal }) => api.listCollections({ workspaceId: wsId, signal, archived }),
+    queryKey: [
+      ...collectionKeys.all(wsId),
+      "list",
+      ...(archived ? ["archived"] : []),
+    ],
+    queryFn: ({ signal }) =>
+      api.listCollections({ workspaceId: wsId, signal, archived }),
     enabled: !!wsId,
   });
 }

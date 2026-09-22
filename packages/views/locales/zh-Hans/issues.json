@@ -1250,5 +1250,17 @@
     "field_limit": "最多保留 50 个字段和名称列，可取消勾选以跳过某列。",
     "create": "创建表格",
     "creating": "正在创建表格…"
+  },
+  "cortex_formula": {
+    "type": "公式",
+    "expression": "表达式",
+    "placeholder": "{数量} * {单价}",
+    "help": "每行自动计算。用 {字段名} 引用字段，用双引号表示文本。空数字按 0 计算，结果只读。",
+    "insert_field": "插入字段",
+    "functions": "函数与示例",
+    "error_ref": "引用的字段不存在、已归档或类型不受支持。",
+    "error_div": "除数不能为 0。",
+    "error_num": "结果超出支持的数值范围。",
+    "error_value": "请检查输入类型和公式结果长度。"
   }
 }

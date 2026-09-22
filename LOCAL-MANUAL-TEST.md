@@ -378,3 +378,9 @@ make down
 ```bash
 make destroy
 ```
+
+## 集合公式字段
+
+公式功能的操作步骤、示例与限制见 [公式说明与验收](apps/docs/handbook/cortex-formulas.md)。新增字段时选择“公式”，例如 `{数量} * {单价}`；公式结果只读。
+
+2026-09-22 自动验证：全项目 `pnpm typecheck`、`pnpm lint`（存在已有警告）、`make build` 通过；集合前端 46 项、核心集合/API 124 项、Go 公式/集合/属性/CLI 定向测试通过；Chromium 端到端验收通过。未运行全量 `make test` 和真实智能体运行。当前本地环境已加载公式代码，人工验收待确认。
