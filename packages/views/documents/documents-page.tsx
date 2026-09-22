@@ -7,6 +7,8 @@ import {
   FilePlus,
   FileText,
   MoreHorizontal,
+  Pin,
+  PinOff,
   Plus,
   Share2,
   Star,
@@ -30,6 +32,11 @@ import { DocumentSharing } from "./document-sharing";
 import { DocumentVersionPreview, useDocumentHistory } from "./document-history";
 import type { Issue } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -268,6 +275,37 @@ function DocumentView({ documentId }: { documentId: string }) {
             </span>
           )}
           {primaryAction}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  disabled={!issue}
+                  aria-label={t(($) =>
+                    actions.isPinned
+                      ? $.detail.unpin_tooltip
+                      : $.detail.pin_tooltip,
+                  )}
+                  aria-pressed={actions.isPinned}
+                  className={cn(
+                    "text-muted-foreground",
+                    actions.isPinned && "bg-accent text-foreground",
+                  )}
+                  onClick={actions.togglePin}
+                >
+                  {actions.isPinned ? <PinOff /> : <Pin />}
+                </Button>
+              }
+            />
+            <TooltipContent side="bottom">
+              {t(($) =>
+                actions.isPinned
+                  ? $.detail.unpin_tooltip
+                  : $.detail.pin_tooltip,
+              )}
+            </TooltipContent>
+          </Tooltip>
           <Button
             variant="ghost"
             size="sm"

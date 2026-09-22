@@ -12,12 +12,18 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { issueKeys } from "@multica/core/issues/queries";
 import { NavigationProvider } from "../../navigation/context";
 import type { NavigationAdapter } from "../../navigation/types";
 
 // Tiptap NodeView primitives can't be instantiated without a full editor.
 vi.mock("@tiptap/react", () => ({
   NodeViewWrapper: ({ children, ...rest }: any) => <span {...rest}>{children}</span>,
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "workspace-1",
 }));
 
 vi.mock("@multica/core/paths", () => ({
@@ -61,10 +67,18 @@ function renderMention(
   attrs: { type: string; id: string; label?: string },
   adapter: NavigationAdapter,
 ) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  queryClient.setQueryData(issueKeys.listSorted("workspace-1"), {
+    byStatus: { unstarted: { issues: [{ id: attrs.id, kind: "task" }], total: 1 } },
+  });
   return render(
-    <NavigationProvider value={adapter}>
-      <MentionView {...({ node: { attrs } } as any)} />
-    </NavigationProvider>,
+    <QueryClientProvider client={queryClient}>
+      <NavigationProvider value={adapter}>
+        <MentionView {...({ node: { attrs } } as any)} />
+      </NavigationProvider>
+    </QueryClientProvider>,
   );
 }
 
