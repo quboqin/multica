@@ -192,6 +192,35 @@ export class TestApiClient {
     try {const result=await client.query("INSERT INTO member (workspace_id,user_id,role) VALUES($1,$2,'member') RETURNING id",[workspaceId,userId]);this.createdMemberIds.push(result.rows[0].id);} finally {await client.end();}
   }
 
+  /** Create a project and register it for cleanup. */
+  async createProject(title: string, opts?: Record<string, unknown>) {
+    const res = await this.authedFetch("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ title, ...opts }),
+    });
+    if (!res.ok) {
+      throw new Error(`create project failed: ${res.status} ${await res.text()}`);
+    }
+    const project = await res.json();
+    this.createdProjectIds.push(project.id);
+    return project as { id: string; title: string; status: string };
+  }
+
+  async updateProject(id: string, updates: Record<string, unknown>) {
+    const res = await this.authedFetch(`/api/projects/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      throw new Error(`update project failed: ${res.status} ${await res.text()}`);
+    }
+    return res.json();
+  }
+
+  async deleteProject(id: string) {
+    await this.authedFetch(`/api/projects/${id}`, { method: "DELETE" });
+  }
+
   async createIssue(title: string, opts?: Record<string, unknown>) {
     const res = await this.authedFetch("/api/issues", {
       method: "POST",
@@ -202,13 +231,6 @@ export class TestApiClient {
     return issue;
   }
 
-  async createProject(title: string) {
-    const response = await this.authedFetch("/api/projects", {method: "POST", body: JSON.stringify({title})});
-    if (!response.ok) throw new Error(`Create project failed: ${response.status}`);
-    const project = await response.json();
-    this.createdProjectIds.push(project.id);
-    return project;
-  }
   trackCollection(id: string) { this.createdCollectionIds.push(id); }
 
   async createCollection(name:string) {
@@ -379,13 +401,17 @@ export class TestApiClient {
       }
     }
     this.createdIssueIds = [];
+    // Projects last: an issue delete leaves no project reference behind, and
+    // dropping the project first would strand the issues in the list.
     for (const id of this.createdProjectIds) {
-      const response = await this.authedFetch(`/api/projects/${id}`, {method: "DELETE"});
-      if (!response.ok && response.status !== 404) throw new Error(`Project cleanup failed: ${response.status}`);
+      try {
+        await this.deleteProject(id);
+      } catch {
+        /* ignore — may already be deleted */
+      }
     }
     this.createdProjectIds = [];
     if(this.createdMemberIds.length){const client=new pg.Client(DATABASE_URL);await client.connect();try {await client.query("DELETE FROM member WHERE id=ANY($1::uuid[])",[this.createdMemberIds]);this.createdMemberIds=[];}finally{await client.end();}}
-
   }
 
   getToken() {

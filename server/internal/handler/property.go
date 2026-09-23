@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/fields"
+	"github.com/multica-ai/multica/server/internal/issueproperty"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -259,65 +260,20 @@ func selectOptionsHint(cfg PropertyConfig) string {
 // Actor values (MUL-6286)
 // ---------------------------------------------------------------------------
 
-// actorPropertyKinds is the V1 value range for actor properties: workspace
-// members only. The issue assignee also accepts "agent" and "squad", but
-// neither belongs in a passive reference yet — an agent reference drags in the
-// whole agent-visibility question (private / non-allow-listed agents must not
-// become discoverable by id) for no demonstrated use case, and a squad is a
-// routing target rather than a person.
-//
-// The stored form is "<kind>:<uuid>", so widening this list is a one-line
-// change: no migration, no new property type, and existing definitions gain
-// the new kind in place. Anything added here that is NOT universally visible
-// to every workspace member (an agent, for one) must also restore a visibility
-// gate on both the write path and the table-facet read path.
-var actorPropertyKinds = []string{"member"}
+// Compatibility aliases keep the focused handler tests on the same helper
+// names while the implementation is shared with IssueService.Create.
+type actorRef = issueproperty.ActorRef
 
-// actorRef is a parsed "<kind>:<uuid>" property value.
-type actorRef = fields.ActorRef
-
-func propertyTypeIsActor(t string) bool {
-	return t == "actor" || t == "multi_actor"
+func propertyTypeIsActor(t string) bool { return issueproperty.IsActor(t) }
+func actorKindsHint() string            { return issueproperty.ActorKindsHint() }
+func parseActorRef(s string) (actorRef, error) {
+	return issueproperty.ParseActorRef(s)
 }
-
-func actorKindsHint() string {
-	return strings.Join(actorPropertyKinds, " / ")
+func parseActorRefList(items []any) ([]actorRef, error) {
+	return issueproperty.ParseActorRefList(items)
 }
-
-// parseActorRef splits a stored actor value. Members are referenced by
-// user_id — the same id the assignee pair uses — so "who is this" resolves
-// identically everywhere in the product.
-func parseActorRef(s string) (actorRef, error)          { return fields.ParseActorRef(s) }
-func parseActorRefList(items []any) ([]actorRef, error) { return fields.ParseActorRefList(items) }
-
-// actorRefsInValue re-reads the canonical stored JSON for an actor property.
-// SetIssueProperty uses it to resolve references against the workspace after
-// the pure shape validation has run.
 func actorRefsInValue(propType string, stored []byte) ([]actorRef, error) {
-	if propType == "actor" {
-		var s string
-		if err := json.Unmarshal(stored, &s); err != nil {
-			return nil, err
-		}
-		ref, err := parseActorRef(s)
-		if err != nil {
-			return nil, err
-		}
-		return []actorRef{ref}, nil
-	}
-	var list []string
-	if err := json.Unmarshal(stored, &list); err != nil {
-		return nil, err
-	}
-	refs := make([]actorRef, 0, len(list))
-	for _, s := range list {
-		ref, err := parseActorRef(s)
-		if err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
-	}
-	return refs, nil
+	return issueproperty.ActorRefsInValue(propType, stored)
 }
 
 // resolveActorRefs checks that every reference points at a real member of this
@@ -349,7 +305,7 @@ func (h *Handler) resolveActorRefs(r *http.Request, workspaceID string, refs []a
 // and returns the canonical JSON to store. Error strings enumerate the legal
 // values where possible — agents consume these directly to self-correct.
 func validatePropertyValue(def db.IssueProperty, raw json.RawMessage) ([]byte, error) {
-	return fields.ValidateValue(fields.Definition{Type: def.Type, Config: def.Config}, raw)
+	return issueproperty.ValidateValue(def, raw)
 }
 
 // removedOptionIDs returns option ids present in the stored config but
@@ -670,6 +626,7 @@ type SetIssuePropertyRequest struct {
 }
 
 func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	issueID := chi.URLParam(r, "id")
 	propertyID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "propertyId"), "property id")
 	if !ok {
@@ -764,6 +721,7 @@ func (h *Handler) SetIssueProperty(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
+	r = h.withWakeupActor(r)
 	issueID := chi.URLParam(r, "id")
 	propertyID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "propertyId"), "property id")
 	if !ok {
@@ -792,10 +750,12 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updated, err := h.Queries.DeleteIssuePropertyValue(r.Context(), db.DeleteIssuePropertyValueParams{
-		ID:          issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-		Key:         uuidToString(propertyID),
+	updated, err := wakeupWrite(h, r, func(q *db.Queries) (db.Issue, error) {
+		return q.DeleteIssuePropertyValue(r.Context(), db.DeleteIssuePropertyValueParams{
+			ID:          issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			Key:         uuidToString(propertyID),
+		})
 	})
 	if err != nil {
 		slog.Warn("DeleteIssuePropertyValue failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
@@ -821,7 +781,7 @@ func (h *Handler) DeleteIssueProperty(w http.ResponseWriter, r *http.Request) {
 // definition creates/unarchives against each other (the 20-active cap and
 // MAX(position)+1 are read-then-write). Locks are transaction-scoped.
 func (h *Handler) withPropertyLock(r *http.Request, lockKeys []string, fn func(q *db.Queries) error) error {
-	tx, err := h.TxStarter.Begin(r.Context())
+	tx, err := h.beginWakeupWrite(r.Context())
 	if err != nil {
 		return err
 	}
