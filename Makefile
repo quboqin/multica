@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up preview down status list destroy gc env-exec api-dev web-dev desktop-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -154,11 +154,14 @@ selfhost-stop: ## Stop the self-hosted Docker Compose stack
 #   make up C=desktop           Electron against this environment's backend
 #   make up ARGS=--ephemeral    agent-owned, expires, collected by `make gc`
 
-up: ## Start this checkout's environment (C=api,web,daemon,desktop; default api,web)
+up: ## Start this checkout's environment (C=api,web,preview,daemon,desktop; default api,web)
 	@bash scripts/dev-env.sh up $(if $(C),--components $(C)) $(ARGS)
 
+preview: ## Start a local production web preview (ARGS=--rebuild to update it)
+	@bash scripts/dev-env.sh up --components api,preview $(ARGS)
+
 down: ## Stop this environment's processes, keeping its database and profile
-	@bash scripts/dev-env.sh down $(ARGS)
+	@bash scripts/dev-env.sh down $(if $(C),--components $(C)) $(ARGS)
 
 status: ## Show what is running for this environment, with proof of identity
 	@bash scripts/dev-env.sh status $(ARGS)

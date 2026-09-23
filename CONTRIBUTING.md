@@ -124,7 +124,7 @@ make destroy                 # stop, then drop the database and free the slot
 make gc                      # collect expired environments or ones whose checkout is gone
 ```
 
-Components are `api` (Go backend), `web` (Next.js), `daemon` (agent daemon) and
+Components are `api` (Go backend), `web` (Next.js dev), `preview` (Next.js production), `daemon` (agent daemon) and
 `desktop` (Electron). Selecting any of them implies `api`. `make up` is
 idempotent: re-running it against a live environment reuses the database, the
 profile and any component already healthy.
@@ -159,6 +159,36 @@ make env-exec ARGS="-- pnpm exec playwright test"
 
 `make dev` (below) still runs backend and frontend in the foreground of your
 terminal, which is the right thing when you want Ctrl-C to stop everything.
+
+### Local production preview
+
+Use a production frontend for manual acceptance without waiting for route
+compilation on each first visit:
+
+```bash
+make preview                  # build once, then start/reuse the preview
+make preview ARGS=--rebuild    # rebuild after changing frontend code
+make status                   # includes the preview URL
+make down C=preview            # stop only the preview
+```
+
+This connects to the checkout's existing local API and database: edits in the
+preview change the same test data as the development UI. It does not deploy
+anything. If needed, sign in using the local account/code shown by the command; browser
+storage is separate for the preview's port. The local API may restart once to
+allow the preview origin for API requests and WebSockets.
+
+The slot reserves `14000 + offset` for preview, alongside `13000 + offset` for
+development. The preview binds to loopback. An unrelated listener on that port
+is never stopped. `make down`, `make destroy` and `make gc` also manage preview.
+
+Next.js builds in `~/.multica/dev/envs/<name>/preview/apps/web`, with a separate
+`.next`, `.source`, `next-env.d.ts` and TypeScript config. Web sources (including
+uncommitted edits) are copied there; dependencies and shared packages are read
+from the checkout. No `.env` files are copied. Existing builds are reused until
+`--rebuild`, so finish source edits before rebuilding. Build and server logs are
+`logs/preview-build.log` and `logs/preview.log` in the same environment directory.
+Build failures are reported without stopping the development web server.
 
 ## First-Time Setup
 

@@ -34,7 +34,7 @@ fail() {
 
 require_contains() {
   local file=$1 expected=$2
-  if ! grep -Fq "$expected" "$file"; then
+  if ! grep -Fq -- "$expected" "$file"; then
     echo "Expected output to contain: $expected" >&2
     echo "Observed:" >&2
     sed 's/^/  /' "$file" >&2
@@ -220,6 +220,12 @@ rewritten="$(bash -c 'source "$1"; database_url_with_name "$2" "$3"' _ \
 # ---------------------------------------------------------------------------
 write_manifest "probe-901" "$tmp_dir/checkout" 901
 mkdir -p "$tmp_dir/checkout"
+mkdir -p "$tmp_dir/checkout/server/bin"
+cat > "$tmp_dir/checkout/server/bin/multica" <<'EOF'
+#!/usr/bin/env bash
+printf '{"status":"stopped"}\n'
+EOF
+chmod +x "$tmp_dir/checkout/server/bin/multica"
 
 dev_env list > "$out" 2>&1 || fail "list must succeed with one environment"
 require_contains "$out" "probe-901"
@@ -231,7 +237,8 @@ node -e '
   const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   if (payload.name !== "probe-901") throw new Error("name = " + payload.name);
   if (payload.backend_port !== 18981) throw new Error("backend_port = " + payload.backend_port);
-  for (const key of ["api", "web", "daemon", "desktop"]) {
+  if (payload.components.preview.address !== "http://localhost:14901") throw new Error("wrong preview port");
+  for (const key of ["api", "web", "preview", "daemon", "desktop"]) {
     if (!payload.components[key]) throw new Error("missing component " + key);
     if (payload.components[key].state !== "stopped") {
       throw new Error(key + " state = " + payload.components[key].state);
@@ -301,6 +308,65 @@ status=0
 dev_env up --components nope > "$out" 2>&1 || status=$?
 [ "$status" -ne 0 ] || fail "up with an unknown component must fail"
 require_contains "$out" "Unknown component"
+
+# Rebuild cannot silently start the ordinary development server.
+status=0
+dev_env up --rebuild > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "--rebuild without preview must fail"
+require_contains "$out" "--rebuild requires the preview component"
+
+# A failed rebuild must not start an old/partial build or stop the dev server.
+status=0
+bash -c '
+  source "$1"
+  STATE_DIR="$2"
+  LOG_DIR="$STATE_DIR/logs"
+  PREVIEW_PORT=14901
+  PREVIEW_REBUILD=1
+  mkdir -p "$LOG_DIR" "$STATE_DIR/preview/apps/web/.next"
+  printf old > "$STATE_DIR/preview-ready"
+  printf old > "$STATE_DIR/preview/apps/web/.next/BUILD_ID"
+  stop_component() { [ "$1" = preview ] || exit 99; }
+  port_free() { return 0; }
+  node() { return 0; }
+  preview_exec() { echo "fixture compilation failure"; return 37; }
+  launch_detached() { touch "$STATE_DIR/launched"; }
+  start_preview
+' _ "$root_dir/scripts/dev-env.sh" "$tmp_dir/failed-preview" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "failed preview build reported success"
+require_contains "$out" "Preview build failed"
+[ ! -e "$tmp_dir/failed-preview/launched" ] || fail "started a failed preview"
+[ ! -e "$tmp_dir/failed-preview/preview-ready" ] || fail "failed rebuild retained its ready marker"
+[ ! -d "$tmp_dir/failed-preview/preview-build.lock" ] || fail "failed build left its lock"
+
+# A port conflict never overwrites or terminates an unrelated listener.
+status=0
+bash -c '
+  source "$1"
+  STATE_DIR="$2"
+  PREVIEW_PORT=14901
+  mkdir -p "$STATE_DIR"
+  curl() { return 1; }
+  port_free() { return 1; }
+  describe_port_owner() { printf "unrelated process"; }
+  node() { touch "$STATE_DIR/built"; }
+  stop_component() { touch "$STATE_DIR/stopped"; }
+  start_preview
+' _ "$root_dir/scripts/dev-env.sh" "$tmp_dir/occupied-preview" > "$out" 2>&1 || status=$?
+[ "$status" -ne 0 ] || fail "preview accepted an occupied port"
+require_contains "$out" "Refusing to replace its listener"
+[ ! -e "$tmp_dir/occupied-preview/stopped" ] || fail "preview stopped an unrelated listener"
+[ ! -e "$tmp_dir/occupied-preview/built" ] || fail "preview built despite an occupied port"
+
+# Preview origins extend the local API allowlist without dropping custom ones.
+origins="$(bash -c 'source "$1"; PREVIEW_PORT=14901; local_api_origins "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" 'http://localhost:13901,https://dev.example')"
+[ "$origins" = 'http://localhost:13901,https://dev.example,http://localhost:14901' ] \
+  || fail "preview discarded configured origins"
+origins="$(bash -c 'source "$1"; PREVIEW_PORT=14901; local_api_origins "$2"' _ \
+  "$root_dir/scripts/dev-env.sh" "$origins")"
+[ "$origins" = 'http://localhost:13901,https://dev.example,http://localhost:14901' ] \
+  || fail "preview duplicated its origin"
 
 # ---------------------------------------------------------------------------
 # gc reports what it would collect and touches nothing in --dry-run. An

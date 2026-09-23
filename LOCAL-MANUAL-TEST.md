@@ -1,8 +1,9 @@
 # 本机手动测试说明
 
-当前本机环境使用以下地址和账号（端口与数据库名来自仓库根目录的 `.env`，以 `make status` 的输出为准）：
+当前本机托管环境为 `multica-703`，使用以下地址和账号；端口与数据库以 `make status` 的输出为准：
 
-- Web：<http://localhost:13703>
+- 生产预览（推荐手动验收）：<http://localhost:14703>
+- 开发模式（热更新）：<http://localhost:13703>
 - API：<http://localhost:18783>
 - 工作区：`dev`
 - 数据库：`multica_multica_703`
@@ -10,7 +11,63 @@
 - 验证码：`888888`
 - 密码：无，使用本地验证码登录
 
-## 启动环境
+## 生产预览（推荐手动验收）
+
+从仓库根目录执行：
+
+```bash
+cd /Users/qinqubo/magic/projects/multica
+make preview
+```
+
+首次启动会准备本地 API、执行前端生产构建，再启动预览。之后再次执行会复用已有构建和健康的服务。等待命令显示 `Environment ready`，再打开：
+
+- 文档：<http://localhost:14703/dev/documents>
+- 多维表格：<http://localhost:14703/dev/collections>
+- 任务：<http://localhost:14703/dev/issues>
+
+**这里的 "生产" 指前端构建方式，连接的仍是本地测试后端和数据库。** 预览与 `13703` 的开发页面共用测试数据：在一边保存的修改会影响另一边。沿用上方账号；若未自动登录，使用本地验证码登录。浏览器存储按端口隔离，部分界面偏好可能不同。
+
+预览没有热更新。修改前端代码后，运行下面的重建命令，成功后刷新浏览器：
+
+```bash
+make preview ARGS=--rebuild
+```
+
+重建会暂时停止预览，保留开发 Web。首次启用预览时，本地 API 可能重启一次，以允许新地址的 API 请求和 WebSocket 连接。
+
+常用操作：
+
+| 操作 | 命令 |
+| --- | --- |
+| 启动或复用预览 | `make preview` |
+| 更新预览中的前端代码 | `make preview ARGS=--rebuild` |
+| 查看地址和运行状态 | `make status`，查看 `preview` 行 |
+| 只停止预览，保留开发页面和 API | `make down C=preview` |
+| 停止整个环境，保留测试数据 | `make down` |
+
+前端构建文件放在 `~/.multica/dev/envs/multica-703/preview/apps/web`，与开发模式的 `.next`、MDX 和类型生成文件隔离。首次构建需要等待编译、类型检查和页面生成；页面访问时不再出现开发模式的 `Compiling…`，但 API 取数时仍可能短暂显示加载状态。
+
+构建或启动失败时查看日志；其他环境的日志目录以 `make status` 为准：
+
+```bash
+tail -n 80 ~/.multica/dev/envs/multica-703/logs/preview-build.log
+tail -n 80 ~/.multica/dev/envs/multica-703/logs/preview.log
+```
+
+构建失败不会启动不完整的预览，也不会停止开发 Web。修复报错后重新运行 `make preview ARGS=--rebuild`。端口被其他进程占用时命令会报错，不会自动结束该进程。
+
+后文已有的 `13703` 验收地址仍可用于开发模式；在生产预览验收时，把端口换成 `14703`，路径和操作保持一致。
+
+### 预览入口验证记录（2026-09-23）
+
+- 已通过：真实生产构建及 TypeScript 检查、前端重建、停止后复用构建启动、重复启动复用现有进程。
+- 已通过：环境管理脚本测试、构建目录隔离测试、构建失败保护、端口冲突保护；`git diff --check` 通过。
+- 浏览器已验证：登录会话可用、文档正文与列表切换、多维表格列表数据加载；WebSocket 握手返回 `101`，检查时未见浏览器错误。
+- 单独停止预览后，原开发 Web 的进程保持不变，原文档地址仍返回 `200`；API 进程也保持不变。
+- 本轮验证针对预览入口，未重跑全量业务、移动端或真实智能体测试；人工验收仍由用户确认。
+
+## 开发模式（热更新）
 
 从仓库根目录执行：
 
@@ -350,6 +407,7 @@ http://localhost:13703/dev/issues
 ## 验收记录
 
 ```text
+[ ] 生产预览：启动、页面切换、重建后刷新、单独停止及重新启动
 [ ] 登录成功
 [ ] 文档创建和刷新
 [ ] Mermaid / 公式 / 嵌入视图

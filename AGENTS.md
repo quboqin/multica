@@ -31,6 +31,7 @@ Multica is a task management platform where people and agents collaborate on iss
 Use `Makefile`, workspace `package.json` files, and `pnpm-workspace.yaml` for current commands and versions. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and worktree operations.
 
 - Use the checkout's managed environment: `make up`, `make status`, `make down`. `make down` preserves data; `make destroy` removes the environment and its data.
+- Use `make preview` for a local production frontend against the same test API/data; `make preview ARGS=--rebuild` refreshes it. Its build directory and port are isolated from `web`; `make down C=preview` stops only the preview.
 - Worktrees share PostgreSQL but have isolated databases/ports. Use the environment scripts and `.env.worktree`; do not copy the main checkout's `.env` or manually create a database through an assumed PostgreSQL instance.
 - Regenerate sqlc with `make sqlc` after SQL changes.
 - Run the narrowest useful checks while iterating, then broaden when risk warrants it. Report what actually ran and any skipped checks.

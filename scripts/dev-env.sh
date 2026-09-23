@@ -39,8 +39,9 @@ DEV_CODE_DEFAULT=888888
 WORKSPACE_NAME="${MULTICA_DEV_WORKSPACE_NAME:-Dev}"
 WORKSPACE_SLUG="${MULTICA_DEV_WORKSPACE_SLUG:-dev}"
 
-ALL_COMPONENTS="api web daemon desktop"
+ALL_COMPONENTS="api web preview daemon desktop"
 DEFAULT_COMPONENTS="api web"
+PREVIEW_REBUILD=0
 
 # An agent runs with TMPDIR=/tmp/multica-task-<id>, deleted when the run ends.
 # Anything the Go toolchain builds there goes with it, so a binary started from
@@ -270,7 +271,7 @@ EOF
 
 # Probes for a usable slot starting at the path hash, so the common case keeps
 # the deterministic number a checkout has always had, and only a real conflict
-# moves it. A slot is usable when the registry does not hold it AND both ports
+# moves it. A slot is usable when the registry does not hold it AND its ports
 # are actually free — the registry alone cannot see a process started before
 # this tooling existed.
 allocate_offset() {
@@ -284,6 +285,7 @@ allocate_offset() {
     offset_registered "$offset" "$self" && continue
     port_free "$backend" || continue
     port_free "$frontend" || continue
+    port_free "$((14000 + offset))" || continue
     port_free "$renderer" || continue
     printf '%s' "$offset"
     return 0
@@ -546,6 +548,14 @@ api_identity_matches() {
   [ "$launched_at" = 0 ] || api_started_after "$health" "$launched_at"
 }
 
+local_api_origins() {
+  local configured="$1" preview="http://localhost:${PREVIEW_PORT}"
+  case ",$configured," in
+    *",$preview,"*) printf '%s' "$configured" ;;
+    *) printf '%s,%s' "$configured" "$preview" ;;
+  esac
+}
+
 start_api() {
   local launched_at health waited=0 expected_commit
   expected_commit="$(checkout_commit)"
@@ -553,10 +563,14 @@ start_api() {
     if api_identity_matches "$health" "$expected_commit"; then
       record_component_listener api "$BACKEND_PORT" >/dev/null \
         || die "The API listener changed while its identity was being verified. Refusing to reuse it."
-      ok "api already running on :$BACKEND_PORT (pid $(json_field "$health" pid), commit $expected_commit)"
-      return 0
-    fi
-    if health_belongs_to_api "$health"; then
+      if component_selected preview && [ "$(cat "$STATE_DIR/api.preview-origin" 2>/dev/null || true)" != "$(json_field "$health" pid):$PREVIEW_PORT" ]; then
+        info "Restarting the local API to allow the preview origin."
+        stop_component api
+      else
+        ok "api already running on :$BACKEND_PORT (pid $(json_field "$health" pid), commit $expected_commit)"
+        return 0
+      fi
+    elif health_belongs_to_api "$health"; then
       warn "api on :$BACKEND_PORT is ours but not commit $expected_commit; restarting it."
       stop_component api
     else
@@ -569,7 +583,11 @@ Run 'make down' here first — a leftover instance answers /health with 200 and 
   fi
 
   launched_at="$(now_epoch)"
-  launch_detached api make -C "$REPO_ROOT" -s api-dev ENV_FILE="$ENV_FILE"
+  local origins ws_origins
+  origins="$(local_api_origins "${CORS_ALLOWED_ORIGINS:-${FRONTEND_ORIGIN:-http://localhost:$FRONTEND_PORT}}")"
+  ws_origins="$(local_api_origins "${ALLOWED_ORIGINS:-$origins}")"
+  launch_detached api make -C "$REPO_ROOT" -s api-dev ENV_FILE="$ENV_FILE" \
+    CORS_ALLOWED_ORIGINS="$origins" ALLOWED_ORIGINS="$ws_origins"
   info "api launching (pid $(cat "$(pid_file api)")), log: $(log_file api)"
 
   while [ "$waited" -lt 300 ]; do
@@ -586,6 +604,7 @@ Run 'make down' here first — a leftover instance answers /health with 200 and 
         die "The API listener changed while its identity was being recorded."
       fi
       ok "api healthy at http://localhost:$BACKEND_PORT (pid $(json_field "$health" pid), commit $expected_commit)"
+      printf '%s:%s\n' "$(json_field "$health" pid)" "$PREVIEW_PORT" > "$STATE_DIR/api.preview-origin"
       return 0
     fi
     component_pid api >/dev/null || { tail -20 "$(log_file api)" | sed 's/^/    /' >&2; die "api exited during startup. Log: $(log_file api)"; }
@@ -626,6 +645,77 @@ start_web() {
     waited=$((waited + 2))
   done
   die "web never came up. Log: $(log_file web)"
+}
+
+# A preview is a production frontend against this environment's local API.
+# Never inherit public URLs or standalone settings from a deployment shell.
+preview_exec() {
+  "${CLEAN_ENV[@]}" NODE_ENV=production STANDALONE=false \
+    REMOTE_API_URL="http://localhost:$BACKEND_PORT" \
+    NEXT_PUBLIC_API_URL="http://localhost:$BACKEND_PORT" \
+    NEXT_PUBLIC_WS_URL="ws://localhost:$BACKEND_PORT/ws" \
+    pnpm --dir "$STATE_DIR/preview/apps/web" exec "$@"
+}
+
+start_preview() {
+  local app="$STATE_DIR/preview/apps/web" listener waited=0
+  # Serialize preparation, build and launch, including a requested rebuild.
+  local build_lock="$STATE_DIR/preview-build.lock" holder
+  if [ -d "$build_lock" ]; then
+    holder="$(cat "$build_lock/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      rm -f "$build_lock/pid"
+      rmdir "$build_lock"
+    fi
+  fi
+  mkdir "$build_lock" 2>/dev/null || die "A preview build/start is already in progress ($build_lock)."
+  printf '%s\n' "$$" > "$build_lock/pid"
+  trap 'rm -f "$STATE_DIR/preview-build.lock/pid"; rmdir "$STATE_DIR/preview-build.lock" 2>/dev/null || true' EXIT
+  if [ "$PREVIEW_REBUILD" = 1 ]; then
+    stop_component preview
+  elif curl -sf --max-time 10 "http://localhost:$PREVIEW_PORT/login" >/dev/null 2>&1; then
+    listener="$(record_component_listener preview "$PREVIEW_PORT" || true)"
+    if [ -n "$listener" ]; then
+      rm -f "$build_lock/pid"
+      rmdir "$build_lock"
+      trap - EXIT
+      ok "preview already running on :$PREVIEW_PORT (pid $listener); use 'make preview ARGS=--rebuild' after code changes"
+      return 0
+    fi
+  fi
+  port_free "$PREVIEW_PORT" || die "Preview port $PREVIEW_PORT is busy: $(describe_port_owner "$PREVIEW_PORT"). Refusing to replace its listener."
+
+  if [ "$PREVIEW_REBUILD" = 1 ] || [ ! -s "$app/.next/BUILD_ID" ] || [ ! -s "$STATE_DIR/preview-ready" ]; then
+    rm -f "$STATE_DIR/preview-ready"
+    step "Building production preview (log: $(log_file preview-build))"
+    node "$REPO_ROOT/scripts/web-preview.mjs" "$REPO_ROOT" "$STATE_DIR/preview"
+    preview_exec next build --webpack 2>&1 | tee "$(log_file preview-build)" \
+      || die "Preview build failed; the development web server was not changed. See $(log_file preview-build)."
+    printf '%s commit %s (includes working tree edits)\n' "$(now_iso)" "$(checkout_commit)" > "$STATE_DIR/preview-ready"
+  fi
+  info "Preview built: $(cat "$STATE_DIR/preview-ready")"
+
+  launch_detached preview env NODE_ENV=production STANDALONE=false \
+    REMOTE_API_URL="http://localhost:$BACKEND_PORT" \
+    NEXT_PUBLIC_API_URL="http://localhost:$BACKEND_PORT" \
+    NEXT_PUBLIC_WS_URL="ws://localhost:$BACKEND_PORT/ws" \
+    pnpm --dir "$app" exec next start --hostname 127.0.0.1 --port "$PREVIEW_PORT"
+  while [ "$waited" -lt 60 ]; do
+    if curl -sf --max-time 5 "http://localhost:$PREVIEW_PORT/login" >/dev/null 2>&1; then
+      listener="$(record_component_listener preview "$PREVIEW_PORT" || true)"
+      [ -n "$listener" ] || { stop_component preview; die "Preview listener is not owned by this environment."; }
+      rm -f "$build_lock/pid"
+      rmdir "$build_lock"
+      trap - EXIT
+      ok "production preview serving http://localhost:$PREVIEW_PORT (pid $listener)"
+      return 0
+    fi
+    component_pid preview >/dev/null || { tail -20 "$(log_file preview)" >&2; die "Preview exited during startup."; }
+    sleep 1
+    waited=$((waited + 1))
+  done
+  stop_component preview
+  die "Preview did not become ready. See $(log_file preview)."
 }
 
 # send-code once, verify-code once. Repeated verify attempts lock the code out
@@ -853,6 +943,7 @@ stop_component() {
   case "$name" in
     api) port="$BACKEND_PORT" ;;
     web) port="$FRONTEND_PORT" ;;
+    preview) port="$PREVIEW_PORT" ;;
     desktop) port="$DESKTOP_RENDERER_PORT" ;;
   esac
   recorded_listener="$(cat "$(listener_pid_file "$name")" 2>/dev/null || true)"
@@ -954,6 +1045,16 @@ component_state() {
         printf 'stopped|%s|not built' "$PROFILE"
       fi
       ;;
+    preview)
+      if curl -sf --max-time 5 "http://localhost:$PREVIEW_PORT/login" >/dev/null 2>&1 \
+        && listener_belongs_to_component preview "$PREVIEW_PORT"; then
+        printf 'running|http://localhost:%s|production build' "$PREVIEW_PORT"
+      elif [ -n "$(port_listener_pid "$PREVIEW_PORT")" ]; then
+        printf 'mismatch|http://localhost:%s|listener is not owned by this environment' "$PREVIEW_PORT"
+      else
+        printf 'stopped|http://localhost:%s|' "$PREVIEW_PORT"
+      fi
+      ;;
     desktop)
       local pid
       pid="$(component_pid desktop || true)"
@@ -1023,7 +1124,9 @@ print_status_json() {
 
 print_handoff() {
   local entrypoint
-  if component_selected web; then
+  if component_selected preview; then
+    entrypoint="Preview     http://localhost:${PREVIEW_PORT}/${WORKSPACE_SLUG}/issues (production frontend, local test data)"
+  elif component_selected web; then
     entrypoint="Open        http://localhost:${FRONTEND_PORT}/${WORKSPACE_SLUG}/issues"
   elif component_selected desktop; then
     entrypoint="Desktop     renderer http://localhost:${DESKTOP_RENDERER_PORT} → backend :${BACKEND_PORT}"
@@ -1061,6 +1164,7 @@ resolve_env_for_read() {
 
 bind_paths() {
   STATE_DIR="$(env_dir "$NAME")"
+  PREVIEW_PORT=$((14000 + OFFSET))
   LOG_DIR="$STATE_DIR/logs"
   PROFILE_DIR="$DEV_PROFILES_HOME/$PROFILE"
   WORKSPACES_ROOT="${WORKSPACES_ROOT:-$DEV_WORKSPACES_PARENT/multica_workspaces_$PROFILE}"
@@ -1106,6 +1210,7 @@ cmd_up() {
     case "$1" in
       --components|-c) requested="$(printf '%s' "$2" | tr ',' ' ')"; shift 2 ;;
       --all) requested="$ALL_COMPONENTS"; shift ;;
+      --rebuild) PREVIEW_REBUILD=1; shift ;;
       --name) name="$2"; shift 2 ;;
       --ephemeral) owner=agent; lifecycle_requested=1; [ "$ttl" != 0 ] || ttl=24; shift ;;
       --ttl) ttl="$2"; owner=agent; lifecycle_requested=1; shift 2 ;;
@@ -1123,6 +1228,7 @@ cmd_up() {
   # without api would produce an environment that cannot serve a single request.
   case " $requested " in *" api "*) ;; *) requested="api $requested" ;; esac
   COMPONENTS="$requested"
+  [ "$PREVIEW_REBUILD" = 0 ] || component_selected preview || die "--rebuild requires the preview component."
 
   # No resident cleanup service is required: every future environment start is
   # a safe opportunity to collect expired or directory-less environments.
@@ -1132,7 +1238,7 @@ cmd_up() {
   local missing=() tool needed="node go curl"
   # pnpm is only required by the components that actually build JavaScript, so
   # `up C=api` works on a checkout that has never run an install.
-  if component_selected web || component_selected desktop; then needed="$needed pnpm"; fi
+  if component_selected web || component_selected preview || component_selected desktop; then needed="$needed pnpm"; fi
   for tool in $needed; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
@@ -1194,7 +1300,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
     candidate_renderer="$(renderer_port_for_offset "$offset")"
     if [ "$PORT" -lt 18080 ] || [ "$FRONTEND_PORT" -ne $((13000 + offset)) ] \
       || offset_registered "$offset" || ! port_free "$PORT" \
-      || ! port_free "$FRONTEND_PORT" || ! port_free "$candidate_renderer"; then
+      || ! port_free "$FRONTEND_PORT" || ! port_free "$candidate_renderer" || ! port_free "$((14000 + offset))"; then
       if [ "$PORT" -ge 18080 ] && { offset_registered "$offset" || ! port_free "$PORT"; }; then
         warn "Slot $offset (port $PORT) is taken: $(describe_port_owner "$PORT"). Allocating another."
       fi
@@ -1237,7 +1343,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
   # sees the same values the registry recorded.
   export PORT="$BACKEND_PORT" FRONTEND_PORT DATABASE_URL POSTGRES_DB="$DB_NAME"
 
-  if [ ! -d "$REPO_ROOT/node_modules" ] && { component_selected web || component_selected desktop; }; then
+  if [ ! -d "$REPO_ROOT/node_modules" ] && { component_selected web || component_selected preview || component_selected desktop; }; then
     step "Dependencies"
     (cd "$REPO_ROOT" && pnpm install) || die "pnpm install failed."
   fi
@@ -1250,6 +1356,7 @@ Start the rest with 'make up C=api,web', or run 'make up C=daemon' from your own
   step "Components: $COMPONENTS"
   component_selected api && start_api
   component_selected web && start_web
+  component_selected preview && start_preview
   component_selected daemon && start_daemon
   component_selected desktop && start_desktop
 
@@ -1274,7 +1381,7 @@ cmd_down() {
     case " $ALL_COMPONENTS " in *" $comp "*) ;; *) die "Unknown component '$comp'. Valid: $ALL_COMPONENTS" ;; esac
     stop_component "$comp"
   done
-  printf '\n%s✓ %s stopped.%s Database, profile and slot kept — `make up` restarts in seconds.\n' "$C_GREEN" "$NAME" "$C_OFF"
+  printf '\n%s✓ %s stopped for %s.%s Database, profile and slot kept.\n' "$C_GREEN" "$requested" "$NAME" "$C_OFF"
 }
 
 cmd_destroy() {
@@ -1487,8 +1594,8 @@ usage() {
   cat <<'EOF'
 Local development environments: named, listable, deletable.
 
-  dev-env.sh up      [--components api,web,daemon,desktop] [--all]
-                     [--name N] [--ephemeral] [--ttl HOURS]
+  dev-env.sh up      [--components api,web,preview,daemon,desktop] [--all]
+                     [--name N] [--ephemeral] [--ttl HOURS] [--rebuild]
   dev-env.sh status  [name] [--json]
   dev-env.sh list    [--json]
   dev-env.sh down    [name] [--components ...]
@@ -1496,7 +1603,7 @@ Local development environments: named, listable, deletable.
   dev-env.sh gc      [--dry-run]
   dev-env.sh exec    [name] -- <command> [args...]
 
-Components: api (Go backend), web (Next.js), daemon (agent daemon),
+Components: api (Go backend), web (Next.js dev), preview (Next.js production), daemon (agent daemon),
 desktop (Electron). Anything selected implies api.
 
 down keeps the database, the CLI profile and the allocated slot.
