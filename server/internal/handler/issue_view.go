@@ -223,6 +223,9 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if collectionID.Valid && !h.checkCollectionResource(w, r, collectionID, wsUUID) {
+		return
+	}
 	view, err := h.Queries.CreateIssueView(r.Context(), db.CreateIssueViewParams{
 		WorkspaceID:       wsUUID,
 		CollectionID:      collectionID,
@@ -285,9 +288,12 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to list views")
 		return
 	}
-	resp := make([]IssueViewResponse, len(views))
-	for i, v := range views {
-		resp[i] = issueViewToResponse(v)
+	resp := make([]IssueViewResponse, 0, len(views))
+	for _, v := range views {
+		if v.CollectionID.Valid && !h.canReadCollection(r.Context(), v.CollectionID, v.WorkspaceID, userID) {
+			continue
+		}
+		resp = append(resp, issueViewToResponse(v))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -309,6 +315,9 @@ func (h *Handler) loadIssueViewForUser(w http.ResponseWriter, r *http.Request, u
 	})
 	if err != nil || !canReadIssueView(view, parseUUID(userID)) {
 		writeError(w, http.StatusNotFound, "view not found")
+		return db.IssueView{}, pgtype.UUID{}, false
+	}
+	if view.CollectionID.Valid && !h.checkCollectionResource(w, r, view.CollectionID, wsUUID) {
 		return db.IssueView{}, pgtype.UUID{}, false
 	}
 	return view, wsUUID, true

@@ -311,8 +311,9 @@ func TestRecordLinkTargetsStayInsideTheWorkspaceAndTheFieldType(t *testing.T) {
 		t.Fatalf("rejected links left %d edges", got)
 	}
 
-	// Every member who may edit the row may link it; managing fields is not required.
+	// Explicit editors may link rows in a shared table.
 	_, _, member := privateAgentTestFixture(t)
+	shareCollection(t, collection, "private", "view", nil, []map[string]string{{"user_id": member, "role": "edit"}}, 1, 200)
 	request := withURLParams(newRequestAs(member, "POST", "/api/collections/records/links", map[string]any{"field_id": field, "to_id": issue}), "collectionID", collection, "recordID", record)
 	testutil.Call(t, testHandler.CreateCollectionRecordLink, request).Want(201)
 }

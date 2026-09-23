@@ -1888,6 +1888,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Post("/import", h.ImportCollection)
 				r.Route("/{collectionID}", func(r chi.Router) {
 					r.Get("/", h.GetCollection)
+					r.Get("/access", h.GetCollectionAccess)
+					r.Put("/access", h.UpdateCollectionAccess)
 					r.Patch("/", h.UpdateCollection)
 					r.Post("/restore", h.RestoreCollection)
 					r.Get("/fields/archived", h.ListArchivedCollectionFields)

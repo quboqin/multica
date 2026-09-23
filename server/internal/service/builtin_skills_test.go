@@ -689,8 +689,8 @@ func TestPlatformSkillCoversPlatformContracts(t *testing.T) {
 				"A run acts for the person who owns its runtime",
 				"multica collection create --name \"<name>\" --output json",
 				"multica collection field add <table> --name",
-				"only a table's creator or a workspace",
-				"do not look for another route",
+				"Tables start private to their creator",
+				"do not try another route",
 				// The one structure change a run makes most often has a safe
 				// form; the unsafe form is named as such.
 				"--add-option \"Churned:#ef4444\"",

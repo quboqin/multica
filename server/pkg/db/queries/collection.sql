@@ -1,7 +1,7 @@
 -- name: ListCollections :many
 SELECT c.*,
  (SELECT count(*) FROM record r WHERE r.workspace_id=c.workspace_id AND r.collection_id=c.id AND r.deleted_at IS NULL)::bigint AS record_count
-FROM collection c WHERE c.workspace_id=$1 AND (c.archived_at IS NOT NULL)=sqlc.arg(archived)::boolean ORDER BY c.created_at DESC,c.id;
+FROM collection c WHERE c.workspace_id=$1 AND (c.archived_at IS NOT NULL)=sqlc.arg(archived)::boolean AND collection_can_read(c.id,sqlc.arg(user_id)::uuid) ORDER BY c.created_at DESC,c.id;
 
 -- name: UpdateCollection :one
 UPDATE collection SET name=COALESCE(sqlc.narg(name),name),

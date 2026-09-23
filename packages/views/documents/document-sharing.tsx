@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
+import { collectionKeys } from "@multica/core/collections";
 import { documentKeys, type DocumentAccess } from "@multica/core/documents";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { memberListOptions } from "@multica/core/workspace/queries";
@@ -58,7 +59,8 @@ function RolePicker({
     </Select>
   );
 }
-export function DocumentSharing({
+export function ResourceSharing({
+  kind,
   id,
   wsId,
   access,
@@ -68,20 +70,30 @@ export function DocumentSharing({
   wsId: string;
   access: DocumentAccess;
   disabled?: boolean;
+  kind: "document" | "collection";
 }) {
   const { t } = useT("issues");
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button size="sm" disabled={disabled} />}>
-        {t(($) => $.cortex_docs.publish)}
+        {t(($) =>
+          kind === "document" ? $.cortex_docs.publish : $.cortex_docs.share,
+        )}
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{t(($) => $.cortex_docs.share_document)}</DialogTitle>
+          <DialogTitle>
+            {t(($) =>
+              kind === "document"
+                ? $.cortex_docs.share_document
+                : $.cortex_table.share_table,
+            )}
+          </DialogTitle>
         </DialogHeader>
         {open && (
           <SharingForm
+            kind={kind}
             id={id}
             wsId={wsId}
             access={access}
@@ -93,6 +105,7 @@ export function DocumentSharing({
   );
 }
 function SharingForm({
+  kind,
   id,
   wsId,
   access,
@@ -102,6 +115,7 @@ function SharingForm({
   wsId: string;
   access: DocumentAccess;
   onSaved: () => void;
+  kind: "document" | "collection";
 }) {
   const { t } = useT("issues");
   const qc = useQueryClient();
@@ -115,7 +129,9 @@ function SharingForm({
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const save = useMutation({
     mutationFn: () =>
-      api.updateDocumentAccess(
+      (kind === "document"
+        ? api.updateDocumentAccess.bind(api)
+        : api.updateCollectionAccess.bind(api))(
         id,
         {
           scope,
@@ -128,8 +144,15 @@ function SharingForm({
       ),
     onSuccess: async () => {
       await Promise.all([
-        qc.invalidateQueries({ queryKey: documentKeys.all(wsId) }),
-        qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, id) }),
+        qc.invalidateQueries({
+          queryKey:
+            kind === "document"
+              ? documentKeys.all(wsId)
+              : collectionKeys.all(wsId),
+        }),
+        ...(kind === "document"
+          ? [qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, id) })]
+          : []),
       ]);
       onSaved();
     },
@@ -322,4 +345,10 @@ function SharingForm({
       </DialogFooter>
     </div>
   );
+}
+
+export function DocumentSharing(
+  props: Omit<Parameters<typeof ResourceSharing>[0], "kind">,
+) {
+  return <ResourceSharing {...props} kind="document" />;
 }

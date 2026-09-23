@@ -36,7 +36,7 @@ SELECT l.id,l.from_record_id,l.from_field_id,l.to_type,l.to_id,
 FROM record_link l
 LEFT JOIN issue i ON l.to_type='issue' AND i.id=l.to_id AND i.workspace_id=l.workspace_id
 LEFT JOIN record t ON l.to_type='record' AND t.id=l.to_id AND t.workspace_id=l.workspace_id AND t.deleted_at IS NULL
-LEFT JOIN collection tc ON tc.id=t.collection_id AND tc.workspace_id=t.workspace_id AND tc.archived_at IS NULL
+LEFT JOIN collection tc ON tc.id=t.collection_id AND tc.workspace_id=t.workspace_id AND tc.archived_at IS NULL AND collection_can_read(tc.id,sqlc.arg(user_id)::uuid)
 WHERE l.workspace_id=$1 AND l.from_record_id=ANY(sqlc.arg(record_ids)::uuid[])
 ORDER BY l.created_at,l.id;
 
@@ -49,5 +49,5 @@ FROM record_link l
 JOIN record r ON r.id=l.from_record_id AND r.workspace_id=l.workspace_id AND r.deleted_at IS NULL
 JOIN collection c ON c.id=l.collection_id AND c.workspace_id=l.workspace_id AND c.archived_at IS NULL
 JOIN collection_field f ON f.id=l.from_field_id AND f.workspace_id=l.workspace_id AND f.archived_at IS NULL
-WHERE l.workspace_id=$1 AND l.to_type=$2 AND l.to_id=$3
+WHERE l.workspace_id=$1 AND l.to_type=$2 AND l.to_id=$3 AND collection_can_read(c.id,sqlc.arg(user_id)::uuid)
 ORDER BY lower(c.name),lower(r.title),l.id LIMIT 200;

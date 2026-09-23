@@ -786,7 +786,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td><strong>FR-024</strong></td><td><span class="pill bad">P0</span></td><td><code>record</code> 行对象：无编号、无 status、无 assignee，含 title + JSONB 值袋 + position + 软删除</td><td>建 1000 行后 issue 编号序列不变，inbox 与 issue 看板中不出现任何 record</td></tr>
     <tr><td><strong>FR-025</strong></td><td><span class="pill bad">P0</span></td><td>record CRUD + 批量操作：Excel / CSV 导入为新 collection，识别表头和字段、预览及跳过列；已有表追加 CSV、批量编辑、批量删除、回收站恢复</td><td>上传 .xlsx 选择工作表并预览，确认后自动建表建字段建行；导入 1 万行 CSV 成功；批量改 500 行；删除后可从回收站恢复</td></tr>
     <tr><td><strong>FR-026</strong></td><td><span class="pill bad">P0</span></td><td>集合视图按 DataSource 能力复用 table / list / board / gantt / swimlane，拟新增 calendar / gallery；无 status 的 record 不继承任务专属动作。布局所需日期、分组和封面字段须显式配置</td><td>按 AC-2 验证支持的布局与字段前提；过滤、排序、分组、列宽、显隐、保存与可见性独立持久化，不支持的动作可诊断</td></tr>
-    <tr><td><strong>FR-027</strong> <span class="pill">本轮修订</span></td><td><span class="pill bad">P0</span></td><td>集合级 CLI / API 命令面与 JSON 输出，命令面、寻址与输出契约见 <a href="#fr-agent">5.7</a>（<code>FR-061</code> / <code>FR-062</code>）。行读写按资源权限校验；建表对成员与智能体开放，改表结构按「表的创建者或 owner / admin」判定，智能体以运行时主人的身份适用同一规则（<a href="#rev-9">修订九</a>）；批量破坏性操作需明确授权</td><td>CLI 可在授权范围建表、管理字段、写行和查询；人类/智能体/撤权矩阵通过 AC-26 / AC-28。无权改结构时返回可诊断拒绝（稳定错误码，见 <code>FR-064</code>），既有任务字段的管理规则不变</td></tr>
+    <tr><td><strong>FR-027</strong> <span class="pill">本轮修订</span></td><td><span class="pill bad">P0</span></td><td>集合级 CLI / API 命令面与 JSON 输出，命令面、寻址与输出契约见 <a href="#fr-agent">5.7</a>（<code>FR-061</code> / <code>FR-062</code>）。行读写按资源权限校验；建表对成员与智能体开放，改表结构按共享编辑权限判定，智能体以运行时主人的身份适用同一规则（<a href="#rev-9">修订九</a>）；批量破坏性操作需明确授权</td><td>CLI 可在授权范围建表、管理字段、写行和查询；人类/智能体/撤权矩阵通过 AC-26 / AC-28。无权改结构时返回可诊断拒绝（稳定错误码，见 <code>FR-064</code>），既有任务字段的管理规则不变</td></tr>
     <tr><td><strong>FR-028</strong></td><td><span class="pill bad">P0</span></td><td><code>relation</code> 字段：可指向另一个 collection 或<strong>指向 issue</strong>；关联边显式落表，支持反向引用展示</td><td>「需求池」一行可关联到实施它的 issue，并在 issue 侧看到反向引用</td></tr>
     <tr><td><strong>FR-029</strong></td><td><span class="pill">P1</span></td><td>表单视图：生成只写不读的表单入口，提交即建行</td><td>生成表单链接，按权限设置可提交，提交后新行出现在表中</td></tr>
     <tr><td><strong>FR-02A</strong></td><td><span class="pill">P1</span></td><td>行详情面板：点击行打开侧滑详情，字段纵向编辑</td><td>可编辑有写权限的字段，失败保留草稿；提供关联/新建任务出口。无评论区的说明仅在用户需要讨论或转换时呈现，不常驻重复说明</td></tr>
@@ -849,30 +849,29 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td><strong>FR-061</strong></td><td><span class="pill bad">P0</span></td><td><strong>通道与命令面。</strong>智能体只经 <code>multica</code> CLI 与本次运行的任务令牌（<code>mat_</code>）访问平台，不另开旁路。新增三组命令：<code>collection</code>（表与字段）、<code>record</code>（行、关联）、<code>document</code>（文档树、正文、状态），另有 <code>issue records</code>（任务侧反查）与 <code>issue search --kind</code>。人类用同一套命令</td><td>下表每条命令对人类凭证与任务令牌各执行一遍，结果与权限矩阵一致；<code>--output json</code> 只写 stdout，提示与告警写 stderr</td></tr>
     <tr><td><strong>FR-062</strong></td><td><span class="pill bad">P0</span></td><td><strong>按名称寻址，按名称输出。</strong>表用名称 / ID / ID 前缀，字段、单选选项、成员用名称，行用 ID 或<strong>完全一致</strong>的标题，任务用编号。行的 JSON 默认以字段名为键、以名称为值（<code>values</code>），与写入参数同一种写法；需要 ID 时加 <code>--detail</code></td><td>智能体不接触任何选项 ID 即可完成「读表 → 写行 → 回读」；同名的表或同标题的行列出候选并停止，不猜；默认输出的体积不超过明细输出的一半</td></tr>
     <tr><td><strong>FR-063</strong></td><td><span class="pill bad">P0</span></td><td><strong>并发语义在 CLI 上不放宽。</strong>文档保存必须带读到的版本（<code>FR-017</code>），CLI 不自动补、不自动重试；冲突时报出当前版本并要求先合并。单元格逐个原子写入，可用 <code>--expect</code> 声明「仅当仍是我读到的值」；标题改名自带前值比较。多格写入中途失败时说明哪些已经写入</td><td>两个智能体基于同一版本保存同一文档，后者被拒且提示合并而非换版本号重试；带 <code>--expect</code> 的写入在值已变化时返回冲突且不覆盖；三格写入第二格失败时输出第一格已写入</td></tr>
-    <tr><td><strong>FR-064</strong></td><td><span class="pill bad">P0</span></td><td><strong>权限矩阵与可诊断拒绝。</strong>任务令牌的放行与拒绝见下方矩阵。两类拒绝返回稳定错误码：<code>collection_schema_forbidden</code>（调用者既不是表的创建者也不是 owner / admin，对人和智能体一视同仁）、<code>document_transition_requires_human</code>；CLI 据此给出「为什么」和「接下来怎么办」，其余 403 保持通用文案，不泄露资源存在性</td><td>矩阵每一格有服务端测试；拒绝不写入任何审计 / 批准记录；智能体收到的提示指向可行动作（写行、自建一张表、留评论请人评审），不引导它另找凭证</td></tr>
+    <tr><td><strong>FR-064</strong></td><td><span class="pill bad">P0</span></td><td><strong>权限矩阵与可诊断拒绝。</strong>任务令牌的放行与拒绝见下方矩阵。只读写入返回 <code>collection_read_only</code>；机器凭证修改表格共享返回 <code>collection_sharing_requires_human</code>，文档共享返回 <code>document_transition_requires_human</code>；CLI 据此给出「为什么」和「接下来怎么办」，其余 403 保持通用文案，不泄露资源存在性</td><td>矩阵每一格有服务端测试；拒绝不写入任何审计 / 批准记录；智能体收到的提示指向可行动作（请求所有者授予编辑权限或自建表格），不引导它另找凭证</td></tr>
     <tr><td><strong>FR-064A</strong> <span class="pill">修订九</span></td><td><span class="pill bad">P0</span></td><td><strong>结构变更开放，破坏性变更要显式。</strong>追加选项走 <code>field update --add-option</code>：既有选项按 ID 原样带回，行值不动。<code>--option</code> 是整体替换，被移除的选项会从所有行（含回收站）清除；类型只沿安全路径转换，多选转单选只保留每格第一个值；归档的表与字段可从已归档列表恢复，字段重名或达到配额时须先解决冲突。内置技能要求智能体只在任务明说时才移除、转换、归档，并在评论里写明改了什么</td><td>智能体不重新键入既有选项即可加一个选项；同名选项、非单选 / 多选字段、与 <code>--option</code> 同用，均在发出请求前拒绝；技能参考逐条列出不可撤销的变更；表结构变更事件的执行者记为智能体</td></tr>
     <tr><td><strong>FR-065</strong></td><td><span class="pill bad">P0</span></td><td><strong>让智能体知道这些能力。</strong>内置平台技能新增「文档」「表格」两篇参考，运行时 brief 的技能提示点名这两个域。参考只写可观察的行为与命令，不写源码位置</td><td>技能路由表、描述与参考文件一一对应（有测试）；参考覆盖版本化保存、批准边界、逐格写入、关联与失效关联、分页</td></tr>
     <tr><td><strong>FR-066</strong></td><td><span class="pill">P1</span></td><td>CLI 查询与批量命令：比较运算过滤（<code>&gt;=</code>、<code>&lt;</code>、包含）、按关联过滤与排序、批量写入与 CSV 导入的命令、<code>mention://collection|record</code> 在 CLI 输出中的降级形态</td><td>比较与关联过滤、关联排序、批量和 CSV 命令随 FR-025 已实现；mention 输出降级随 FR-031 排期。不支持的写法明确报错，不静默忽略</td></tr>
   </tbody>
 </table></div>
 
-<p><strong>权限矩阵。</strong>「成员」指工作区任意人类成员；「表的管理者」指表的创建者或工作区 owner / admin。</p>
+<p><strong>权限矩阵。</strong>授权以表格或文档的共享设置为准；Workspace owner / admin 不绕过资源授权。智能体内容操作取运行时主人的权限。</p>
 <div class="tbl-wrap"><table class="tbl">
-  <thead><tr><th>对象</th><th>操作</th><th>成员</th><th>表的管理者 / owner·admin</th><th>智能体（任务令牌）</th></tr></thead>
-  <tbody>
-    <tr><td rowspan="5"><strong>表格</strong></td><td>列出表、读字段、读行、读回收站</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>建行、改标题、写单元格、删行 / 恢复</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>关联 / 取消关联、反查</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>建表</td><td>✓</td><td>✓</td><td>✓，创建者记为运行时主人</td></tr>
-    <tr><td>改表名、归档；增改字段与选项、归档字段</td><td>✗</td><td>✓</td><td><strong>按运行时主人判定</strong>：主人是该表的管理者则 ✓，否则 ✗</td></tr>
-    <tr><td rowspan="4"><strong>文档</strong></td><td>列文档树、读正文、搜索</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>新建、按版本保存正文、改标题、移动</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>评论（含点名）</td><td>所有者或编辑者</td><td>同左</td><td>按运行时主人权限，作者记为智能体</td></tr>
-    <tr><td>Publish 共享设置</td><td>仅文档所有者</td><td>仅文档所有者</td><td><strong>✗</strong> <code>document_transition_requires_human</code></td></tr>
-  </tbody>
-</table></div>
-<p class="sync-caption">表结构一行里的 ✗ 对人和智能体返回同一个错误码 <code>collection_schema_forbidden</code>；文档共享一行里智能体的 ✗ 返回 <code>document_transition_requires_human</code>。</p>
-<p>两类操作的处理不同。<strong>表结构</strong>：2026-09-21 决定放开（<a href="#rev-9">修订九</a>）。任务令牌在服务端本来就以运行时主人的身份通过认证，表格沿用这一点，不再按凭证类型另设一道门：建表人人可以；改结构仍是「表的创建者或 owner / admin」，对智能体就是看它的运行时主人，智能体建的表也记在主人名下。代价是清楚的——字段目录是全表共享的契约，移除选项、多选转单选、归档都会改动或隐藏别人的数据，而且目前无法撤销。这一层不靠权限拦，靠 <code>FR-064A</code> 的安全形态和技能里的约束。任务字段定义（issue properties）不在此列，仍只由人类 owner / admin 管理。<strong>文档共享</strong>：所有者决定读者、编辑者与共享范围；任务令牌沿用运行时主人的内容权限，但不能替主人更改共享。</p>
+<thead><tr><th>对象</th><th>操作</th><th>人类成员</th><th>智能体（任务令牌）</th></tr></thead><tbody>
+<tr><td rowspan="6">表格</td><td>列表、字段、行、反查、保存视图与内嵌读取</td><td>所有者、阅读者或编辑者</td><td>按运行时主人权限</td></tr>
+<tr><td>写行、导入、批量操作、关联、改表名与字段</td><td>所有者或编辑者</td><td>按运行时主人权限</td></tr>
+<tr><td>建表</td><td>任意成员，默认私有</td><td>创建者记为运行时主人</td></tr>
+<tr><td>整表归档 / 恢复</td><td>仅所有者</td><td>运行时主人必须是所有者</td></tr>
+<tr><td>Share 共享设置</td><td>仅所有者</td><td>✗ collection_sharing_requires_human</td></tr>
+<tr><td>Pin / Unpin</td><td>任何有阅读权限的人，个人偏好</td><td>不会扩大访问范围</td></tr>
+<tr><td rowspan="4">文档</td><td>列表、正文、搜索</td><td>所有者、阅读者或编辑者</td><td>按运行时主人权限</td></tr>
+<tr><td>新建 / 保存 / 移动</td><td>任意成员可新建；保存需编辑权限；移动按所有权校验</td><td>按运行时主人权限</td></tr>
+<tr><td>评论</td><td>所有者或编辑者</td><td>按运行时主人权限，作者记为智能体</td></tr>
+<tr><td>Publish 共享设置</td><td>仅所有者</td><td>✗ document_transition_requires_human</td></tr>
+</tbody></table></div>
+<p class="sync-caption">无阅读权限返回 404；只读表格写入返回 <code>collection_read_only</code>；共享设置使用版本校验，过期提交返回 409。共享权限叠加取最高权限。</p>
+<p>表格和文档都是工作材料。共享设置属于人类所有者；任务令牌不能替主人扩大读者范围。字段选项移除和类型转换会改动已有值，继续遵循 FR-064A 的明确指令与安全操作要求；归档恢复不等于撤销选项移除。任务字段定义仍只由人类 owner / admin 管理。</p>
 <p>人或智能体保存、还原文档均保留共享。每次标题或正文变更保存快照，记录实际执行者；新共享不触发知识入库。</p>
 
 <p><strong>命令面。</strong>完整参数以 <code>multica &lt;command&gt; --help</code> 为准。</p>
@@ -903,11 +902,11 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
   end
   A-&gt;&gt;C: collection field update 需求池 状态 --add-option 已搁置
   C-&gt;&gt;S: PATCH 字段（既有选项按 ID 带回 + 新选项）
-  alt 运行时主人是这张表的创建者或 owner / admin
+  alt 运行时主人对这张表有编辑权限
     S--&gt;&gt;C: 200，新选项可用
-  else 都不是
-    S--&gt;&gt;C: 403 collection_schema_forbidden
-    C--&gt;&gt;A: 谁能改这张表；行仍可写，或自建一张表
+  else 只有阅读权限
+    S--&gt;&gt;C: 403 collection_read_only
+    C--&gt;&gt;A: 请所有者授予编辑权限
   end
 </pre>
 <p class="sync-caption">名称到 ID 的翻译发生在 CLI；服务端只认 ID，并对每次写入独立校验权限与并发条件。</p>
@@ -963,6 +962,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
 
 <p><strong>修订八 · <code>FR-027</code> 补上智能体这一侧，新增 5.7。</strong>分支上文档与表格的 HTTP 接口先落了地，任务令牌也被大部分接口接受，但 <code>multica</code> CLI 里没有一条表格命令，内置平台技能和运行时 brief 也只字未提——智能体只经 CLI 做事，于是这些能力对它等于不存在；文档则只能借道 <code>issue create --kind doc</code> 与 <code>issue update --expected-document-revision</code>，列不出文档树、移不了页面。5.7 把通道、命令面、按名称寻址、并发语义、权限矩阵和技能引导一次定下来。同时把两处只写了一句英文的 403 换成带稳定错误码的拒绝：通用的「无权访问」文案会让智能体去找别的凭证，而这两处拒绝真正想说的是「这件事归人做，你可以改做那件事」。</p>
 <p id="rev-9"><strong>修订九 · <code>Q-U3</code> 的 schema 部分已决：智能体可以管理表结构（2026-09-21）。</strong>修订八按基线把建表和改字段留给了人，第一次真实运行就撞上了：用户让智能体「建一张客户名单」，智能体只能回一句「平台把表结构锁给人类了」。建不了表，5.7 开放的行读写就无从谈起——这条限制拦住的是最常见的用法，而不是风险。决定：去掉按凭证类型的拒绝，任务令牌在表格上完全沿用运行时主人的身份。建表对成员与智能体开放，创建者记为运行时主人（界面上由这个人继续管理）；改表名、归档、增改字段与选项仍是「表的创建者或 owner / admin」，对智能体取其运行时主人——管理员名下的运行可以改任何表，普通成员名下的运行只能改该成员建的表。修订四里「不能因运行时主人是管理员而自动获得」的顾虑由此被明确推翻：平台在任务、评论、项目上早已是「运行即主人」，表格单独例外只会让智能体停在第一步。没有放开的三件事：任务字段定义仍只由人类 owner / admin 管理；<code>actor</code> 字段仍只引用成员；文档的送审、发布、撤回仍属于人（<code>Q-U5</code>）。放开后真正的风险是破坏性变更没有撤销——移除选项会清掉行值，归档的表和字段回不来——由 <code>FR-064A</code> 处理；<code>FR-021</code>「已归档列表与恢复」这个缺口也因此变得更要紧。原错误码 <code>collection_schema_requires_human</code> 随之取消，改为对人和智能体一致的 <code>collection_schema_forbidden</code>。</p>
+<p id="rev-collections-sharing"><strong>2026-09-23 集合共享修订。</strong>多维表格与文档采用相同授权模型：新表及既有表默认归创建者私有；所有者可以向指定成员、项目或整个 Workspace 授予可阅读 / 可编辑权限，授权叠加取最高权限。可编辑允许写行、管理字段和改表名；整表归档 / 恢复仅限所有者，修改共享仅限人类所有者。Workspace owner / admin 不绕过共享；智能体内容操作继续按运行时主人授权。项目目前面向 Workspace 成员开放，分享界面明确显示该范围。列表、保存视图 / 文档内嵌、关联与反向链接、导入与批量命令及实时事件统一检查权限。表格支持个人 Pin / Unpin，撤权或归档后隐藏侧栏入口。此修订替代修订九中的表格创建者或管理员管理规则，不改变任务字段定义权限。</p>
 
 <h3 id="rev-qa"><span class="sec">6.3</span>概念答疑速查</h3>
 <p>讨论中反复出现的平台概念，按「最容易被误解的那一点」收敛成一句话。完整推导见架构手册第 09 章。</p>
@@ -1095,9 +1095,9 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
     <tr><td>AC-23</td><td>生命周期与 Triage</td><td>分别测试创建/改负责人/改状态的运行预览：固定 backlog 停泊，draft(unstarted) 不自动获得停泊；自定义 started 的交接通知保留、恢复不把它当 in_progress。Triage 禁止推导执行者及自动重试，明确点名对话仍走当前规则；兼容旧 category 载荷</td></tr>
     <tr><td>AC-24</td><td>正文与评论 mention</td><td>保存新文档正文中的 agent 链接和代码示例不创建运行；成员通知按既有路径验证。普通评论显式点名需授权并可预览，/note 不触发智能体；collection/record 链接只引用。对代码内 mention 的拟修复单列回归，不宣称当前正则已排除代码</td></tr>
     <tr><td>AC-25</td><td>双源数据所有权</td><td>任务/集合均测试切工作区不串缓存、各组独立分页与精确计数、筛选后成员归属、重连刷新、脏草稿保留。HTTP 响应晚于较新 WebSocket 事件不倒退；失败回滚不覆盖新版本，不同字段的并发写入不丢失</td></tr>
-    <tr><td>AC-26</td><td>actor 与 schema 权限</td><td>获批策略（<a href="#rev-9">修订九</a>）：建表对成员与智能体开放；改结构按表的创建者或 owner/admin 判定，智能体取其运行时主人。测试覆盖主人为 owner / admin / member 三种情形下的智能体与本人；当前任务字段管理规则不变。若开放 agent/squad actor，私有或跨工作区引用在写入、详情、选择器与 facet 计数中不泄露；撤权后不能继续读写</td></tr>
+    <tr><td>AC-26</td><td>actor 与 schema 权限</td><td>获批策略（<a href="#rev-9">修订九</a>）：建表对成员与智能体开放；改结构按表格共享的编辑权限判定，整表归档仅限所有者；智能体取其运行时主人。测试覆盖主人为 owner / admin / member 三种情形下的智能体与本人；当前任务字段管理规则不变。若开放 agent/squad actor，私有或跨工作区引用在写入、详情、选择器与 facet 计数中不泄露；撤权后不能继续读写</td></tr>
     <tr><td>AC-27</td><td>文档并发保存</td><td>两个人、人与智能体、旧移动端/API 写入各用同一旧版本保存，后写不静默覆盖。缺少版本也不能绕过新文档检查；冲突保留草稿并可合并重试。另测自身保存回显、无关字段更新、附件迟到与断线恢复不造成假冲突</td></tr>
-    <tr><td>AC-28 <span class="pill">新增</span></td><td><strong>智能体经 CLI 操作表格</strong></td><td>持任务令牌：<code>collection get</code> 读到字段与选项；按名称建行并写满九类字段；<code>--expect</code> 写入在值被他人改动后返回冲突且不覆盖；关联到任务与另一张表的行，任务侧 <code>issue records</code> 能反查；删除后从回收站恢复。建表成功且创建者为运行时主人；在主人可管理的表上加字段、用 <code>--add-option</code> 追加选项、改名、归档字段与表均成功，事件执行者记为智能体；主人为普通成员时改他人的表被拒，错误码为 <code>collection_schema_forbidden</code>，提示说明谁能改、行仍可写，本人操作得到同样结果。以上写入不产生运行、不进收件箱</td></tr>
+    <tr><td>AC-28 <span class="pill">新增</span></td><td><strong>智能体经 CLI 操作表格</strong></td><td>持任务令牌：<code>collection get</code> 读到字段与选项；按名称建行并写满九类字段；<code>--expect</code> 写入在值被他人改动后返回冲突且不覆盖；关联到任务与另一张表的行，任务侧 <code>issue records</code> 能反查；删除后从回收站恢复。建表成功且创建者为运行时主人；在主人可管理的表上加字段、用 <code>--add-option</code> 追加选项、改名、归档字段与表均成功，事件执行者记为智能体；未获共享时返回 404，只有阅读权限时写入返回 <code>collection_read_only</code>，明确授予编辑权限后可改行和字段；整表归档仍限所有者。本人操作得到同样结果。以上写入不产生运行、不进收件箱</td></tr>
     <tr><td>AC-29</td><td><strong>智能体文档授权与版本</strong></td><td>运行继承运行时主人的文档权限：私有创建、带版本保存、所有者移动、编辑者评论与还原；历史执行者记为智能体。分享修改被拒，旧 transition 不再开放；保存和还原不撤销已存在的共享。缺版本和旧版本保存被拒且提示先合并</td></tr>
   </tbody>
 </table></div>
@@ -1333,7 +1333,7 @@ v1.4 新增 <a href="#fr-agent">§5.7 智能体与 CLI 接口</a>（<code>FR-061
 <tr><td>FR-011 ~ FR-017 文档</td><td><span class="pill ok">已实现</span></td><td><code>issue.kind</code>、文档树与移动、文档库导航、TipTap 复用、按 kind 搜索、draft / reviewing / published 与授权发布、整篇版本检查（数据库触发器兜底）</td><td>—</td></tr>
 <tr><td>FR-018</td><td><span class="pill good">分支已实现，待用户验收</span></td><td>右侧 Versions 标签页直接列出版本并提供比较开关，正文区预览／与当前内容对比，支持还原为新版本；无版本弹窗或 Publish 旁入口；CLI versions / version / restore</td><td>存量文档以迁移时内容为历史起点；还原不改变授权</td></tr>
 <tr><td>FR-017A / FR-019</td><td><span class="pill bad">未开始</span></td><td>段落软锁、实时协同</td><td>不影响整篇版本检查与历史快照</td></tr>
-<tr><td>FR-021 collection 对象</td><td><span class="pill ok">已实现</span></td><td>workspace / project 级建表、名称与首列改名、图标/描述、归档；已归档表及字段列表/恢复，重名和 50 字段配额阻止不安全恢复</td><td>用户验收待确认</td></tr>
+<tr><td>FR-021 collection 对象</td><td><span class="pill ok">已实现</span></td><td>workspace / project 级建表、名称与首列改名、图标/描述、归档；已归档表及字段列表/恢复，重名和 50 字段配额阻止不安全恢复；默认私有、成员 / 项目 / Workspace 的读写共享、个人 Pin（2026-09-23）</td><td>用户验收待确认</td></tr>
 <tr><td>FR-022 ~ FR-024</td><td><span class="pill ok">已实现</span></td><td>每表独立字段目录（上限 50）、九类字段 + relation、安全类型转换、<code>record</code> 行（无编号 / status / assignee，软删除）</td><td>actor 是否开放 agent / squad 待 <code>Q-U3</code></td></tr>
 <tr><td>FR-025 CRUD 与批量</td><td><span class="pill ok">已实现</span></td><td>单行增删改、逐格原子写入与冲突检测、回收站 30 天内恢复；Excel / CSV 预览后原子创建新表、字段和记录；已有表 CSV 全量预校验与原子追加，最多 500 行批量编辑/删除/恢复。服务端 1 万行 × 20 字段与浏览器 1 万行导入、500 行修改/删除/恢复通过</td><td>用户验收待确认；见 <a href="cortex-p2a-development.md">P2a 验证记录</a></td></tr>
 <tr><td>FR-026 集合视图</td><td><span class="pill">部分</span></td><td>table / board / calendar / gallery；过滤、排序、分组、列显隐独立保存</td><td>list / gantt / swimlane 尚未接到集合数据源</td></tr>

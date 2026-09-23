@@ -178,5 +178,5 @@ func TestCollectionGroupsHaveIndependentCursorsAndScopedViews(t *testing.T) {
 	}
 	_, _, member := privateAgentTestFixture(t)
 	testutil.Call(t, testHandler.GetIssueViewByID, withURLParam(newRequestAs(member, "GET", "/api/issue-views/"+view.ID, nil), "id", view.ID)).Want(404)
-	testutil.Call(t, testHandler.CreateCollectionField, withURLParam(newRequestAs(member, "POST", "/api/collections/fields", map[string]any{"name": "Forbidden", "type": "text"}), "collectionID", collection)).Want(403)
+	testutil.Call(t, testHandler.CreateCollectionField, withURLParam(newRequestAs(member, "POST", "/api/collections/fields", map[string]any{"name": "Forbidden", "type": "text"}), "collectionID", collection)).Want(404)
 }

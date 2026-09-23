@@ -559,6 +559,24 @@ type Collection struct {
 	TitleName   string             `json:"title_name"`
 }
 
+type CollectionAccess struct {
+	CollectionID pgtype.UUID        `json:"collection_id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
+	Scope        string             `json:"scope"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	ScopeRole    string             `json:"scope_role"`
+	Revision     int64              `json:"revision"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CollectionCollaborator struct {
+	CollectionID pgtype.UUID `json:"collection_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	UserID       pgtype.UUID `json:"user_id"`
+	Role         string      `json:"role"`
+}
+
 type CollectionField struct {
 	ID           pgtype.UUID        `json:"id"`
 	WorkspaceID  pgtype.UUID        `json:"workspace_id"`

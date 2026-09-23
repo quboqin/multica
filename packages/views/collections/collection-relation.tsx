@@ -340,7 +340,7 @@ export function RelationList({
   onUnlink,
 }: {
   links: RecordLink[];
-  onUnlink: (link: RecordLink) => void;
+  onUnlink?: (link: RecordLink) => void;
 }) {
   const { t } = useT("issues");
   const paths = useWorkspacePaths();
@@ -390,7 +390,7 @@ export function RelationList({
                 {body}
               </AppLink>
             )}
-            <button
+            {onUnlink && <button
               type="button"
               aria-label={t(($) => $.cortex_table.unlink, { name })}
               title={t(($) => $.cortex_table.unlink, { name })}
@@ -398,7 +398,7 @@ export function RelationList({
               className="shrink-0 rounded-xs p-1 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/row:opacity-100 [@media(hover:none)]:opacity-100"
             >
               <Unlink className="size-3.5" />
-            </button>
+            </button>}
           </li>
         );
       })}

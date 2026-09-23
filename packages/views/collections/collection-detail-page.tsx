@@ -33,7 +33,6 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { issueViewKeys } from "@multica/core/issue-views/queries";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { projectListOptions } from "@multica/core/projects/queries";
-import { memberListOptions } from "@multica/core/workspace/queries";
 import type { IssueView } from "@multica/core/api/schemas";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -61,6 +60,7 @@ import { CollectionRecordPanel } from "./collection-record-panel";
 import { CollectionTable, type CollectionTableActions } from "./collection-table";
 import { CollectionBulkTools } from "./collection-bulk-tools";
 import { CollectionManagement } from "./collection-management";
+import { CollectionSharing } from "./collection-sharing";
 import { CollectionTrash } from "./collection-trash";
 import {
   DateFieldChip,
@@ -122,15 +122,13 @@ export function CollectionDetailPage({
   const locale = useLocale();
   const { data, error } = useQuery(collectionDetailOptions(wsId, id));
   const userId = useAuthStore((state) => state.user?.id);
-  const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: projects = [] } = useQuery({
     ...projectListOptions(wsId),
     enabled: !embedded && !!wsId,
   });
-  const role = members.find((member) => member.user_id === userId)?.role;
-  const canManage =
-    !!userId &&
-    (data?.collection.created_by === userId || role === "owner" || role === "admin");
+  const isOwner=!!userId && data?.collection.created_by===userId;
+  const canEdit=data?.access?.can_edit===true || isOwner;
+  const canManage=canEdit;
   const fieldsRef = useRef<CollectionField[]>([]);
   fieldsRef.current = data?.fields ?? [];
   const describeValue = useCallback((fieldId: string, value: unknown) => {
@@ -344,7 +342,8 @@ export function CollectionDetailPage({
   const tableActions = useMemo<CollectionTableActions>(
     () => ({
       canManage,
-      selection: embedded ? undefined : { rows: batchSelection, toggle: (record: import("@multica/core/collections").CollectionRecord, checked: boolean) => setBatchSelection(rows => checked ? (rows.some(r=>r.id===record.id)||rows.length>=500 ? rows : [...rows,record]) : rows.filter(r=>r.id!==record.id)) },
+      readOnly: !canEdit,
+      selection: embedded || !canEdit ? undefined : { rows: batchSelection, toggle: (record: import("@multica/core/collections").CollectionRecord, checked: boolean) => setBatchSelection(rows => checked ? (rows.some(r=>r.id===record.id)||rows.length>=500 ? rows : [...rows,record]) : rows.filter(r=>r.id!==record.id)) },
       fieldCount: allFields.length,
       sortBy: prefs.sortBy,
       sortDir: prefs.sortDir,
@@ -380,7 +379,7 @@ export function CollectionDetailPage({
     }),
     [
       batchSelection, embedded,
-      canManage,
+      canManage, canEdit,
       allFields,
       prefs,
       update,
@@ -438,6 +437,7 @@ export function CollectionDetailPage({
         );
       return (
         <CollectionBoard
+          readOnly={!canEdit}
           collectionId={id}
           groupField={boardGroup}
           cardFields={cardFields}
@@ -467,10 +467,10 @@ export function CollectionDetailPage({
           period={prefs.period}
           onAnchorChange={setAnchor}
           onPeriodChange={(period) => update({ period })}
-          onMoveDate={(row, value) => void commands.setField(row, dateField.id, value)}
+          onMoveDate={canEdit ? (row, value) => void commands.setField(row, dateField.id, value) : undefined}
           onOpen={openRow}
           locale={locale}
-          capabilities={visualCapabilities}
+          capabilities={{...visualCapabilities,editing:canEdit?"adapter":"none"}}
           color={(row) =>
             accentField?.config.options.find(
               (option) => option.id === row.fields[accentField.id],
@@ -506,7 +506,7 @@ export function CollectionDetailPage({
             const field = allFields.find((candidate) => candidate.id === item.id);
             return field ? <RecordValue record={row} field={field} compact /> : null;
           }}
-          capabilities={visualCapabilities}
+          capabilities={{...visualCapabilities,editing:canEdit?"adapter":"none"}}
           onOpen={openRow}
           cover={(row) => {
             const value = row.fields[prefs.coverField];
@@ -571,10 +571,10 @@ export function CollectionDetailPage({
               {view.name}
             </ViewTab>
           ))}
-          <SaveViewPopover
+          {canEdit && <SaveViewPopover
             pending={saveView.isPending}
             onSave={(name, shared) => saveView.mutateAsync({ name, shared })}
-          />
+          />}
         </div>
       )}
       {!embedded && <span className="mx-1.5 h-4 w-px bg-border" aria-hidden />}
@@ -629,7 +629,7 @@ export function CollectionDetailPage({
             <Button
               variant="outline"
               size="xs"
-              disabled={updateView.isPending}
+              disabled={updateView.isPending || !canEdit}
               onClick={() =>
                 updateView.mutate(activeView, {
                   onSuccess: () => updatePrefs(source, baseline),
@@ -645,6 +645,7 @@ export function CollectionDetailPage({
     </div>
   );
 
+  if (error) return <main className="p-6" role="alert">{error.message}</main>;
   const main = (
     <main
       className={cn(
@@ -683,9 +684,10 @@ export function CollectionDetailPage({
               onChange={(event) => setSearch(event.target.value)}
             />
           </label>
-          {data && canManage && (
+          {data && isOwner && (
             <CollectionManagement key={id} collection={data.collection} wsId={wsId} />
           )}
+          {data && <CollectionSharing id={id} wsId={wsId} access={data.access} />}
           <Button
             variant="outline"
             size="sm"
@@ -700,7 +702,7 @@ export function CollectionDetailPage({
           </Button>
           <Button
             size="sm"
-            disabled={commands.createRecord.isPending || !data}
+            disabled={commands.createRecord.isPending || !data || !canEdit}
             onClick={() =>
               void commands.createRecord
                 .mutateAsync({ title: "" })
@@ -713,7 +715,7 @@ export function CollectionDetailPage({
         </header>
       )}
       {viewBar}
-      {!embedded && data && (
+      {!embedded && data && canEdit && (
         <CollectionBulkTools
           key={id} id={id} wsId={wsId} fields={allFields} query={query}
           selected={batchSelection} onSelection={setBatchSelection}
@@ -744,6 +746,7 @@ export function CollectionDetailPage({
         </div>
         {selectedRecord && (
           <CollectionRecordPanel
+            readOnly={!canEdit}
             key={selectedRecord}
             wsId={wsId}
             collectionId={id}
@@ -794,7 +797,7 @@ export function CollectionDetailPage({
             </PopoverContent>
           </Popover>
           <span className="ml-auto" />
-          <CollectionTrash wsId={wsId} collectionId={id} commands={commands} />
+          {canEdit && <CollectionTrash wsId={wsId} collectionId={id} commands={commands} />}
         </footer>
       )}
       <CollectionFieldPanel

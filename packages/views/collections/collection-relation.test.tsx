@@ -262,7 +262,7 @@ describe("relation cells", () => {
     );
     const cell = screen.getByTestId("tasks");
     expect(within(cell).getByText("MUL-31")).toBeInTheDocument();
-    expect(within(cell).getByText("Deleted")).toHaveClass("line-through");
+    expect(within(cell).getByText("Deleted or unavailable")).toHaveClass("line-through");
     expect(within(screen.getByTestId("customer")).getByText("ACME")).toBeInTheDocument();
   });
 });
@@ -283,7 +283,7 @@ describe("relation list in the record panel", () => {
     );
     // A deleted target has nowhere to go, but its link can still be cleaned up.
     expect(screen.getAllByRole("link")).toHaveLength(2);
-    fireEvent.click(screen.getByRole("button", { name: "Unlink Deleted" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unlink Deleted or unavailable" }));
     expect(onUnlink).toHaveBeenCalledWith(links[2]);
   });
 });

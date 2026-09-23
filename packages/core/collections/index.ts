@@ -1,3 +1,4 @@
+import { DocumentAccessSchema } from "../documents/schema";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 export * from "./import";
@@ -106,8 +107,12 @@ export const CollectionTrashSchema = z.object({
   total: z.number().nonnegative().catch(0),
   retention_days: z.number().catch(30),
 });
+export const CollectionAccessSchema = DocumentAccessSchema;
+export type CollectionAccess = z.infer<typeof CollectionAccessSchema>;
+
 export const CollectionDetailSchema = z.object({
   collection: CollectionSchema,
+  access: CollectionAccessSchema.nullable().default(null),
   fields: z.array(CollectionFieldSchema),
 });
 export const CollectionPageSchema = z.object({

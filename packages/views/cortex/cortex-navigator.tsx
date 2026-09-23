@@ -37,7 +37,6 @@ import { useDeleteIssue } from "@multica/core/issues/mutations";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { projectListOptions } from "@multica/core/projects/queries";
 import type { Issue } from "@multica/core/types";
-import { memberListOptions } from "@multica/core/workspace/queries";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -820,16 +819,11 @@ export function CollectionNavigator({
   const { data: collections = [], isLoading, error } = useQuery(
     collectionListOptions(wsId, archived),
   );
-  // Same rule the server applies: the creator, or a workspace owner or admin.
+  // Only the table owner may archive or restore the table.
   const userId = useAuthStore((state) => state.user?.id);
-  const { data: members = [] } = useQuery({
-    ...memberListOptions(wsId),
-    enabled: !!wsId,
-  });
-  const role = members.find((member) => member.user_id === userId)?.role;
   const canDelete = (collection: Collection) =>
     !!userId &&
-    (collection.created_by === userId || role === "owner" || role === "admin");
+    collection.created_by === userId;
   // Outlives `confirmOpen` so the dialog keeps its wording while it closes.
   const [deleting, setDeleting] = useState<Collection | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);

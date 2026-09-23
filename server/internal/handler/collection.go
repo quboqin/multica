@@ -54,14 +54,14 @@ func (h *Handler) loadCollection(w http.ResponseWriter, r *http.Request) (db.Col
 		writeError(w, 404, "collection not found")
 		return db.Collection{}, false
 	}
-	return collection, true
+	return collection, h.checkCollectionAccess(w, r, collection)
 }
 func (h *Handler) ListCollections(w http.ResponseWriter, r *http.Request) {
 	ws, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace_id")
 	if !ok {
 		return
 	}
-	collections, err := h.Queries.ListCollections(r.Context(), db.ListCollectionsParams{WorkspaceID: ws, Archived: r.URL.Query().Get("archived") == "true"})
+	collections, err := h.Queries.ListCollections(r.Context(), db.ListCollectionsParams{WorkspaceID: ws, UserID: parseUUID(requestUserID(r)), Archived: r.URL.Query().Get("archived") == "true"})
 	if err != nil {
 		writeError(w, 500, "failed to list collections")
 		return
@@ -135,7 +135,12 @@ func (h *Handler) GetCollection(w http.ResponseWriter, r *http.Request) {
 		}
 		result = append(result, collectionFieldResponse(field))
 	}
-	writeJSON(w, 200, map[string]any{"collection": collection, "fields": result, "capabilities": map[string]any{"layouts": []string{"table", "calendar", "gallery"}, "side_effects": false, "max_page_size": 100}})
+	access, err := h.collectionAccessResponse(r, collection)
+	if err != nil {
+		writeError(w, 500, "failed to read collection sharing")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"collection": collection, "access": access, "fields": result, "capabilities": map[string]any{"layouts": []string{"table", "calendar", "gallery"}, "side_effects": false, "max_page_size": 100}})
 }
 func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) {
 	collection, ok := h.loadCollection(w, r)
@@ -167,7 +172,7 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 	}
 	var config []byte
 	if req.Type == fields.TypeRelation {
-		config, err = h.relationFieldConfig(r.Context(), collection, req.Config)
+		config, err = h.relationFieldConfig(r.Context(), collection, req.Config, requestUserID(r))
 	} else if req.Type != fields.TypeFormula {
 		config, err = fields.ValidateConfig(req.Type, req.Config, validateLabelName, normalizeColor)
 	}
@@ -346,12 +351,13 @@ func (h *Handler) respondCollectionRecord(w http.ResponseWriter, r *http.Request
 	// The write has already happened, so a failed link read must not turn it
 	// into an error. The payload goes out without "links" and the client's next
 	// read brings them back.
-	if err := h.attachRecordLinks(r.Context(), h.Queries, record.WorkspaceID, []pgtype.UUID{record.ID}, []map[string]any{response}); err != nil {
+	if err := h.attachRecordLinks(r.Context(), h.Queries, requestUserID(r), record.WorkspaceID, []pgtype.UUID{record.ID}, []map[string]any{response}); err != nil {
 		slog.Warn("read record links failed", append(logger.RequestAttrs(r), "error", err, "record_id", uuidToString(record.ID))...)
 	}
 	user, _ := requireUserID(w, r)
 	actorType, actorID := h.resolveActor(r, user, uuidToString(record.WorkspaceID))
-	h.publish("record:updated", uuidToString(record.WorkspaceID), actorType, actorID, map[string]any{"collection_id": uuidToString(record.CollectionID), "record": response})
+	// Keep the record payload contract, but omit per-reader hydrated links.
+	h.publish("record:updated", uuidToString(record.WorkspaceID), actorType, actorID, map[string]any{"collection_id": uuidToString(record.CollectionID), "record": collectionRecordResponse(record)})
 	writeJSON(w, status, response)
 }
 
@@ -556,7 +562,7 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 		recordIDs = recordIDs[:limit]
 	}
 	// Relation cells read from the same snapshot as the rows they belong to.
-	if err = h.attachRecordLinks(r.Context(), h.Queries.WithTx(tx), collection.WorkspaceID, recordIDs, records); err != nil {
+	if err = h.attachRecordLinks(r.Context(), h.Queries.WithTx(tx), requestUserID(r), collection.WorkspaceID, recordIDs, records); err != nil {
 		writeError(w, 500, "failed to read record links")
 		return
 	}
@@ -603,7 +609,7 @@ func (h *Handler) collectionSortExpression(w http.ResponseWriter, r *http.Reques
 	key := add(uuidToString(id))
 	switch def.Type {
 	case fields.TypeRelation:
-		return "(SELECT min(lower(COALESCE(i.title,t.title))) " + collectionLiveLinkJoin + " AND l.from_field_id=" + key + "::uuid)", true
+		return "(SELECT min(lower(COALESCE(i.title,t.title))) " + collectionLiveLinkJoin + " AND (l.to_type='issue' OR collection_can_read(tc.id," + add(parseUUID(requestUserID(r))) + "::uuid))" + " AND l.from_field_id=" + key + "::uuid)", true
 	case "number":
 		return "CASE WHEN jsonb_typeof(r.fields->" + key + ")='number' THEN (r.fields->>" + key + ")::numeric END", true
 	case "checkbox":

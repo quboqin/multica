@@ -16,9 +16,8 @@ import (
 // multica collection field {list|add|update|archive} — tables ("collections")
 // and their field catalogs. Rows live under `multica record`.
 //
-// Who may do what is the server's call, not this file's. Reads, row writes and
-// creating a table are open to members and agents alike; reshaping a table is
-// for its creator and workspace owners/admins. A run's task token authenticates
+// Tables are private by default. Reads and writes follow the table sharing
+// roles; only its owner may archive it. A run's task token authenticates
 // as its runtime's owner and is held to that same rule, so an agent meets the
 // refusal exactly where that person would. It carries a stable code, which
 // collectionSchemaRequestError turns into a sentence the caller can act on.
@@ -86,7 +85,7 @@ const (
 	collectionRelationType = "relation"
 	// collectionSchemaForbiddenCode is the server's stable code for a table
 	// structure change refused because the caller is neither the table's
-	// creator nor a workspace owner/admin.
+	// owner nor an explicitly shared editor.
 	collectionSchemaForbiddenCode = "collection_schema_forbidden"
 )
 
@@ -99,8 +98,8 @@ var collectionCmd = &cobra.Command{
 one value per field, and never an assignee, a status or a run.
 
 Rows are under "multica record". Anyone in the workspace can create a table;
-renaming or archiving one, and adding or changing its fields, is for its creator
-and for workspace owners/admins. An agent's run acts for the person who owns its
+tables start private. Owners and shared editors may change rows and fields.
+Only the owner may archive a table or manage its sharing. An agent's run acts for the person who owns its
 runtime: it may change what that person may change.`,
 }
 
@@ -127,21 +126,21 @@ var collectionCreateCmd = &cobra.Command{
 	Long: `Create a table. It starts with one column, the row title; add the rest with
 "multica collection field add". The table belongs to whoever created it — for an
 agent's run, the person who owns its runtime — and that person manages its
-structure afterwards, as do workspace owners/admins.`,
+sharing afterwards. Shared editors may also change its rows and fields.`,
 	Args: exactArgs(0),
 	RunE: runCollectionCreate,
 }
 
 var collectionUpdateCmd = &cobra.Command{
 	Use:   "update <table>",
-	Short: "Rename a table or its first column (its creator, or a workspace owner/admin)",
+	Short: "Rename a table or its first column (requires edit access)",
 	Args:  exactArgs(1),
 	RunE:  runCollectionUpdate,
 }
 
 var collectionArchiveCmd = &cobra.Command{
 	Use:   "archive <table>",
-	Short: "Archive a table (its creator, or a workspace owner/admin)",
+	Short: "Archive a table (owner only)",
 	Long: `Archive a table. It leaves every list and its rows can no longer be opened;
 the data is kept, but nothing restores a table yet. Relations pointing at its
 rows read as deleted.`,
@@ -163,7 +162,7 @@ var collectionFieldListCmd = &cobra.Command{
 
 var collectionFieldAddCmd = &cobra.Command{
 	Use:   "add <table>",
-	Short: "Add a field (the table's creator, or a workspace owner/admin)",
+	Short: "Add a field (requires edit access)",
 	Long: `Add a field. Types: text, number, select, multi_select, date, checkbox, url,
 actor, multi_actor, relation, formula. A table holds at most 50 fields.
 
@@ -260,12 +259,11 @@ func init() {
 //
 // FormatError collapses every 403 into generic "no access" copy so a refusal
 // cannot confirm that a resource exists. That hides the one refusal here a
-// caller can act on: they CAN see the table and write its rows, and only its
-// structure is closed to them. The branch is on the server's stable code, never
+// caller can act on: they can see the table, but need edit access. The branch is on the server's stable code, never
 // on the English sentence.
 func collectionSchemaRequestError(action string, err error) error {
-	if cli.ServerErrorCode(err) == collectionSchemaForbiddenCode {
-		return cli.WithUserMessage("only a table's creator or a workspace owner/admin can change its structure, and you are neither here — an agent's run counts as the person who owns its runtime. The rows stay open to you through `multica record`; for the structure, ask one of those people, or create a table of your own.", err)
+	if code := cli.ServerErrorCode(err); code == collectionSchemaForbiddenCode || code == "collection_read_only" {
+		return cli.WithUserMessage("this table requires edit access. Ask its owner to share it with you as an editor. An agent's run has the same access as the person who owns its runtime.", err)
 	}
 	return fmt.Errorf("%s: %w", action, err)
 }

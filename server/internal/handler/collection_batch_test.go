@@ -128,7 +128,7 @@ func TestCollectionRestoreMetadataAndFieldValues(t *testing.T) {
 		t.Fatal("archived table missing")
 	}
 	_, _, member := privateAgentTestFixture(t)
-	testutil.Call(t, testHandler.RestoreCollection, withURLParam(newRequestAs(member, "POST", "/", nil), "collectionID", c)).Want(403)
+	testutil.Call(t, testHandler.RestoreCollection, withURLParam(newRequestAs(member, "POST", "/", nil), "collectionID", c)).Want(404)
 	testutil.Call(t, testHandler.RestoreCollection, request("POST")).Want(200)
 	var detail struct {
 		Collection struct{ Icon, Description string } `json:"collection"`
@@ -193,6 +193,6 @@ func TestCollectionAgentBatchAndRestoreAuthorization(t *testing.T) {
 	patchCollection(t, c, map[string]any{"archived": true}).Want(200)
 	_, _, member := privateAgentTestFixture(t)
 	refused := testutil.Call(t, testHandler.RestoreCollection, agent.onRuntimeOf(member).as(withURLParam(newRequest("POST", "/", nil), "collectionID", c)))
-	wantRefusalCode(t, "restore another member's table", refused, collectionSchemaForbidden)
+	refused.Want(404)
 	testutil.Call(t, testHandler.RestoreCollection, agent.as(withURLParam(newRequest("POST", "/", nil), "collectionID", c))).Want(200)
 }

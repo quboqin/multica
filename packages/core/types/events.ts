@@ -13,6 +13,7 @@ export type WSEventType =
   | "issue:created"
   | "record:updated"
   | "collection:updated"
+  | "collection:access_changed"
   | "document:access_changed"
   | "issue:updated"
   | "issue_attachments:changed"
@@ -568,6 +569,7 @@ export interface ChatSessionCreatedPayload {
 export interface WSEventPayloadMap {
   "issue:created": IssueCreatedPayload;
   "document:access_changed": {document_id: string};
+  "collection:access_changed": {collection_id: string};
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;
   "issue_attachments:changed": IssueAttachmentsChangedPayload;

@@ -655,6 +655,24 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete project views")
 		return
 	}
+
+	sharedCollections, err := qtx.ListProjectSharedCollections(r.Context(), db.ListProjectSharedCollectionsParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID})
+	if err != nil {
+		writeError(w, 500, "failed to read table sharing")
+		return
+	}
+	var previousCollectionReaders []pgtype.UUID
+	if len(sharedCollections) > 0 {
+		previousCollectionReaders, err = qtx.ListCollectionReaders(r.Context(), db.ListCollectionReadersParams{WorkspaceID: project.WorkspaceID, CollectionID: sharedCollections[0].ID})
+		if err != nil {
+			writeError(w, 500, "failed to read table audience")
+			return
+		}
+	}
+	if err = qtx.RevokeDeletedProjectCollectionShares(r.Context(), db.RevokeDeletedProjectCollectionSharesParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID}); err != nil {
+		writeError(w, 500, "failed to revoke table sharing")
+		return
+	}
 	sharedDocs, err := qtx.ListProjectSharedDocuments(r.Context(), db.ListProjectSharedDocumentsParams{WorkspaceID: project.WorkspaceID, ProjectID: project.ID})
 	if err != nil {
 		writeError(w, 500, "failed to read project sharing")
@@ -703,6 +721,9 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to commit project delete")
 		return
+	}
+	for _, c := range sharedCollections {
+		h.publishCollectionAccessChanged(c, previousCollectionReaders, "member", requestUserID(r))
 	}
 	for _, doc := range sharedDocs {
 		h.publishDocumentAccessChanged(doc, previousReaders, "member", userID)

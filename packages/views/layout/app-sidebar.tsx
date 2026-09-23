@@ -1,4 +1,5 @@
 "use client";
+import { collectionDetailOptions } from "@multica/core/collections";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 
 import { issueStatusCategory } from "@multica/core/issues";
@@ -299,6 +300,8 @@ function PinRow({
   const isIssue = pin.item_type === "issue";
   const statusCatalog = useIssueStatuses(wsId);
   const isView = pin.item_type === "view";
+ const isCollection=pin.item_type==="collection";
+ const collectionQuery=useQuery({...collectionDetailOptions(wsId,pin.item_id),enabled:isCollection});
   const p = useWorkspacePaths();
   const setActiveView = useActiveIssueViewStore((s) => s.setActive);
   const issueQuery = useQuery({
@@ -320,15 +323,21 @@ function PinRow({
     // talking to an older backend without the view endpoints sees 404 for
     // every view pin — auto-unpinning would permanently delete them all.
     // A deleted view's row simply hides instead.
-    if (isView) return;
+    if (isView || isCollection) return;
     const err = isIssue ? issueQuery.error : projectQuery.error;
     if (err instanceof ApiError && err.status === 404 && !triggeredRef.current) {
       triggeredRef.current = true;
       onUnpin();
     }
-  }, [isIssue, isView, issueQuery.error, onUnpin, projectQuery.error]);
+  }, [isIssue, isView, isCollection, issueQuery.error, onUnpin, projectQuery.error]);
 
   const activeViewByContainer = useActiveIssueViewStore((s) => s.active);
+  if (isCollection) {
+    if (collectionQuery.isPending) return <PinSkeleton />;
+    if (collectionQuery.isError || !collectionQuery.data) return null;
+    const table=collectionQuery.data.collection;
+    return <SortablePinItem pin={pin} href={p.collectionDetail(table.id)} pathname={pathname} onUnpin={onUnpin} label={table.name} iconNode={<Layers className="!size-3.5 shrink-0" />} />;
+  }
   if (isView) {
     if (viewQuery.isPending) return <PinSkeleton />;
     if (viewQuery.isError || !viewQuery.data) return null;

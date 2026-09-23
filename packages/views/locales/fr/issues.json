@@ -1141,6 +1141,7 @@
     "no_versions": "Aucune version enregistrée"
   },
   "cortex_table": {
+    "share_table": "Partager le tableau",
     "tables": "Tables",
     "all_records": "Tous les enregistrements",
     "views": "Vues",
@@ -1257,7 +1258,7 @@
     "relation_search": "Rechercher dans {{name}}…",
     "relation_linked": "Liés",
     "relation_type_to_search": "Saisissez du texte pour rechercher des tâches",
-    "link_deleted": "Supprimé",
+    "link_deleted": "Supprimé ou inaccessible",
     "unlink": "Délier {{name}}",
     "link_task": "Lier une tâche existante",
     "link_record": "Lier un enregistrement",

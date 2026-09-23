@@ -15,32 +15,17 @@ import (
 
 // collectionSchemaForbidden is the stable code on a refused table structure
 // change. The CLI branches on it to say who may make the change, which the
-// generic 403 copy cannot: the caller still sees the table and writes its rows.
+// generic 403 copy cannot: the caller can read the table but needs edit access.
 const collectionSchemaForbidden = "collection_schema_forbidden"
 
-// requireCollectionManager admits the collection creator and workspace
-// owners/admins, and returns the actor to credit with the change.
-//
-// A run's task token authenticates as its runtime's owner and is held to the
-// same rule as that person: what they may reshape, a run on their runtime may
-// reshape, and nothing more.
+// Editors may manage table fields; runtime credentials use their owner's access.
 func (h *Handler) requireCollectionManager(w http.ResponseWriter, r *http.Request, collection db.Collection) (actorType, actorID string, ok bool) {
-	user, ok := requireUserID(w, r)
-	if !ok {
+	permission := h.collectionPermission(r.Context(), h.Queries, collection, requestUserID(r))
+	if permission != "owner" && permission != "edit" {
+		writeErrorCode(w, 403, collectionSchemaForbidden, "table structure requires edit access")
 		return "", "", false
 	}
-	workspaceID := uuidToString(collection.WorkspaceID)
-	if uuidToString(collection.CreatedBy) != user {
-		member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
-		if !ok {
-			return "", "", false
-		}
-		if !roleAllowed(member.Role, "owner", "admin") {
-			writeErrorCode(w, http.StatusForbidden, collectionSchemaForbidden, "only the table's creator or a workspace owner or admin can change its structure")
-			return "", "", false
-		}
-	}
-	actorType, actorID = h.resolveActor(r, user, workspaceID)
+	actorType, actorID = h.resolveActor(r, requestUserID(r), uuidToString(collection.WorkspaceID))
 	return actorType, actorID, true
 }
 
@@ -80,6 +65,9 @@ func (h *Handler) UpdateCollection(w http.ResponseWriter, r *http.Request) {
 		Archived    *bool   `json:"archived"`
 	}
 	if !decodeCollectionBody(w, r, &req) {
+		return
+	}
+	if req.Archived != nil && *req.Archived && !h.requireCollectionOwner(w, r, collection) {
 		return
 	}
 	params := db.UpdateCollectionParams{WorkspaceID: collection.WorkspaceID, ID: collection.ID, Archive: req.Archived != nil && *req.Archived}

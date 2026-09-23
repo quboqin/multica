@@ -1141,6 +1141,7 @@
     "no_versions": "No saved versions"
   },
   "cortex_table": {
+    "share_table": "Share table",
     "tables": "Tables",
     "all_records": "All records",
     "views": "Views",
@@ -1257,7 +1258,7 @@
     "relation_search": "Search {{name}}…",
     "relation_linked": "Linked",
     "relation_type_to_search": "Type to search issues",
-    "link_deleted": "Deleted",
+    "link_deleted": "Deleted or unavailable",
     "unlink": "Unlink {{name}}",
     "link_task": "Link existing issue",
     "link_record": "Link record",

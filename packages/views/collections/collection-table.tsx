@@ -35,6 +35,7 @@ export const tableCapabilities = {
 } as const;
 
 export interface CollectionTableActions {
+  readOnly?: boolean;
   selection?: { rows: CollectionRecord[]; toggle: (row: CollectionRecord, checked: boolean) => void };
   canManage: boolean;
   fieldCount: number;
@@ -165,6 +166,7 @@ export function CollectionTable({
       ),
       cell: ({ row }) => (
         <TitleCell
+          readOnly={actions.readOnly}
           record={row.original}
           renaming={renaming === row.original.id}
           onRenamingChange={(active) => {
@@ -245,6 +247,7 @@ export function CollectionTable({
         return (
           <div className="-mx-4 -my-2 h-[calc(100%+1rem)]">
             <CollectionFieldEditor
+              readOnly={actions.readOnly}
               record={row.original}
               field={field}
               open={editing === key}
@@ -336,17 +339,18 @@ export function CollectionTable({
           })}
         </button>
       )}
-      <NewRecordRow
+      {!actions.readOnly && <NewRecordRow
         pending={commands.createRecord.isPending}
         onCreate={(title) =>
           commands.createRecord.mutateAsync({ title, fields: newRecordFields })
         }
-      />
+      />}
     </div>
   );
 }
 
 function TitleCell({
+  readOnly=false,
   record,
   renaming,
   onRenamingChange,
@@ -355,6 +359,7 @@ function TitleCell({
   onDelete,
 }: {
   record: CollectionRecord;
+  readOnly?: boolean;
   renaming: boolean;
   onRenamingChange: (renaming: boolean) => void;
   onRename: (title: string) => void;
@@ -363,7 +368,7 @@ function TitleCell({
 }) {
   const { t } = useT("issues");
   const [draft, setDraft] = useState(record.title);
-  if (renaming)
+  if (renaming && !readOnly)
     return (
       <input
         autoFocus
@@ -390,8 +395,9 @@ function TitleCell({
         <button
           type="button"
           className="min-w-0 flex-1 truncate text-left text-body"
-          aria-label={t(($) => $.cortex_table.rename_record, { title: record.title })}
+          aria-label={t(($) => readOnly ? $.cortex_table.open_record : $.cortex_table.rename_record, { title: record.title })}
           onClick={() => {
+            if(readOnly) {onOpen();return;}
             setDraft(record.title);
             onRenamingChange(true);
           }}
@@ -418,7 +424,7 @@ function TitleCell({
           <Maximize2 />
           {t(($) => $.cortex_table.open)}
         </ContextMenuItem>
-        <ContextMenuItem variant="destructive" onClick={onDelete}>
+        <ContextMenuItem variant="destructive" disabled={readOnly} onClick={onDelete}>
           <Trash2 />
           {t(($) => $.cortex_table.move_to_trash)}
         </ContextMenuItem>

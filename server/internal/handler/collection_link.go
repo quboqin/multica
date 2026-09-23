@@ -72,13 +72,13 @@ func validateCollectionFieldType(t string) error {
 
 // relationFieldConfig canonicalizes a new relation field's target and checks
 // that a named collection is a live one in this workspace.
-func (h *Handler) relationFieldConfig(ctx context.Context, collection db.Collection, cfg *PropertyConfig) ([]byte, error) {
+func (h *Handler) relationFieldConfig(ctx context.Context, collection db.Collection, cfg *PropertyConfig, userID string) ([]byte, error) {
 	relation, err := fields.ValidateRelationConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 	if relation.ToType == fields.RelationToRecord {
-		if _, err := h.Queries.GetCollection(ctx, db.GetCollectionParams{WorkspaceID: collection.WorkspaceID, ID: parseUUID(relation.CollectionID)}); err != nil {
+		if target, err := h.Queries.GetCollection(ctx, db.GetCollectionParams{WorkspaceID: collection.WorkspaceID, ID: parseUUID(relation.CollectionID)}); err != nil || h.collectionPermission(ctx, h.Queries, target, userID) == "" {
 			return nil, errors.New("the collection to link to was not found")
 		}
 	}
@@ -88,11 +88,11 @@ func (h *Handler) relationFieldConfig(ctx context.Context, collection db.Collect
 // attachRecordLinks adds "links" to each record payload in one query for the
 // whole page. Records without edges get an empty object, so a reader can tell
 // "no links" from a server that does not send them.
-func (h *Handler) attachRecordLinks(ctx context.Context, q *db.Queries, workspaceID pgtype.UUID, ids []pgtype.UUID, responses []map[string]any) error {
+func (h *Handler) attachRecordLinks(ctx context.Context, q *db.Queries, userID string, workspaceID pgtype.UUID, ids []pgtype.UUID, responses []map[string]any) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	rows, err := q.ListRecordLinks(ctx, db.ListRecordLinksParams{WorkspaceID: workspaceID, RecordIds: ids})
+	rows, err := q.ListRecordLinks(ctx, db.ListRecordLinksParams{WorkspaceID: workspaceID, RecordIds: ids, UserID: parseUUID(userID)})
 	if err != nil {
 		return err
 	}
@@ -187,6 +187,11 @@ func (h *Handler) CreateCollectionRecordLink(w http.ResponseWriter, r *http.Requ
 		target, err := util.ParseUUID(relation.CollectionID)
 		if err != nil {
 			writeError(w, 400, "relation target is not supported")
+			return
+		}
+		targetCollection, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{WorkspaceID: collection.WorkspaceID, ID: target})
+		if err != nil || h.collectionPermission(r.Context(), h.Queries, targetCollection, requestUserID(r)) == "" {
+			writeError(w, 404, "linked collection not found")
 			return
 		}
 		if _, err := h.Queries.GetLiveCollectionRecord(r.Context(), db.GetLiveCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: target, ID: toID}); err != nil {
@@ -318,7 +323,7 @@ func (h *Handler) ListCollectionRecordBacklinks(w http.ResponseWriter, r *http.R
 }
 
 func (h *Handler) respondBacklinks(w http.ResponseWriter, r *http.Request, workspaceID pgtype.UUID, toType string, toID pgtype.UUID) {
-	rows, err := h.Queries.ListRecordLinksTo(r.Context(), db.ListRecordLinksToParams{WorkspaceID: workspaceID, ToType: toType, ToID: toID})
+	rows, err := h.Queries.ListRecordLinksTo(r.Context(), db.ListRecordLinksToParams{WorkspaceID: workspaceID, ToType: toType, ToID: toID, UserID: parseUUID(requestUserID(r))})
 	if err != nil {
 		slog.Warn("list record backlinks failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, 500, "failed to list links")

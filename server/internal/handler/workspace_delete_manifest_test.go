@@ -57,6 +57,8 @@ var workspaceDeletionManifest = map[string]workspaceDeleteAction{
 	"collection_field":                   workspaceDelete,
 	"record":                             workspaceDelete,
 	"record_link":                        workspaceDelete,
+	"collection_access":                  workspaceDelete,
+	"collection_collaborator":            workspaceDelete,
 	"document_access":                    workspaceDelete,
 	"document_collaborator":              workspaceDelete,
 	"document_version":                   workspaceDelete,

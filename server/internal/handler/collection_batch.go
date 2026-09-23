@@ -39,6 +39,9 @@ func (h *Handler) RestoreCollection(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "archived collection not found")
 		return
 	}
+	if !h.checkCollectionAccess(w, r, c) || !h.requireCollectionOwner(w, r, c) {
+		return
+	}
 	actorType, actorID, ok := h.requireCollectionManager(w, r, c)
 	if !ok {
 		return
@@ -568,7 +571,7 @@ func (h *Handler) collectionFilterPredicate(w http.ResponseWriter, r *http.Reque
 				writeError(w, 400, "relation filters accept target IDs or __none__")
 				return "", false
 			}
-			predicate := "EXISTS (SELECT 1 " + collectionLiveLinkJoin + " AND l.from_field_id=" + add(id) + "::uuid"
+			predicate := "EXISTS (SELECT 1 " + collectionLiveLinkJoin + " AND (l.to_type='issue' OR collection_can_read(tc.id," + add(parseUUID(requestUserID(r))) + "::uuid))" + " AND l.from_field_id=" + add(id) + "::uuid"
 			if target == "__none__" {
 				predicate = "NOT " + predicate + ")"
 			} else {

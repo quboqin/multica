@@ -11,6 +11,7 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
+import { issueViewKeys } from "../issue-views/queries";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -1049,6 +1050,12 @@ export function useRealtimeSync(
         qc.invalidateQueries({ queryKey: ["inbox"] });
       },
     );
+    const unsubCollectionAccessChanged=ws.on("collection:access_changed",()=>{
+      const wsId=getCurrentWsId();if(!wsId)return;
+      void qc.resetQueries({queryKey:["collections",wsId]});
+      void qc.resetQueries({queryKey:issueViewKeys.all(wsId)});
+      void qc.invalidateQueries({queryKey:["pins",wsId]});
+    });
     const unsubRecordUpdated=ws.on("record:updated",refreshCollections);
     const unsubCollectionUpdated=ws.on("collection:updated",refreshCollections);
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
@@ -1784,6 +1791,7 @@ export function useRealtimeSync(
       unsubDocumentAccessChanged();
       unsubIssueUpdated();
       unsubRecordUpdated();
+      unsubCollectionAccessChanged();
       unsubCollectionUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();

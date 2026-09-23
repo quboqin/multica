@@ -1,3 +1,4 @@
+import { PinnedItemSchema, PinnedItemsSchema } from "../pins/schema";
 import { DocumentAccessSchema, DocumentSnapshotSchema, DocumentVersionsSchema, type DocumentSharingInput, type DocumentAccess, type DocumentSnapshot, type DocumentVersions } from "../documents/schema";
 import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, RecordBacklinksSchema, type CollectionFieldInput, type CollectionFieldPatch, type CollectionPatch, type CollectionQuery, type RecordBacklink } from "../collections";
 import type { InboxFilters } from "../inbox/filter-store";
@@ -1738,6 +1739,18 @@ export class ApiClient {
     });
   }
 
+  async getCollectionAccess(id: string, options: {workspaceId: string; signal?: AbortSignal}) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/access`, {signal: options.signal, headers: {"X-Workspace-ID": options.workspaceId}});
+    const result = parseWithFallback<import("../collections").CollectionAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "GET /api/collections/:id/access"});
+    if (!result) throw new Error("Invalid collection sharing response");
+    return result;
+  }
+  async updateCollectionAccess(id: string, input: DocumentSharingInput, workspaceId: string) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/access`, {method:"PUT",headers:{"X-Workspace-ID":workspaceId},body:JSON.stringify(input)});
+    const result = parseWithFallback<import("../collections").CollectionAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "PUT /api/collections/:id/access"});
+    if (!result) throw new Error("Invalid collection sharing response");
+    return result;
+  }
   async getDocumentAccess(id: string, options: {workspaceId: string; signal?: AbortSignal}) {
     const raw = await this.fetch<unknown>(`/api/documents/${id}/access`, {signal: options.signal, headers: {"X-Workspace-ID": options.workspaceId}});
     const result = parseWithFallback<DocumentAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "GET /api/documents/:id/access"});
@@ -4681,14 +4694,18 @@ export class ApiClient {
     // include=view is the capability opt-in: the server withholds view pins
     // from clients that don't declare support (old builds treated any
     // non-issue pin as a project pin and auto-deleted it on 404).
-    return this.fetch("/api/pins?include=view");
+    const raw = await this.fetch<unknown>("/api/pins?include=view,collection");
+    return parseWithFallback<PinnedItem[]>(raw, PinnedItemsSchema, [], {endpoint:"GET /api/pins"});
   }
 
   async createPin(data: CreatePinRequest): Promise<PinnedItem> {
-    return this.fetch("/api/pins", {
+    const raw = await this.fetch<unknown>("/api/pins", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    const result=parseWithFallback<PinnedItem|null>(raw,PinnedItemSchema,null,{endpoint:"POST /api/pins"});
+    if(!result) throw new Error("Invalid pin response");
+    return result;
   }
 
   async deletePin(itemType: PinnedItemType, itemId: string): Promise<void> {

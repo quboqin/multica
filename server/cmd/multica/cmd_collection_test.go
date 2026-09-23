@@ -217,7 +217,7 @@ func TestCollectionSchemaRefusalSaysWhoMayChangeTheStructure(t *testing.T) {
 	refused := &cli.HTTPError{Method: "POST", Path: "/api/collections/x/fields", StatusCode: 403,
 		Body: `{"error":"only the table's creator or a workspace owner or admin can change its structure","code":"collection_schema_forbidden"}`}
 	got := cli.FormatError(collectionSchemaRequestError("add field", refused), false)
-	for _, want := range []string{"creator", "owner/admin", "owns its runtime", "multica record"} {
+	for _, want := range []string{"edit access", "owner", "owns its runtime"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("message %q should contain %q", got, want)
 		}

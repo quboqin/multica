@@ -19,6 +19,7 @@ const { api, ApiError } = vi.hoisted(() => {
   return {
     ApiError,
     api: {
+      listPins: vi.fn().mockResolvedValue([]),
       getCollection: vi.fn(),
       listCollections: vi.fn(),
       listCollectionRecords: vi.fn(),
@@ -90,6 +91,7 @@ function mount({
       revision: 1,
     },
     fields,
+    access: {owner_id:"someone-else",scope:"workspace",scope_role:role === "member" ? "view":"edit",can_edit:role !== "member",can_manage:false,collaborators:[],project_id:null,revision:1},
   });
   api.listMembers.mockResolvedValue([{ user_id: "user-1", role }]);
   // The layout a table was left in is a stored preference of this browser.
@@ -214,6 +216,9 @@ describe("fields in layouts without column headers", () => {
     const main = await screen.findByRole("main");
     await within(main).findByText("Add a single-select field to use the board layout.");
     expect(within(main).queryByRole("button", { name: "New field" })).not.toBeInTheDocument();
+    expect(within(main).getByRole("button", { name: "New row" })).toBeDisabled();
+    expect(within(main).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+    expect(within(main).getByRole("button", { name: "Pin to sidebar" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: /Display/ }));
     await screen.findByRole("menuitemcheckbox", { name: "Notes" });
     expect(screen.queryByRole("button", { name: "Edit field Notes" })).not.toBeInTheDocument();

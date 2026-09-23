@@ -1104,6 +1104,7 @@
     "no_versions": "保存されたバージョンはありません"
   },
   "cortex_table": {
+    "share_table": "テーブルを共有",
     "tables": "テーブル",
     "all_records": "すべてのレコード",
     "views": "ビュー",
@@ -1216,7 +1217,7 @@
     "relation_search": "{{name}}を検索…",
     "relation_linked": "リンク済み",
     "relation_type_to_search": "入力してタスクを検索",
-    "link_deleted": "削除済み",
+    "link_deleted": "削除済みまたはアクセス不可",
     "unlink": "{{name}} のリンクを解除",
     "link_task": "既存のタスクをリンク",
     "link_record": "レコードをリンク",

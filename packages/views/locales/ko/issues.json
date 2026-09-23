@@ -1104,6 +1104,7 @@
     "no_versions": "저장된 버전 없음"
   },
   "cortex_table": {
+    "share_table": "테이블 공유",
     "tables": "테이블",
     "all_records": "전체 레코드",
     "views": "보기",
@@ -1216,7 +1217,7 @@
     "relation_search": "{{name}} 검색…",
     "relation_linked": "연결됨",
     "relation_type_to_search": "입력해서 태스크를 검색하세요",
-    "link_deleted": "삭제됨",
+    "link_deleted": "삭제되었거나 접근할 수 없음",
     "unlink": "{{name}} 연결 해제",
     "link_task": "기존 태스크 연결",
     "link_record": "레코드 연결",

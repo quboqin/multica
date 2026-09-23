@@ -2496,20 +2496,17 @@ sequenceDiagram
 <p>集合接口的请求体拒绝未知字段。这对已安装的旧桌面端是硬边界：旧服务端遇到新客户端多带的字段会回 400，而不是忽略——新增请求字段时要按这个前提设计客户端的降级。</p>
 
 <h3 id="cortex-perm"><span class="sec">11.7</span>权限与机器凭证</h3>
-<p>§4 与 §5.1 已经说明：任务令牌 <code>mat_</code> 在中间件里被换成「运行时主人的用户 ID + 服务端盖章的 <code>X-Actor-Source: task_token</code>」。默认契约是智能体与人可互换。表格完全沿用这条契约——行和结构都按运行时主人的身份判定；Cortex 只在<strong>修改文档共享</strong>这一处明确不互换，并且用<strong>凭证类型</strong>而不是角色来判断——主人是管理员也不放行。</p>
-<div class="tbl-wrap"><table class="tbl">
-  <thead><tr><th>操作</th><th><span class="tok human">成员</span></th><th><span class="tok human">表的创建者 / owner·admin</span></th><th><span class="tok machine">任务令牌</span></th></tr></thead>
-  <tbody>
-    <tr><td>读表、字段、行、回收站</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>建行、写格、改标题、删行 / 恢复、关联 / 取消关联、反查</td><td>✓</td><td>✓</td><td>✓</td></tr>
-    <tr><td>文档读取 / 保存与评论 / 移动</td><td>阅读者 / 编辑者 / 所有者</td><td>同左，不绕过文档授权</td><td>按运行时主人权限，历史和评论记真实执行者</td></tr>
-    <tr><td>建表</td><td>✓</td><td>✓</td><td>✓（<code>created_by</code> 记运行时主人）</td></tr>
-    <tr><td>改表名 / 首列名、归档表；增改、归档字段与选项</td><td>✗ <code>collection_schema_forbidden</code></td><td>✓</td><td>按运行时主人判定：主人是表的创建者或 owner·admin 则 ✓，否则 ✗ <code>collection_schema_forbidden</code></td></tr>
-    <tr><td>Publish 修改共享</td><td>仅文档所有者</td><td>仅文档所有者</td><td>✗ <code>document_transition_requires_human</code></td></tr>
-  </tbody>
-</table></div>
-<p><strong>表结构为什么没有「智能体专属」的门。</strong>分支最初按凭证类型拒绝任务令牌建表和改字段（<code>collection_schema_requires_human</code>）；2026-09-21 按用户决定去掉（PRD 修订九、Q-U3 的 schema 部分）。现在 <code>requireCollectionManager</code>（<code>collection_manage.go</code>）只问一件事：调用者的用户 ID 是不是 <code>collection.created_by</code>，或者该用户是不是 owner / admin。任务令牌的用户 ID 就是运行时主人，所以管理员名下的运行可以改任何表，普通成员名下的运行只能改该成员建的表——包括他名下的运行替他建的表，界面上的 <code>canManage</code> 用同一个判断，两边不会不一致。云节点 PAT（<code>cloud_pat</code>）同理。通过后用 <code>resolveActor</code> 取执行者，<code>collection:updated</code> 事件因此记在智能体名下；建表现在也发这条事件，否则 CLI 或智能体建的表要等客户端下一次重取才出现。任务字段定义（<code>requirePropertyAdmin</code>）没有跟着放开，仍然拒绝智能体。</p>
-<p>两类拒绝都带稳定的 <code>code</code>。原因在 CLI 一侧：<code>cli.FormatError</code> 有意把所有 403 折叠成同一句「无权访问」，以免拒绝本身泄露资源是否存在；命令只有按 <code>code</code> 显式认领某一种拒绝，才会换成具体的话。对智能体来说这不是体验问题——通用文案会让它去找别的凭证，具体文案告诉它「这张表谁能改，你可以去写行、自建一张表」或「共享由文档所有者管理」。</p>
+<p>§4 与 §5.1 已经说明：任务令牌 <code>mat_</code> 在中间件里被换成「运行时主人的用户 ID + 服务端盖章的 <code>X-Actor-Source: task_token</code>」。默认契约是智能体与人可互换。表格完全沿用这条契约——行和结构都按运行时主人的身份判定；Cortex 在<strong>修改文档或表格共享</strong>时明确不互换，并且用<strong>凭证类型</strong>而不是角色来判断——主人是管理员也不放行。</p>
+<div class="tbl-wrap"><table class="tbl"><thead><tr><th>操作</th><th>所需权限</th><th>任务令牌</th></tr></thead><tbody>
+<tr><td>读表、字段、行、回收站与反查</td><td>所有者、阅读者或编辑者</td><td>按运行时主人授权</td></tr>
+<tr><td>写行、导入、关联与字段结构变更</td><td>所有者或编辑者</td><td>按运行时主人授权</td></tr>
+<tr><td>整表归档 / 恢复</td><td>仅所有者</td><td>运行时主人必须是所有者</td></tr>
+<tr><td>建表</td><td>任意成员，默认创建者私有</td><td>created_by 记运行时主人</td></tr>
+<tr><td>文档读取 / 保存与评论 / 移动</td><td>按文档共享权限与所有权</td><td>按运行时主人权限，历史和评论记真实执行者</td></tr>
+<tr><td>Share / Publish 修改共享</td><td>仅人类所有者</td><td>拒绝，不可代理授权</td></tr>
+</tbody></table></div>
+<p><strong>集合授权与智能体。</strong>2026-09-23 起，<code>collection_access</code> / <code>collection_collaborator</code> 保存所有者、共享范围及可阅读 / 可编辑权限（迁移 522～524）；新表和既有表默认创建者私有。<code>requireCollectionManager</code> 按所有者或共享编辑权限允许改字段，整表归档和恢复仅限所有者，修改共享仅限人类所有者。Workspace 管理员不会绕过授权，任务令牌仍取运行时主人身份。<code>collection_can_read</code> 在列表、关联和反向链接查询中先过滤后分页；保存视图与文档内嵌复用表格权限。事件策略按表格读者投递，撤权事件通知新旧读者清除缓存；行事件不附带执行者专属的关联对象标题。个人 Pin 通过 <code>include=collection</code> 能力声明返回，避免旧桌面客户端误识别。任务字段定义的权限没有改变。</p>
+<p>两类拒绝都带稳定的 <code>code</code>。原因在 CLI 一侧：<code>cli.FormatError</code> 有意把所有 403 折叠成同一句「无权访问」，以免拒绝本身泄露资源是否存在；命令只有按 <code>code</code> 显式认领某一种拒绝，才会换成具体的话。对智能体来说这不是体验问题——通用文案会让它去找别的凭证，具体文案告诉它「请表格所有者授予编辑权限」或「共享由资源所有者管理」。</p>
 <div class="risk"><span class="t">放开表结构之后，风险在哪</span>不在「谁能改」，而在「改了收不回」。字段配置的接口只收整份选项列表，被移除的选项由 <code>StripCollectionFieldOptions</code> 从所有行（含回收站）清除；多选转单选只保留每格第一个值；表和字段归档保留数据，现已提供已归档列表与恢复；字段重名或达到配额时返回冲突。所以 CLI 给最常见的结构变更单独做了安全形态：<code>collection field update --add-option</code> 把既有选项按 ID 原样带回再追加，调用者不必、也不会因为漏键一个选项而清掉别人的数据；内置技能要求智能体只在任务明说时才移除、转换、归档。归档恢复不等于撤销选项移除或类型转换，后两者仍需事先明确授权。</div>
 <div class="note"><span class="t">2026-09-22 共享修订</span>取消送审和批准。共享是文档所有者主动授予访问的动作，任务令牌不能修改共享；内容操作按运行时主人授权。<code>document_publication</code> 保留旧记录，新编辑历史使用 <code>document_version</code> 的执行者类型与 ID。保存和还原不撤销共享。</div>
 

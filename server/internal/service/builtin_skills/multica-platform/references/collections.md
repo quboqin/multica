@@ -42,22 +42,18 @@ what that person may do — rows and structure alike.
 
 | | Who |
 |---|---|
-| List tables, read fields and rows | everyone in the workspace, and every run |
-| Add, change, delete and restore rows; write cells | everyone, and every run |
-| Link and unlink rows; read reverse links | everyone, and every run |
-| Create a table | everyone, and every run |
-| Rename or archive a table; add, change or archive a field | the table's creator, and workspace owners/admins |
+| List tables, read fields, rows and reverse links | the owner and people with view or edit access |
+| Add, change, delete and restore rows; link/unlink; change fields or table metadata | the owner and people with edit access |
+| Create a table | every workspace member and every run |
+| Archive or restore a table | its owner |
+| Change sharing | the human owner only |
 
-For you, the last row reads: the table was created by your runtime's owner — in
-the app, or by a run on one of their runtimes, this one included — or that
-person is a workspace owner or admin. A table you create belongs to them, and
-they manage it in the app afterwards.
-
-Otherwise the change is refused with `only a table's creator or a workspace
-owner/admin can change its structure`. That is a rule about the table, not a
-fault in your credentials, so do not look for another route: the rows stay open
-to you, and the structure change goes to one of those people — say which field
-and type you need. When the task is yours to shape, create your own table.
+Tables start private to their creator. A table a run creates belongs to its
+runtime's owner. Sharing can grant view or edit access to named members, a
+project, or the workspace. Project audiences currently include workspace
+members, just as document sharing does. Workspace administrative roles do not
+bypass table sharing. A missing share reads as not found; read-only access
+refuses writes. Ask the owner for access; do not try another route.
 
 ## CLI: read the table first
 
@@ -251,7 +247,7 @@ few rows the task is about, not the table.
 
 | Symptom | Cause |
 |---|---|
-| `only a table's creator or a workspace owner/admin can change its structure` | Your runtime's owner is neither. Rows stay open; ask one of those people, or use a table you create. |
+| `collection is read-only` | Ask the table owner to grant edit access to your runtime owner. |
 | `option "X" not found … valid options: …` | Select values must be existing options. Pick one, or add it with `--add-option`. |
 | `field "X" already has an option named "Y"` | `--add-option` found it there already. Nothing was changed; write the cell. |
 | `a relation cell holds links, not a value` | Use `record link` / `record unlink`, not `--set`. |

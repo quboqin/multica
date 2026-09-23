@@ -56,6 +56,7 @@ import type { CollectionCommands } from "./use-collection-commands";
  * stays linked to it.
  */
 export function CollectionRecordPanel({
+  readOnly=false,
   wsId,
   collectionId,
   projectId,
@@ -72,6 +73,7 @@ export function CollectionRecordPanel({
   recordId: string;
   fields: CollectionField[];
   /** Managers get the task relation field created for them when it is missing. */
+  readOnly?: boolean;
   canManage: boolean;
   commands: CollectionCommands;
   onClose: () => void;
@@ -88,7 +90,7 @@ export function CollectionRecordPanel({
     setTitle(record?.title ?? "");
   }, [record?.title]);
   const commitTitle = () => {
-    if (record && title.trim() !== record.title)
+    if (!readOnly && record && title.trim() !== record.title)
       void commands.setTitle(record, title.trim());
   };
   const valueFields = fields.filter((field) => !isRelation(field));
@@ -108,6 +110,7 @@ export function CollectionRecordPanel({
           className="min-w-0 flex-1 bg-transparent text-body font-semibold outline-none"
           value={title}
           disabled={!record}
+          readOnly={readOnly}
           onChange={(event) => setTitle(event.target.value)}
           onBlur={commitTitle}
           onKeyDown={(event) => {
@@ -133,7 +136,7 @@ export function CollectionRecordPanel({
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuItem
               variant="destructive"
-              disabled={!record || commands.deleteRecord.isPending}
+              disabled={readOnly || !record || commands.deleteRecord.isPending}
               onClick={() =>
                 record &&
                 commands.deleteRecord.mutate(record.id, { onSuccess: onClose })
@@ -176,6 +179,7 @@ export function CollectionRecordPanel({
                     </dt>
                     <dd className="min-w-0 rounded-sm">
                       <CollectionFieldEditor
+                        readOnly={readOnly}
                         record={record}
                         field={field}
                         open={editing === field.id}
@@ -191,6 +195,7 @@ export function CollectionRecordPanel({
             {/* A relation gets room for titles here, which a cell does not have. */}
             {relationFields.map((field) => (
               <RelationSection
+                readOnly={readOnly}
                 key={field.id}
                 record={record}
                 field={field}
@@ -217,6 +222,7 @@ export function CollectionRecordPanel({
                 variant="outline"
                 size="sm"
                 className="mt-2.5"
+                disabled={readOnly}
                 onClick={() => setConverting(true)}
               >
                 {t(($) => $.cortex_table.convert_to_task)}
@@ -240,12 +246,14 @@ export function CollectionRecordPanel({
 }
 
 function RelationSection({
+  readOnly,
   record,
   field,
   open,
   onOpenChange,
   commands,
 }: {
+  readOnly: boolean;
   record: CollectionRecord;
   field: CollectionField;
   open: boolean;
@@ -261,9 +269,9 @@ function RelationSection({
       </h3>
       <RelationList
         links={recordLinks(record, field)}
-        onUnlink={(link) => void commands.unlinkRecord(record.id, field.id, link.id)}
+        onUnlink={readOnly ? undefined : (link) => void commands.unlinkRecord(record.id, field.id, link.id)}
       />
-      <RelationEditor
+      {!readOnly && <RelationEditor
         record={record}
         field={field}
         open={open}
@@ -279,7 +287,7 @@ function RelationSection({
           </>
         }
         triggerRender={<Button variant="outline" size="sm" className="w-full" />}
-      />
+      />}
     </section>
   );
 }

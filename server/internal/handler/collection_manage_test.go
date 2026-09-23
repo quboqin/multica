@@ -77,7 +77,7 @@ func TestCollectionTitleColumnCanBeRenamed(t *testing.T) {
 
 	_, _, member := privateAgentTestFixture(t)
 	request := withURLParam(newRequestAs(member, "PATCH", "/api/collections", map[string]any{"title_name": "Nope"}), "collectionID", collection)
-	testutil.Call(t, testHandler.UpdateCollection, request).Want(403)
+	testutil.Call(t, testHandler.UpdateCollection, request).Want(404)
 }
 
 func TestArchivedCollectionLeavesTheWorkspace(t *testing.T) {
@@ -86,7 +86,7 @@ func TestArchivedCollectionLeavesTheWorkspace(t *testing.T) {
 
 	_, _, member := privateAgentTestFixture(t)
 	request := withURLParam(newRequestAs(member, "PATCH", "/api/collections", map[string]any{"archived": true}), "collectionID", collection)
-	testutil.Call(t, testHandler.UpdateCollection, request).Want(403)
+	testutil.Call(t, testHandler.UpdateCollection, request).Want(404)
 
 	patchCollection(t, collection, map[string]any{"archived": true}).Want(200)
 	var listed []struct {
@@ -146,7 +146,7 @@ func TestCollectionFieldOptionsCanBeEditedAndRemoved(t *testing.T) {
 
 	_, _, member := privateAgentTestFixture(t)
 	request := withURLParams(newRequestAs(member, "PATCH", "/api/collections/fields", map[string]any{"name": "Nope"}), "collectionID", collection, "fieldID", single)
-	testutil.Call(t, testHandler.UpdateCollectionField, request).Want(403)
+	testutil.Call(t, testHandler.UpdateCollectionField, request).Want(404)
 }
 
 func TestCollectionFieldTypeChangesOnlyAlongSafePaths(t *testing.T) {

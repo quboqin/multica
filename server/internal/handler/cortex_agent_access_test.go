@@ -195,7 +195,8 @@ func TestAgentTokenIsHeldToItsRuntimeOwnersTableRights(t *testing.T) {
 		return withURLParams(r, append([]string{"collectionID", theirs}, params...)...)
 	}
 
-	const code = "collection_schema_forbidden"
+	const code = "collection_read_only"
+	shareCollection(t, theirs, "private", "view", nil, []map[string]string{{"user_id": member, "role": "view"}}, 1, 200)
 	memberAgent := agent.onRuntimeOf(member)
 	for what, call := range map[string]func() *testutil.Response{
 		"rename table": func() *testutil.Response {
@@ -217,7 +218,8 @@ func TestAgentTokenIsHeldToItsRuntimeOwnersTableRights(t *testing.T) {
 	// the same answer at the keyboard.
 	wantRefusalCode(t, "the plain member", testutil.Call(t, testHandler.CreateCollectionField, on(newRequestAs(member, "POST", "/api/collections", map[string]any{"name": "Stage", "type": "text"}))), code)
 
-	// Rows stay open, and so does a table of the member's own.
+	// Explicit edit access opens rows and fields for the runtime owner.
+	shareCollection(t, theirs, "private", "view", nil, []map[string]string{{"user_id": member, "role": "edit"}}, 2, 200)
 	var row linkedRecord
 	testutil.Call(t, testHandler.CreateCollectionRecord, memberAgent.as(on(newRequest("POST", "/api/collections", map[string]any{"title": "Written anyway"})))).Want(201).JSON(&row)
 	dbfx.Cleanup(t, "DELETE FROM record WHERE id=$1", row.ID)
@@ -230,7 +232,9 @@ func TestAgentTokenIsHeldToItsRuntimeOwnersTableRights(t *testing.T) {
 	// ...which the member then manages in the app, never having touched it.
 	testutil.Call(t, testHandler.UpdateCollection, withURLParams(newRequestAs(member, "PATCH", "/api/collections", map[string]any{"name": t.Name() + " own, renamed"}), "collectionID", own.ID)).Want(200)
 
-	// An admin reshapes any table, and so does a run on an admin's runtime.
+	// Administrative role alone grants no access; sharing applies to runs too.
+	testutil.Call(t, testHandler.GetCollection, agent.onRuntimeOf(admin).as(on(newRequest("GET", "/api/collections", nil)))).Want(404)
+	shareCollection(t, theirs, "private", "view", nil, []map[string]string{{"user_id": admin, "role": "edit"}}, 3, 200)
 	var added struct {
 		ID string `json:"id"`
 	}

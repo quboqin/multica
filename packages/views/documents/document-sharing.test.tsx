@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderWithI18n } from "../test/i18n";
-import { DocumentSharing } from "./document-sharing";
+import { DocumentSharing, ResourceSharing } from "./document-sharing";
 import {
   DocumentVersionList,
   DocumentVersionPreview,
@@ -12,6 +12,7 @@ import type { Issue } from "@multica/core/types";
 
 const api = vi.hoisted(() => ({
   updateDocumentAccess: vi.fn(),
+  updateCollectionAccess: vi.fn(),
   listMembers: vi.fn(),
   listProjects: vi.fn(),
   listIssueAttachments: vi.fn().mockResolvedValue([]),
@@ -213,4 +214,16 @@ it("does not fetch history when the Versions tab is inactive or access is read-o
   );
   expect(api.listDocumentVersions).not.toHaveBeenCalled();
   expect(api.getDocumentVersion).not.toHaveBeenCalled();
+});
+
+it("uses the collection endpoint for named collaborators and a shared edit audience", async () => {
+ api.updateCollectionAccess.mockResolvedValue({});
+ mount(<ResourceSharing kind="collection" id="table" wsId="ws" access={{owner_id:"owner",scope:"workspace",scope_role:"edit",project_id:null,revision:4,can_edit:true,can_manage:true,collaborators:[]}}/>);
+ fireEvent.click(screen.getByRole("button",{name:"Share"}));
+ expect(await screen.findByRole("dialog",{name:"Share table"})).toBeTruthy();
+ fireEvent.click(await screen.findByRole("button",{name:/reader@test.local/}));
+ fireEvent.click(screen.getByRole("button",{name:"Save sharing"}));
+ await waitFor(()=>expect(api.updateCollectionAccess).toHaveBeenCalledWith("table",{scope:"workspace",scope_role:"edit",project_id:null,collaborators:[{user_id:"reader",role:"view"}],expected_revision:4},"ws"));
+ expect(api.updateDocumentAccess).not.toHaveBeenCalled();
+ await waitFor(()=>expect(screen.queryByRole("dialog")).toBeNull());
 });

@@ -24,6 +24,7 @@ const DRAG_TYPE = "application/x-collection-record";
  * current filter leaves it empty, so a card always has somewhere to go.
  */
 export function CollectionBoard({
+  readOnly=false,
   collectionId,
   groupField,
   cardFields,
@@ -31,6 +32,7 @@ export function CollectionBoard({
   commands,
   onOpenRecord,
 }: {
+  readOnly?: boolean;
   collectionId: string;
   groupField: CollectionField;
   cardFields: CollectionField[];
@@ -51,6 +53,7 @@ export function CollectionBoard({
     <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
       {columns.map((column) => (
         <BoardColumn
+          readOnly={readOnly}
           key={column.key}
           collectionId={collectionId}
           column={column}
@@ -68,6 +71,7 @@ export function CollectionBoard({
 }
 
 function BoardColumn({
+  readOnly=false,
   collectionId,
   column,
   groupField,
@@ -78,6 +82,7 @@ function BoardColumn({
   onDragChange,
   onOpenRecord,
 }: {
+  readOnly?: boolean;
   collectionId: string;
   column: { key: string; name: string; color?: string };
   groupField: CollectionField;
@@ -104,7 +109,7 @@ function BoardColumn({
   const empty = !pages.isLoading && count === 0;
   const label = column.key === NONE ? t(($) => $.cortex_table.no_value) : column.name;
   const canDrop =
-    !!dragging && (dragging.fields[groupField.id] ?? null) !== value;
+    !readOnly && !!dragging && (dragging.fields[groupField.id] ?? null) !== value;
   return (
     <section
       aria-label={label}
@@ -143,6 +148,7 @@ function BoardColumn({
           variant="ghost"
           size="icon-xs"
           className="ml-auto"
+          disabled={readOnly}
           aria-label={t(($) => $.cortex_table.add_to_group, { name: label })}
           onClick={() => setAdding(true)}
         >
@@ -182,7 +188,7 @@ function BoardColumn({
         {records.map((record) => (
           <article
             key={record.id}
-            draggable
+            draggable={!readOnly}
             onDragStart={(event) => {
               event.dataTransfer.setData(DRAG_TYPE, record.id);
               event.dataTransfer.effectAllowed = "move";

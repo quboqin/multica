@@ -155,13 +155,14 @@ SELECT l.id,l.from_record_id,l.from_field_id,l.to_type,l.to_id,
 FROM record_link l
 LEFT JOIN issue i ON l.to_type='issue' AND i.id=l.to_id AND i.workspace_id=l.workspace_id
 LEFT JOIN record t ON l.to_type='record' AND t.id=l.to_id AND t.workspace_id=l.workspace_id AND t.deleted_at IS NULL
-LEFT JOIN collection tc ON tc.id=t.collection_id AND tc.workspace_id=t.workspace_id AND tc.archived_at IS NULL
-WHERE l.workspace_id=$1 AND l.from_record_id=ANY($2::uuid[])
+LEFT JOIN collection tc ON tc.id=t.collection_id AND tc.workspace_id=t.workspace_id AND tc.archived_at IS NULL AND collection_can_read(tc.id,$2::uuid)
+WHERE l.workspace_id=$1 AND l.from_record_id=ANY($3::uuid[])
 ORDER BY l.created_at,l.id
 `
 
 type ListRecordLinksParams struct {
 	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+	UserID      pgtype.UUID   `json:"user_id"`
 	RecordIds   []pgtype.UUID `json:"record_ids"`
 }
 
@@ -181,7 +182,7 @@ type ListRecordLinksRow struct {
 // Every edge of the given records with what its target looks like now. A target
 // that was deleted, trashed or archived away leaves the edge and reads missing.
 func (q *Queries) ListRecordLinks(ctx context.Context, arg ListRecordLinksParams) ([]ListRecordLinksRow, error) {
-	rows, err := q.db.Query(ctx, listRecordLinks, arg.WorkspaceID, arg.RecordIds)
+	rows, err := q.db.Query(ctx, listRecordLinks, arg.WorkspaceID, arg.UserID, arg.RecordIds)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +219,7 @@ FROM record_link l
 JOIN record r ON r.id=l.from_record_id AND r.workspace_id=l.workspace_id AND r.deleted_at IS NULL
 JOIN collection c ON c.id=l.collection_id AND c.workspace_id=l.workspace_id AND c.archived_at IS NULL
 JOIN collection_field f ON f.id=l.from_field_id AND f.workspace_id=l.workspace_id AND f.archived_at IS NULL
-WHERE l.workspace_id=$1 AND l.to_type=$2 AND l.to_id=$3
+WHERE l.workspace_id=$1 AND l.to_type=$2 AND l.to_id=$3 AND collection_can_read(c.id,$4::uuid)
 ORDER BY lower(c.name),lower(r.title),l.id LIMIT 200
 `
 
@@ -226,6 +227,7 @@ type ListRecordLinksToParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	ToType      string      `json:"to_type"`
 	ToID        pgtype.UUID `json:"to_id"`
+	UserID      pgtype.UUID `json:"user_id"`
 }
 
 type ListRecordLinksToRow struct {
@@ -241,7 +243,12 @@ type ListRecordLinksToRow struct {
 // What points at one task or record. Only edges a reader can still open count:
 // the source record, its table and the relation field must all be live.
 func (q *Queries) ListRecordLinksTo(ctx context.Context, arg ListRecordLinksToParams) ([]ListRecordLinksToRow, error) {
-	rows, err := q.db.Query(ctx, listRecordLinksTo, arg.WorkspaceID, arg.ToType, arg.ToID)
+	rows, err := q.db.Query(ctx, listRecordLinksTo,
+		arg.WorkspaceID,
+		arg.ToType,
+		arg.ToID,
+		arg.UserID,
+	)
 	if err != nil {
 		return nil, err
 	}

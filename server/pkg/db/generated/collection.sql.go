@@ -333,12 +333,13 @@ func (q *Queries) ListCollectionFields(ctx context.Context, arg ListCollectionFi
 const listCollections = `-- name: ListCollections :many
 SELECT c.id, c.workspace_id, c.project_id, c.name, c.description, c.icon, c.created_by, c.revision, c.archived_at, c.created_at, c.updated_at, c.title_name,
  (SELECT count(*) FROM record r WHERE r.workspace_id=c.workspace_id AND r.collection_id=c.id AND r.deleted_at IS NULL)::bigint AS record_count
-FROM collection c WHERE c.workspace_id=$1 AND (c.archived_at IS NOT NULL)=$2::boolean ORDER BY c.created_at DESC,c.id
+FROM collection c WHERE c.workspace_id=$1 AND (c.archived_at IS NOT NULL)=$2::boolean AND collection_can_read(c.id,$3::uuid) ORDER BY c.created_at DESC,c.id
 `
 
 type ListCollectionsParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 	Archived    bool        `json:"archived"`
+	UserID      pgtype.UUID `json:"user_id"`
 }
 
 type ListCollectionsRow struct {
@@ -358,7 +359,7 @@ type ListCollectionsRow struct {
 }
 
 func (q *Queries) ListCollections(ctx context.Context, arg ListCollectionsParams) ([]ListCollectionsRow, error) {
-	rows, err := q.db.Query(ctx, listCollections, arg.WorkspaceID, arg.Archived)
+	rows, err := q.db.Query(ctx, listCollections, arg.WorkspaceID, arg.Archived, arg.UserID)
 	if err != nil {
 		return nil, err
 	}

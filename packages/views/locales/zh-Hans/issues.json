@@ -1104,6 +1104,7 @@
     "no_versions": "暂无历史版本"
   },
   "cortex_table": {
+    "share_table": "共享表格",
     "tables": "表格",
     "all_records": "全部记录",
     "views": "视图",
@@ -1216,7 +1217,7 @@
     "relation_search": "搜索{{name}}…",
     "relation_linked": "已关联",
     "relation_type_to_search": "输入关键词搜索任务",
-    "link_deleted": "已删除",
+    "link_deleted": "已删除或无权访问",
     "unlink": "取消关联 {{name}}",
     "link_task": "关联已有任务",
     "link_record": "关联记录",
