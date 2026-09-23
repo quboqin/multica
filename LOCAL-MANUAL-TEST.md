@@ -20,7 +20,7 @@ cd /Users/qinqubo/magic/projects/multica
 make preview
 ```
 
-首次启动会准备本地 API、执行前端生产构建，再启动预览。之后再次执行会复用已有构建和健康的服务。等待命令显示 `Environment ready`，再打开：
+首次启动会准备本地 API、执行前端生产构建、启动预览，并启动当前环境的 daemon（守护进程）。之后再次执行会复用已有构建和健康的服务。等待命令显示 `Environment ready`，再打开：
 
 - 文档：<http://localhost:14703/dev/documents>
 - 多维表格：<http://localhost:14703/dev/collections>
@@ -40,11 +40,13 @@ make preview ARGS=--rebuild
 
 | 操作 | 命令 |
 | --- | --- |
-| 启动或复用预览 | `make preview` |
+| 启动或复用预览、API 和 daemon | `make preview` |
 | 更新预览中的前端代码 | `make preview ARGS=--rebuild` |
-| 查看地址和运行状态 | `make status`，查看 `preview` 行 |
-| 只停止预览，保留开发页面和 API | `make down C=preview` |
+| 查看地址和运行状态 | `make status`，查看 `api`、`preview`、`daemon` 行 |
+| 只停止预览，保留开发页面、API 和 daemon | `make down C=preview` |
 | 停止整个环境，保留测试数据 | `make down` |
+
+daemon 使用当前环境的 `dev-multica-703` 配置连接 `http://localhost:18783`。Runtime 连不上时，先运行 `make preview` 补齐服务，再用 `make status` 检查 daemon 是否运行，并在页面的 Runtimes 中确认在线状态。无需另外启动默认配置下的 daemon。只查看页面、不需要启动 daemon 时，可以使用 `make up C=api,preview`。
 
 前端构建文件放在 `~/.multica/dev/envs/multica-703/preview/apps/web`，与开发模式的 `.next`、MDX 和类型生成文件隔离。首次构建需要等待编译、类型检查和页面生成；页面访问时不再出现开发模式的 `Compiling…`，但 API 取数时仍可能短暂显示加载状态。
 
@@ -53,6 +55,7 @@ make preview ARGS=--rebuild
 ```bash
 tail -n 80 ~/.multica/dev/envs/multica-703/logs/preview-build.log
 tail -n 80 ~/.multica/dev/envs/multica-703/logs/preview.log
+tail -n 80 ~/.multica/profiles/dev-multica-703/daemon.log
 ```
 
 构建失败不会启动不完整的预览，也不会停止开发 Web。修复报错后重新运行 `make preview ARGS=--rebuild`。端口被其他进程占用时命令会报错，不会自动结束该进程。
@@ -65,6 +68,7 @@ tail -n 80 ~/.multica/dev/envs/multica-703/logs/preview.log
 - 已通过：环境管理脚本测试、构建目录隔离测试、构建失败保护、端口冲突保护；`git diff --check` 通过。
 - 浏览器已验证：登录会话可用、文档正文与列表切换、多维表格列表数据加载；WebSocket 握手返回 `101`，检查时未见浏览器错误。
 - 单独停止预览后，原开发 Web 的进程保持不变，原文档地址仍返回 `200`；API 进程也保持不变。
+- daemon 启动修复已验证：`make preview` 同时启动 API、预览和 `dev-multica-703` daemon；`make status` 三项均为运行中，CLI 从本地 API 查询到 6 个 runtime 均为 `online`。仅验证连接与注册，未派发真实智能体任务。
 - 本轮验证针对预览入口，未重跑全量业务、移动端或真实智能体测试；人工验收仍由用户确认。
 
 ## 开发模式（热更新）

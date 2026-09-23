@@ -166,7 +166,7 @@ Use a production frontend for manual acceptance without waiting for route
 compilation on each first visit:
 
 ```bash
-make preview                  # build once, then start/reuse the preview
+make preview                  # start/reuse API, production frontend, and daemon
 make preview ARGS=--rebuild    # rebuild after changing frontend code
 make status                   # includes the preview URL
 make down C=preview            # stop only the preview
@@ -177,6 +177,12 @@ preview change the same test data as the development UI. It does not deploy
 anything. If needed, sign in using the local account/code shown by the command; browser
 storage is separate for the preview's port. The local API may restart once to
 allow the preview origin for API requests and WebSockets.
+
+The daemon uses this environment's `dev-<name>` CLI profile and local API, so
+agent runtimes can connect in preview mode. Check both `preview` and `daemon`
+with `make status`. `make down C=preview` leaves the API and daemon running;
+`make down` stops the whole environment. For a frontend-only preview without
+starting the daemon, use `make up C=api,preview`.
 
 The slot reserves `14000 + offset` for preview, alongside `13000 + offset` for
 development. The preview binds to loopback. An unrelated listener on that port

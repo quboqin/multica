@@ -157,8 +157,8 @@ selfhost-stop: ## Stop the self-hosted Docker Compose stack
 up: ## Start this checkout's environment (C=api,web,preview,daemon,desktop; default api,web)
 	@bash scripts/dev-env.sh up $(if $(C),--components $(C)) $(ARGS)
 
-preview: ## Start a local production web preview (ARGS=--rebuild to update it)
-	@bash scripts/dev-env.sh up --components api,preview $(ARGS)
+preview: ## Start a local production web preview with API and daemon (ARGS=--rebuild to update it)
+	@bash scripts/dev-env.sh up --components api,preview,daemon $(ARGS)
 
 down: ## Stop this environment's processes, keeping its database and profile
 	@bash scripts/dev-env.sh down $(if $(C),--components $(C)) $(ARGS)
