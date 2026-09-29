@@ -69,7 +69,7 @@ it("adds a reader and keeps the sharing dialog and choices on failure", async ()
       }}
     />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Share" }));
   fireEvent.click(
     await screen.findByRole("button", { name: /reader@test.local/ }),
   );
@@ -107,7 +107,7 @@ it("does not adopt a background sharing revision while editing the form", async 
     />
   );
   const { rerender } = mount(sharing(3));
-  fireEvent.click(screen.getByRole("button", { name: "Publish" }));
+  fireEvent.click(screen.getByRole("button", { name: "Share" }));
   fireEvent.click(
     await screen.findByRole("button", { name: /reader@test.local/ }),
   );

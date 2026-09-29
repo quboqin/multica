@@ -20,7 +20,7 @@ const collectionSchemaForbidden = "collection_schema_forbidden"
 
 // Editors may manage table fields; runtime credentials use their owner's access.
 func (h *Handler) requireCollectionManager(w http.ResponseWriter, r *http.Request, collection db.Collection) (actorType, actorID string, ok bool) {
-	permission := h.collectionPermission(r.Context(), h.Queries, collection, requestUserID(r))
+	permission := h.requestCollectionPermission(r, h.Queries, collection)
 	if permission != "owner" && permission != "edit" {
 		writeErrorCode(w, 403, collectionSchemaForbidden, "table structure requires edit access")
 		return "", "", false

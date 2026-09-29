@@ -568,6 +568,18 @@
       "bar_authors_more_other": "{{names}} 외 {{count}}명",
       "resolve_failed": "스레드를 해결하지 못했습니다",
       "unresolve_failed": "스레드 해결을 취소하지 못했습니다"
+    },
+    "agent_grant": {
+      "title": "에이전트가 이 문서를 처리하도록 허용할까요?",
+      "description": "에이전트는 실행 중인 런타임 소유자의 권한으로 작업합니다. 멘션한 에이전트 중 일부는 현재 이 문서에 접근할 수 없습니다.",
+      "no_access": "접근 권한 없음",
+      "currently": "현재: {{permission}}",
+      "grant_edit": "이번 실행에서 읽기, 답글, 편집 허용",
+      "grant_view": "이번 실행에서 읽기만 허용",
+      "grant_none": "허용하지 않음(그대로 보내기)",
+      "scope_note": "권한은 이번 실행의 이 문서에만 적용되며 실행이 끝나면 사라집니다. 문서가 누구에게도 공유되지 않습니다.",
+      "cancel": "취소",
+      "confirm": "허용하고 보내기"
     }
   },
   "reply": {

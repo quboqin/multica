@@ -53,6 +53,7 @@ import type {
   IssueSubscriber,
   Comment,
   CommentTriggerPreview,
+  CommentAgentGrant,
   IssueTriggerPreview,
   IssueTriggerPreviewParams,
   Reaction,
@@ -1986,6 +1987,7 @@ export class ApiClient {
     parentId?: string,
     attachmentIds?: string[],
     suppressAgentIds?: string[],
+    agentGrants?: CommentAgentGrant[],
   ): Promise<Comment> {
     return this.fetch(`/api/issues/${issueId}/comments`, {
       method: "POST",
@@ -1995,6 +1997,7 @@ export class ApiClient {
         ...(parentId ? { parent_id: parentId } : {}),
         ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
         ...(suppressAgentIds?.length ? { suppress_agent_ids: suppressAgentIds } : {}),
+        ...(agentGrants?.length ? { agent_grants: agentGrants } : {}),
       }),
     });
   }

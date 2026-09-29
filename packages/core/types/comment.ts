@@ -70,12 +70,31 @@ export type CommentTriggerSource =
   | "mention_agent"
   | "mention_squad_leader";
 
+export type DocumentGrantPermission = "view" | "edit";
+
+// What a run of this agent can do on the document the comment is on, and the
+// most the poster may grant it for that run. Present only for comments a
+// person posts on a document.
+export interface CommentTriggerDocumentAccess {
+  // The run's permission with no grant: "" (none), "view", "edit" or "owner".
+  runtime_owner_permission: string;
+  // The most the poster may grant ("view" | "edit"); empty when the run can
+  // already do everything the poster could grant.
+  max_grant?: DocumentGrantPermission | "";
+}
+
+export interface CommentAgentGrant {
+  agent_id: string;
+  permission: DocumentGrantPermission;
+}
+
 export interface CommentTriggerPreviewAgent {
   id: string;
   name: string;
   avatar_url?: string;
   source: CommentTriggerSource | string;
   reason: string;
+  document_access?: CommentTriggerDocumentAccess;
 }
 
 export interface CommentTriggerPreview {

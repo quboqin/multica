@@ -47,7 +47,7 @@ func (h *Handler) checkCollectionAccess(w http.ResponseWriter, r *http.Request, 
 		writeError(w, 404, "collection not found")
 		return false
 	}
-	permission := h.collectionPermission(r.Context(), h.Queries, collection, userID)
+	permission := h.requestCollectionPermission(r, h.Queries, collection)
 	if permission == "" {
 		writeError(w, 404, "collection not found")
 		return false
@@ -61,7 +61,7 @@ func (h *Handler) checkCollectionAccess(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *Handler) requireCollectionOwner(w http.ResponseWriter, r *http.Request, collection db.Collection) bool {
-	if h.collectionPermission(r.Context(), h.Queries, collection, requestUserID(r)) != "owner" {
+	if h.requestCollectionPermission(r, h.Queries, collection) != "owner" {
 		writeError(w, 403, "only the collection owner can manage sharing or archive the collection")
 		return false
 	}
@@ -94,7 +94,7 @@ func (h *Handler) collectionAccessResponse(r *http.Request, collection db.Collec
 	if err != nil {
 		return nil, err
 	}
-	permission := h.collectionPermission(r.Context(), h.Queries, collection, requestUserID(r))
+	permission := h.requestCollectionPermission(r, h.Queries, collection)
 	people := []collectionCollaboratorInput{}
 	if permission == "owner" {
 		rows, err := h.Queries.ListCollectionCollaborators(r.Context(), db.ListCollectionCollaboratorsParams{CollectionID: collection.ID, WorkspaceID: collection.WorkspaceID})
@@ -236,12 +236,12 @@ func (h *Handler) UpdateCollectionAccess(w http.ResponseWriter, r *http.Request)
 	h.respondCollectionAccess(w, r, collection)
 }
 
-func (h *Handler) canReadCollection(ctx context.Context, id, ws pgtype.UUID, user string) bool {
-	if user == "" {
+func (h *Handler) canReadCollection(r *http.Request, id, ws pgtype.UUID) bool {
+	if requestUserID(r) == "" {
 		return false
 	}
-	c, err := h.Queries.GetCollection(ctx, db.GetCollectionParams{WorkspaceID: ws, ID: id})
-	return err == nil && h.collectionPermission(ctx, h.Queries, c, user) != ""
+	c, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{WorkspaceID: ws, ID: id})
+	return err == nil && h.requestCollectionPermission(r, h.Queries, c) != ""
 }
 func (h *Handler) checkCollectionResource(w http.ResponseWriter, r *http.Request, id, ws pgtype.UUID) bool {
 	c, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{WorkspaceID: ws, ID: id})

@@ -45,9 +45,21 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to list documents")
 		return
 	}
+	ids := make([]pgtype.UUID, 0, len(docs))
+	for _, doc := range docs {
+		ids = append(ids, doc.Issue.ID)
+	}
+	allowed, narrowed, err := h.readableByOriginator(r, ws, ids)
+	if err != nil {
+		writeError(w, 500, "failed to list documents")
+		return
+	}
 	result := make([]IssueResponse, 0, len(docs))
 	prefix := h.getIssuePrefix(r.Context(), ws)
 	for _, doc := range docs {
+		if narrowed && !allowed[doc.Issue.ID] {
+			continue
+		}
 		resp := issueToResponse(doc.Issue, prefix)
 		resp.DocumentOwnerID = uuidToString(doc.OwnerID)
 		h.fillStatusCategory(r.Context(), ws, &resp)

@@ -290,7 +290,7 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := make([]IssueViewResponse, 0, len(views))
 	for _, v := range views {
-		if v.CollectionID.Valid && !h.canReadCollection(r.Context(), v.CollectionID, v.WorkspaceID, userID) {
+		if v.CollectionID.Valid && !h.canReadCollection(r, v.CollectionID, v.WorkspaceID) {
 			continue
 		}
 		resp = append(resp, issueViewToResponse(v))

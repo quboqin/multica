@@ -82,7 +82,7 @@ func (h *Handler) ListPins(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			c, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
-			if err != nil || h.collectionPermission(r.Context(), h.Queries, c, userID) == "" {
+			if err != nil || h.requestCollectionPermission(r, h.Queries, c) == "" {
 				continue
 			}
 		}
@@ -91,13 +91,13 @@ func (h *Handler) ListPins(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.ItemType == "view" {
 			v, err := h.Queries.GetIssueView(r.Context(), db.GetIssueViewParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
-			if err != nil || !canReadIssueView(v, parseUUID(userID)) || (v.CollectionID.Valid && !h.canReadCollection(r.Context(), v.CollectionID, v.WorkspaceID, userID)) {
+			if err != nil || !canReadIssueView(v, parseUUID(userID)) || (v.CollectionID.Valid && !h.canReadCollection(r, v.CollectionID, v.WorkspaceID)) {
 				continue
 			}
 		}
 		if p.ItemType == "issue" {
 			issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
-			if err != nil || (issue.Kind == "doc" && h.documentPermission(r.Context(), h.Queries, issue, userID) == "") {
+			if err != nil || (issue.Kind == "doc" && h.requestDocumentPermission(r, h.Queries, issue) == "") {
 				continue
 			}
 		}
@@ -140,7 +140,7 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 	switch req.ItemType {
 	case "issue":
 		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: itemUUID, WorkspaceID: wsUUID})
-		if err != nil || (issue.Kind == "doc" && h.documentPermission(r.Context(), h.Queries, issue, userID) == "") {
+		if err != nil || (issue.Kind == "doc" && h.requestDocumentPermission(r, h.Queries, issue) == "") {
 			writeError(w, 404, "issue not found")
 			return
 		}
@@ -159,7 +159,7 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		}
 	case "collection":
 		c, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{ID: itemUUID, WorkspaceID: wsUUID})
-		if err != nil || h.collectionPermission(r.Context(), h.Queries, c, userID) == "" {
+		if err != nil || h.requestCollectionPermission(r, h.Queries, c) == "" {
 			writeError(w, 404, "collection not found")
 			return
 		}
@@ -170,7 +170,7 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		view, err := h.Queries.GetIssueView(r.Context(), db.GetIssueViewParams{
 			ID: itemUUID, WorkspaceID: wsUUID,
 		})
-		if err != nil || !canReadIssueView(view, parseUUID(userID)) || (view.CollectionID.Valid && !h.canReadCollection(r.Context(), view.CollectionID, view.WorkspaceID, userID)) {
+		if err != nil || !canReadIssueView(view, parseUUID(userID)) || (view.CollectionID.Valid && !h.canReadCollection(r, view.CollectionID, view.WorkspaceID)) {
 			writeError(w, http.StatusNotFound, "view not found")
 			return
 		}

@@ -568,6 +568,18 @@
       "bar_authors_more_other": "{{names}} 等 {{count}} 人",
       "resolve_failed": "标记已解决失败",
       "unresolve_failed": "重新打开失败"
+    },
+    "agent_grant": {
+      "title": "允许该 agent 处理此文档？",
+      "description": "agent 以其所在运行时的所有者的权限工作。你提到的部分 agent 目前无法通过这种方式访问此文档。",
+      "no_access": "无权限",
+      "currently": "当前：{{permission}}",
+      "grant_edit": "允许本次任务读取、回复并编辑",
+      "grant_view": "允许本次任务仅读取",
+      "grant_none": "不授权（仍然发送）",
+      "scope_note": "授权仅对本次任务、本篇文档有效，任务结束即失效，不会把文档分享给任何人。",
+      "cancel": "取消",
+      "confirm": "允许并发送"
     }
   },
   "reply": {

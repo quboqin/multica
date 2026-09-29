@@ -583,6 +583,18 @@
       "bar_authors_more_other": "{{names}} et {{count}} autres",
       "resolve_failed": "Échec de la résolution du fil",
       "unresolve_failed": "Échec de la réouverture du fil"
+    },
+    "agent_grant": {
+      "title": "Autoriser l’agent à travailler sur ce document ?",
+      "description": "Un agent agit avec les droits de la personne propriétaire de son environnement d’exécution. Certains agents mentionnés ne peuvent pas atteindre ce document de cette façon.",
+      "no_access": "aucun accès",
+      "currently": "Actuellement : {{permission}}",
+      "grant_edit": "Autoriser la lecture, la réponse et la modification pour cette exécution",
+      "grant_view": "Autoriser la lecture seule pour cette exécution",
+      "grant_none": "Ne pas autoriser (envoyer quand même)",
+      "scope_note": "L’autorisation ne vaut que pour cette exécution et ce document, et prend fin avec elle. Le document n’est partagé avec personne.",
+      "cancel": "Annuler",
+      "confirm": "Autoriser et envoyer"
     }
   },
   "reply": {

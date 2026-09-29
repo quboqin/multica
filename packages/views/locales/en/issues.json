@@ -583,6 +583,18 @@
       "bar_authors_more_other": "{{names}} and {{count}} others",
       "resolve_failed": "Failed to resolve thread",
       "unresolve_failed": "Failed to unresolve thread"
+    },
+    "agent_grant": {
+      "title": "Allow the agent to work on this document?",
+      "description": "An agent works with the access of the person whose runtime it runs on. Some of the agents you mentioned cannot reach this document that way.",
+      "no_access": "no access",
+      "currently": "Currently: {{permission}}",
+      "grant_edit": "Allow reading, replying and editing for this run",
+      "grant_view": "Allow reading only for this run",
+      "grant_none": "Do not allow (send anyway)",
+      "scope_note": "The permission applies to this run on this document only and ends with it. The document is not shared with anyone.",
+      "cancel": "Cancel",
+      "confirm": "Allow and send"
     }
   },
   "reply": {

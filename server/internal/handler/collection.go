@@ -107,10 +107,18 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	// created_by is always a person. A run's task token authenticates as its
 	// runtime's owner, so a table an agent creates is that person's to manage.
-	collection, err := h.Queries.CreateCollection(r.Context(), db.CreateCollectionParams{WorkspaceID: ws, ProjectID: project, Name: name, CreatedBy: parseUUID(user), Icon: req.Icon, Description: req.Description})
+	// When a run created it on someone's behalf, that person owns it and the
+	// runtime owner keeps edit access (task_resource_access.go).
+	ownerID, runtimeEditorID := h.createdResourceOwners(r, ws, user)
+	collection, err := h.Queries.CreateCollection(r.Context(), db.CreateCollectionParams{WorkspaceID: ws, ProjectID: project, Name: name, CreatedBy: ownerID, Icon: req.Icon, Description: req.Description})
 	if err != nil {
 		writeError(w, 500, "failed to create collection")
 		return
+	}
+	if runtimeEditorID.Valid {
+		if err := h.Queries.AddCollectionCollaborator(r.Context(), db.AddCollectionCollaboratorParams{CollectionID: collection.ID, WorkspaceID: ws, UserID: runtimeEditorID, Role: "edit"}); err != nil {
+			slog.Warn("grant runtime owner edit access on created table failed", "error", err, "collection_id", uuidToString(collection.ID))
+		}
 	}
 	// A table created from the CLI or by a run has no client mutation to refresh
 	// the list, so open clients learn about it here.
@@ -172,7 +180,7 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 	}
 	var config []byte
 	if req.Type == fields.TypeRelation {
-		config, err = h.relationFieldConfig(r.Context(), collection, req.Config, requestUserID(r))
+		config, err = h.relationFieldConfig(r.Context(), collection, req.Config, requestUserID(r), requestTaskID(r))
 	} else if req.Type != fields.TypeFormula {
 		config, err = fields.ValidateConfig(req.Type, req.Config, validateLabelName, normalizeColor)
 	}

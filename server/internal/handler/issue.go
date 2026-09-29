@@ -1064,12 +1064,18 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 		// Filter before ranking and pagination, never after LIMIT.
 		sqlQuery = strings.Replace(sqlQuery, "i.workspace_id = $4", "i.workspace_id = $4 AND i.kind = '"+kind+"'", 1)
 	}
+	// Fill placeholder args: $4 = workspace_id, then limit and offset, which
+	// buildSearchQuery placed last; the reader ids appended below come after.
+	args[3] = wsUUID
+	args[len(args)-2] = limit
+	args[len(args)-1] = offset
 	args = append(args, parseUUID(requestUserID(r)))
 	sqlQuery = strings.Replace(sqlQuery, "i.workspace_id = $4", fmt.Sprintf("i.workspace_id = $4 AND (i.kind <> 'doc' OR document_can_read(i.id,$%d::uuid))", len(args)), 1)
-	// Fill placeholder args: $4 = workspace_id, last two = limit, offset
-	args[3] = wsUUID
-	args[len(args)-3] = limit
-	args[len(args)-2] = offset
+	// A run also reads no document the human behind it cannot (task_resource_access.go).
+	if originator := h.requestOriginatorUserID(r); originator != "" {
+		args = append(args, parseUUID(originator))
+		sqlQuery = strings.Replace(sqlQuery, "i.workspace_id = $4", fmt.Sprintf("i.workspace_id = $4 AND (i.kind <> 'doc' OR document_can_read(i.id,$%d::uuid))", len(args)), 1)
+	}
 
 	var results []searchResult
 	err := runSearchQuery(ctx, h.TxStarter, sqlQuery, args, func(rows pgx.Rows) error {
@@ -3310,9 +3316,13 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return out
 	}
 
+	// A document a run creates belongs to the person who asked for it, so they
+	// can find it; the runtime owner the run authenticates as keeps edit access
+	// so the run can go on working on it (task_resource_access.go).
+	documentOwnerID, runtimeEditorID := h.createdResourceOwners(r, wsUUID, creatorID)
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
 		Kind:            req.Kind,
-		DocumentOwnerID: parseUUID(creatorID),
+		DocumentOwnerID: documentOwnerID,
 		WorkspaceID:     wsUUID,
 		Title:           req.Title,
 		Description:     ptrToText(req.Description),
@@ -3398,6 +3408,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
+	if issue.Kind == "doc" && runtimeEditorID.Valid {
+		if err := h.Queries.AddDocumentCollaborator(r.Context(), db.AddDocumentCollaboratorParams{IssueID: issue.ID, WorkspaceID: issue.WorkspaceID, UserID: runtimeEditorID, Role: "edit"}); err != nil {
+			slog.Warn("grant runtime owner edit access on created document failed", append(logger.RequestAttrs(r), "error", err, "issue_id", uuidToString(issue.ID))...)
+		}
+	}
 
 	resp := issueToResponse(issue, prefix)
 	fillCreated(&resp)
@@ -3565,7 +3580,7 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 
 	if current.Kind == "doc" {
 		if actor, ok := ctx.Value(documentActorKey{}).(documentActor); ok {
-			permission := h.documentPermission(ctx, qtx, current, actor.UserID)
+			permission := h.effectiveDocumentPermission(ctx, qtx, current, actor.UserID, actor.TaskID)
 			if permission != "owner" && permission != "edit" {
 				return db.Issue{}, current, false, errDocumentAccessRevoked
 			}
@@ -4836,7 +4851,7 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if issue.Kind == "doc" && h.documentPermission(r.Context(), h.Queries, issue, userID) != "owner" {
+		if issue.Kind == "doc" && h.requestDocumentPermission(r, h.Queries, issue) != "owner" {
 			writeError(w, 403, "only document owners can delete documents")
 			return
 		}

@@ -55,7 +55,7 @@ func (h *Handler) checkDocumentAccess(w http.ResponseWriter, r *http.Request, do
 		writeError(w, 404, "document not found")
 		return false
 	}
-	permission := h.documentPermission(r.Context(), h.Queries, doc, userID)
+	permission := h.requestDocumentPermission(r, h.Queries, doc)
 	if permission == "" {
 		writeError(w, 404, "document not found")
 		return false
@@ -69,7 +69,7 @@ func (h *Handler) checkDocumentAccess(w http.ResponseWriter, r *http.Request, do
 }
 
 func (h *Handler) requireDocumentOwner(w http.ResponseWriter, r *http.Request, doc db.Issue) bool {
-	if h.documentPermission(r.Context(), h.Queries, doc, requestUserID(r)) != "owner" {
+	if h.requestDocumentPermission(r, h.Queries, doc) != "owner" {
 		writeError(w, 403, "only the document owner can manage sharing or move the document")
 		return false
 	}
@@ -77,12 +77,12 @@ func (h *Handler) requireDocumentOwner(w http.ResponseWriter, r *http.Request, d
 }
 
 type documentActorKey struct{}
-type documentActor struct{ UserID, Type, ID string }
+type documentActor struct{ UserID, Type, ID, TaskID string }
 
 func (h *Handler) documentActorRequest(r *http.Request, workspaceID string) *http.Request {
 	user := requestUserID(r)
 	kind, id := h.resolveActor(r, user, workspaceID)
-	return r.WithContext(context.WithValue(r.Context(), documentActorKey{}, documentActor{user, kind, id}))
+	return r.WithContext(context.WithValue(r.Context(), documentActorKey{}, documentActor{user, kind, id, requestTaskID(r)}))
 }
 
 type documentCollaboratorInput struct {
@@ -108,7 +108,7 @@ func (h *Handler) respondDocumentAccess(w http.ResponseWriter, r *http.Request, 
 		writeError(w, 500, "failed to read document sharing")
 		return
 	}
-	permission := h.documentPermission(r.Context(), h.Queries, doc, requestUserID(r))
+	permission := h.requestDocumentPermission(r, h.Queries, doc)
 	people := []documentCollaboratorInput{}
 	if permission == "owner" {
 		rows, err := h.Queries.ListDocumentCollaborators(r.Context(), db.ListDocumentCollaboratorsParams{IssueID: doc.ID, WorkspaceID: doc.WorkspaceID})
@@ -311,7 +311,7 @@ func (h *Handler) loadDocumentForHistory(w http.ResponseWriter, r *http.Request)
 		writeError(w, 400, "not a document")
 		return doc, false
 	}
-	permission := h.documentPermission(r.Context(), h.Queries, doc, requestUserID(r))
+	permission := h.requestDocumentPermission(r, h.Queries, doc)
 	if permission != "owner" && permission != "edit" {
 		writeError(w, 403, "version history requires edit access")
 		return doc, false
@@ -366,7 +366,7 @@ func (h *Handler) RestoreDocumentVersion(w http.ResponseWriter, r *http.Request)
 		writeError(w, 404, "document not found")
 		return
 	}
-	permission := h.documentPermission(r.Context(), q, doc, requestUserID(r))
+	permission := h.requestDocumentPermission(r, q, doc)
 	if permission != "owner" && permission != "edit" {
 		writeError(w, 403, "document is read-only")
 		return
@@ -416,7 +416,7 @@ func (h *Handler) checkDocumentResource(w http.ResponseWriter, r *http.Request, 
 func (h *Handler) readableDocuments(r *http.Request, issues []db.Issue) []db.Issue {
 	result := make([]db.Issue, 0, len(issues))
 	for _, issue := range issues {
-		if issue.Kind != "doc" || h.documentPermission(r.Context(), h.Queries, issue, requestUserID(r)) != "" {
+		if issue.Kind != "doc" || h.requestDocumentPermission(r, h.Queries, issue) != "" {
 			result = append(result, issue)
 		}
 	}
@@ -458,6 +458,15 @@ func (h *Handler) readableDocumentTasks(r *http.Request, workspaceID pgtype.UUID
 	allowed := make(map[pgtype.UUID]bool, len(readable))
 	for _, id := range readable {
 		allowed[id] = true
+	}
+	if byOriginator, narrowed, err := h.readableByOriginator(r, workspaceID, ids); err != nil {
+		return nil, err
+	} else if narrowed {
+		for id := range allowed {
+			if !byOriginator[id] {
+				delete(allowed, id)
+			}
+		}
 	}
 	result := make([]db.AgentTaskQueue, 0, len(tasks))
 	for _, task := range tasks {

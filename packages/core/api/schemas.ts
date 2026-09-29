@@ -1092,12 +1092,18 @@ export const EMPTY_COMMENT: Comment = {
   resolved_by_id: null,
 };
 
+const CommentTriggerDocumentAccessSchema = z.object({
+  runtime_owner_permission: z.string().default(""),
+  max_grant: z.enum(["view", "edit", ""]).optional(),
+}).loose();
+
 const CommentTriggerPreviewAgentSchema = z.object({
   id: z.string(),
   name: z.string().default(""),
   avatar_url: z.string().optional(),
   source: z.string().default(""),
   reason: z.string().default(""),
+  document_access: CommentTriggerDocumentAccessSchema.optional().catch(undefined),
 }).loose();
 
 // Per-target outcome of an explicit @agent / @squad mention (MUL-4525 §2).

@@ -77,9 +77,7 @@ export function ResourceSharing({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={<Button size="sm" disabled={disabled} />}>
-        {t(($) =>
-          kind === "document" ? $.cortex_docs.publish : $.cortex_docs.share,
-        )}
+        {t(($) => $.cortex_docs.share)}
       </DialogTrigger>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>

@@ -629,6 +629,16 @@ type Comment struct {
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 }
 
+type CommentAgentGrant struct {
+	CommentID   pgtype.UUID        `json:"comment_id"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	IssueID     pgtype.UUID        `json:"issue_id"`
+	Permission  string             `json:"permission"`
+	GrantedBy   pgtype.UUID        `json:"granted_by"`
+	GrantedAt   pgtype.Timestamptz `json:"granted_at"`
+}
+
 type CommentReaction struct {
 	ID          pgtype.UUID        `json:"id"`
 	CommentID   pgtype.UUID        `json:"comment_id"`

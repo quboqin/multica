@@ -72,13 +72,13 @@ func validateCollectionFieldType(t string) error {
 
 // relationFieldConfig canonicalizes a new relation field's target and checks
 // that a named collection is a live one in this workspace.
-func (h *Handler) relationFieldConfig(ctx context.Context, collection db.Collection, cfg *PropertyConfig, userID string) ([]byte, error) {
+func (h *Handler) relationFieldConfig(ctx context.Context, collection db.Collection, cfg *PropertyConfig, userID, taskID string) ([]byte, error) {
 	relation, err := fields.ValidateRelationConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 	if relation.ToType == fields.RelationToRecord {
-		if target, err := h.Queries.GetCollection(ctx, db.GetCollectionParams{WorkspaceID: collection.WorkspaceID, ID: parseUUID(relation.CollectionID)}); err != nil || h.collectionPermission(ctx, h.Queries, target, userID) == "" {
+		if target, err := h.Queries.GetCollection(ctx, db.GetCollectionParams{WorkspaceID: collection.WorkspaceID, ID: parseUUID(relation.CollectionID)}); err != nil || h.effectiveCollectionPermission(ctx, h.Queries, target, userID, taskID) == "" {
 			return nil, errors.New("the collection to link to was not found")
 		}
 	}
@@ -190,7 +190,7 @@ func (h *Handler) CreateCollectionRecordLink(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		targetCollection, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{WorkspaceID: collection.WorkspaceID, ID: target})
-		if err != nil || h.collectionPermission(r.Context(), h.Queries, targetCollection, requestUserID(r)) == "" {
+		if err != nil || h.requestCollectionPermission(r, h.Queries, targetCollection) == "" {
 			writeError(w, 404, "linked collection not found")
 			return
 		}
