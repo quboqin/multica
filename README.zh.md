@@ -224,6 +224,67 @@ make dev
 `make dev` 会自己认出你在主 checkout 还是 worktree 里，然后创建 env 文件、装依赖、初始化数据库、
 跑迁移，最后把所有服务拉起来。
 
+### 启动隔离开发环境
+
+如果需要同时启动 Web、CLI、智能体守护进程和桌面端，并让它们使用独立的数据库和 CLI profile，
+使用下面这套托管环境流程。端口、数据库、profile、工作区目录和桌面端 userData 都由环境管理器分配；
+不要手动创建数据库，也不要从其他 checkout 复制 `.env` 文件。
+
+```bash
+cd /Users/qinqubo/magic/projects/multica
+
+# 启动 API、Web、智能体守护进程和 Electron 桌面端
+make up C=api,web,daemon,desktop
+
+# 查看分配到的端口、profile、数据库和各组件进程
+make status ARGS=--json
+```
+
+`make up` 会从当前 checkout 构建 `server/bin/multica`，再用它启动守护进程。CLI 不是常驻服务，
+而是按需执行的命令；通过隔离环境调用它，确保使用的是隔离 profile，而不是系统里的 `multica`：
+
+```bash
+# 把这里替换成 `make status ARGS=--json` 输出的 `profile` 值
+DEV_PROFILE=dev-multica-703
+
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} version"
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} document list --output json"
+```
+
+如果源码发生变化，要确保 Agent 实际使用本地最新编译版本，先确认没有活动运行，再重新构建并显式启动
+隔离守护进程：
+
+```bash
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} daemon status --output json"
+
+# 只有在 active_task_count 和 running_task_count 都为 0 时才继续
+make down C=daemon
+make build
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} daemon start --no-auto-update --no-auto-reload"
+```
+
+验证 `daemon status` 返回的 `cli_version` 和 `pid`。守护进程应该加载仓库里的二进制，而不是 Homebrew
+或其他系统安装版本：
+
+```bash
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} daemon status --output json"
+ps -p <daemon-pid> -o pid,command
+lsof -p <daemon-pid> -a -d txt -Fn
+```
+
+实际可执行文件路径应指向当前 checkout 的 `server/bin/multica`。运行时详情页中的
+**Technical details → Daemon CLI** 也应显示当前版本。Web 和桌面端地址以 `make status` 输出为准；
+本地开发环境登录使用 `dev@localhost`，验证码为 `888888`。
+
+停止环境但保留数据库和 profile：
+
+```bash
+make down
+```
+
+只有在明确要删除数据库、profile、工作区目录和桌面端数据时才使用 `make destroy`。不要在这套流程中直接运行
+系统的 `multica daemon start`，否则可能启动默认 profile，并加载另一套 CLI 版本。
+
 完整的开发流程、worktree 支持、测试和问题排查见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 iOS 客户端在 [`apps/mobile/`](apps/mobile/)，怎么编译装到自己 iPhone 上见它的
 [README](apps/mobile/README.md)。

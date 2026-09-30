@@ -247,6 +247,66 @@ make dev
 `make dev` auto-detects your environment (main checkout or worktree), creates the env file,
 installs dependencies, sets up the database, runs migrations, and starts every service.
 
+### Managed isolated development environment
+
+Use the managed environment when you need the Web app, the local CLI, the agent daemon, and
+the Desktop client together against an isolated database and CLI profile. Ports, database
+names, profiles, workspaces, and Desktop user data are allocated by the environment manager;
+do not create a database manually or copy another checkout's `.env` file.
+
+```bash
+cd /Users/qinqubo/magic/projects/multica
+
+# Starts the API, Web, agent daemon, and Electron Desktop client.
+make up C=api,web,daemon,desktop
+
+# Shows the allocated ports, profile, database, and component processes.
+make status ARGS=--json
+```
+
+`make up` builds `server/bin/multica` from the current checkout before starting the daemon.
+The CLI is an on-demand command, not a separate long-running service. Run it through the
+managed environment so it uses the isolated profile instead of the system `multica`:
+
+```bash
+# Replace this with the `profile` value printed by `make status ARGS=--json`.
+DEV_PROFILE=dev-multica-703
+
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} version"
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} document list --output json"
+```
+
+To guarantee that a changed local build is the version loaded by the daemon, first make sure
+there are no active or running tasks, then rebuild and start the managed daemon explicitly:
+
+```bash
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} daemon status --output json"
+
+# Continue only when active_task_count and running_task_count are both 0.
+make down C=daemon
+make build
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} daemon start --no-auto-update --no-auto-reload"
+```
+
+Verify that `daemon status` reports the expected `cli_version` and `pid`. The process should
+load the repository binary, not a Homebrew or other system installation:
+
+```bash
+make env-exec ARGS="-- server/bin/multica --profile ${DEV_PROFILE} daemon status --output json"
+ps -p <daemon-pid> -o pid,command
+lsof -p <daemon-pid> -a -d txt -Fn
+```
+
+The executable path should point to this checkout's `server/bin/multica`. The runtime detail
+page should also show the current value under **Technical details → Daemon CLI**. Local Web and
+Desktop endpoints are printed by `make status`; local development login uses `dev@localhost`
+with verification code `888888`.
+
+Stop the environment while keeping its database and profile with `make down`. Use
+`make destroy` only when you intentionally want to remove the database, profile, workspaces,
+and Desktop data. Do not run the system `multica daemon start` for this workflow: it can start
+the default profile with a different CLI version.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow, worktree support, testing, and
 troubleshooting. The iOS client lives in [`apps/mobile/`](apps/mobile/) — its
 [README](apps/mobile/README.md) covers building it onto your own iPhone.
