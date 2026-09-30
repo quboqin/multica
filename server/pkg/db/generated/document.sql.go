@@ -73,7 +73,7 @@ func (q *Queries) DetachProjectCollections(ctx context.Context, arg DetachProjec
 }
 
 const listDocuments = `-- name: ListDocuments :many
-SELECT issue.id, issue.workspace_id, issue.title, issue.description, issue.status, issue.priority, issue.assignee_type, issue.assignee_id, issue.creator_type, issue.creator_id, issue.parent_issue_id, issue.acceptance_criteria, issue.context_refs, issue.position, issue.due_date, issue.created_at, issue.updated_at, issue.number, issue.project_id, issue.origin_type, issue.origin_id, issue.first_executed_at, issue.start_date, issue.metadata, issue.stage, issue.properties, issue.revision, issue.last_activity_at, issue.triage_state, issue.kind, issue.document_revision, sharing.owner_id FROM issue JOIN document_access sharing ON sharing.issue_id=issue.id AND sharing.workspace_id=issue.workspace_id
+SELECT issue.id, issue.workspace_id, issue.title, issue.description, issue.status, issue.priority, issue.assignee_type, issue.assignee_id, issue.creator_type, issue.creator_id, issue.parent_issue_id, issue.acceptance_criteria, issue.context_refs, issue.position, issue.due_date, issue.created_at, issue.updated_at, issue.number, issue.project_id, issue.origin_type, issue.origin_id, issue.first_executed_at, issue.start_date, issue.metadata, issue.stage, issue.properties, issue.revision, issue.last_activity_at, issue.triage_state, issue.duplicate_of_issue_id, issue.kind, issue.document_revision, sharing.owner_id FROM issue JOIN document_access sharing ON sharing.issue_id=issue.id AND sharing.workspace_id=issue.workspace_id
 WHERE issue.workspace_id = $1 AND issue.kind = 'doc'
   AND document_can_read(issue.id, $2::uuid)
   AND ($3::uuid IS NULL OR issue.project_id = $3 OR EXISTS (SELECT 1 FROM document_access d WHERE d.issue_id=issue.id AND d.project_id=$3))
@@ -130,6 +130,7 @@ func (q *Queries) ListDocuments(ctx context.Context, arg ListDocumentsParams) ([
 			&i.Issue.Revision,
 			&i.Issue.LastActivityAt,
 			&i.Issue.TriageState,
+			&i.Issue.DuplicateOfIssueID,
 			&i.Issue.Kind,
 			&i.Issue.DocumentRevision,
 			&i.OwnerID,
@@ -157,7 +158,7 @@ const moveDocument = `-- name: MoveDocument :one
 UPDATE issue SET parent_issue_id = $1, position = $2,
  revision = revision + 1, updated_at = now()
 WHERE id = $3 AND workspace_id = $4 AND kind = 'doc'
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, kind, document_revision
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, kind, document_revision
 `
 
 type MoveDocumentParams struct {
@@ -205,6 +206,7 @@ func (q *Queries) MoveDocument(ctx context.Context, arg MoveDocumentParams) (Iss
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.Kind,
 		&i.DocumentRevision,
 	)
@@ -255,7 +257,7 @@ func (q *Queries) SeedDocumentStatuses(ctx context.Context, workspaceID pgtype.U
 const transitionDocument = `-- name: TransitionDocument :one
 UPDATE issue SET status = $1, revision = revision + 1, updated_at = now()
 WHERE id = $2 AND workspace_id = $3 AND kind = 'doc'
-RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, kind, document_revision
+RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, kind, document_revision
 `
 
 type TransitionDocumentParams struct {
@@ -297,6 +299,7 @@ func (q *Queries) TransitionDocument(ctx context.Context, arg TransitionDocument
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.Kind,
 		&i.DocumentRevision,
 	)

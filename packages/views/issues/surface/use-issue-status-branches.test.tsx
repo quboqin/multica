@@ -141,6 +141,7 @@ describe("useIssueStatusBranches", () => {
         group_key: "status:todo",
         page: { limit: 50, cursor: "cursor-2" },
       }),
+      expect.objectContaining({ workspaceId: "ws-1", signal: expect.any(AbortSignal) }),
     );
 
     // Collapsing a List section removes its active observers. Re-expanding

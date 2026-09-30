@@ -286,7 +286,7 @@ func (q *Queries) ListDocumentVersions(ctx context.Context, arg ListDocumentVers
 }
 
 const listOwnedDocuments = `-- name: ListOwnedDocuments :many
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.kind, i.document_revision FROM issue i JOIN document_access d ON d.issue_id=i.id AND d.workspace_id=i.workspace_id
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.kind, i.document_revision FROM issue i JOIN document_access d ON d.issue_id=i.id AND d.workspace_id=i.workspace_id
 WHERE i.workspace_id=$1 AND d.owner_id=$2 AND i.kind='doc' ORDER BY i.position,i.created_at,i.id
 `
 
@@ -334,6 +334,7 @@ func (q *Queries) ListOwnedDocuments(ctx context.Context, arg ListOwnedDocuments
 			&i.Revision,
 			&i.LastActivityAt,
 			&i.TriageState,
+			&i.DuplicateOfIssueID,
 			&i.Kind,
 			&i.DocumentRevision,
 		); err != nil {
@@ -348,7 +349,7 @@ func (q *Queries) ListOwnedDocuments(ctx context.Context, arg ListOwnedDocuments
 }
 
 const listProjectSharedDocuments = `-- name: ListProjectSharedDocuments :many
-SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.kind, i.document_revision FROM issue i JOIN document_access d ON d.issue_id=i.id AND d.workspace_id=i.workspace_id
+SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority, i.assignee_type, i.assignee_id, i.creator_type, i.creator_id, i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.origin_type, i.origin_id, i.first_executed_at, i.start_date, i.metadata, i.stage, i.properties, i.revision, i.last_activity_at, i.triage_state, i.duplicate_of_issue_id, i.kind, i.document_revision FROM issue i JOIN document_access d ON d.issue_id=i.id AND d.workspace_id=i.workspace_id
 WHERE i.workspace_id=$1 AND d.project_id=$2 AND d.scope='project'
 `
 
@@ -396,6 +397,7 @@ func (q *Queries) ListProjectSharedDocuments(ctx context.Context, arg ListProjec
 			&i.Revision,
 			&i.LastActivityAt,
 			&i.TriageState,
+			&i.DuplicateOfIssueID,
 			&i.Kind,
 			&i.DocumentRevision,
 		); err != nil {
@@ -443,7 +445,7 @@ func (q *Queries) ListReadableIssueIDs(ctx context.Context, arg ListReadableIssu
 
 const restoreDocumentVersion = `-- name: RestoreDocumentVersion :one
 UPDATE issue SET title=$3,description=$4,revision=revision+1,updated_at=now()
-WHERE id=$1 AND workspace_id=$2 AND kind='doc' RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, kind, document_revision
+WHERE id=$1 AND workspace_id=$2 AND kind='doc' RETURNING id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, kind, document_revision
 `
 
 type RestoreDocumentVersionParams struct {
@@ -491,6 +493,7 @@ func (q *Queries) RestoreDocumentVersion(ctx context.Context, arg RestoreDocumen
 		&i.Revision,
 		&i.LastActivityAt,
 		&i.TriageState,
+		&i.DuplicateOfIssueID,
 		&i.Kind,
 		&i.DocumentRevision,
 	)

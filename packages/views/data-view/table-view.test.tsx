@@ -68,6 +68,7 @@ describe("shared table with independent sample sources", () => {
           onColumnSizingChange={vi.fn()}
           onReorderColumn={vi.fn()}
           onRowClick={onRowClick}
+          getRowProps={() => ({ "data-peek-target": "one", className: "selected" })}
         />,
       );
       expect(screen.getByRole("columnheader", { name: /Title/ })).toBeVisible();
@@ -75,6 +76,8 @@ describe("shared table with independent sample sources", () => {
         "Example",
       );
       fireEvent.click(screen.getByRole("textbox").closest("tr")!);
+      expect(screen.getByRole("textbox").closest("tr")).toHaveAttribute("data-peek-target", "one");
+      expect(screen.getByRole("textbox").closest("tr")).toHaveClass("selected");
       expect(onRowClick).toHaveBeenCalledOnce();
       expect(onRowClick.mock.calls[0]?.[0].original).toEqual({
         id: "one",

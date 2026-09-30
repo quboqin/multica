@@ -27,6 +27,7 @@ import type {
   SearchIssueResult,
   SearchProjectResult,
 } from "@multica/core/types";
+import { isLocalSearchReady, searchIssues, searchProjects } from "@multica/core/search-index";
 import { api } from "@multica/core/api";
 import { partitionAggregatedSearchResults } from "@multica/core/search/cancelled-rank";
 import {
@@ -449,7 +450,7 @@ export function SearchCommand() {
     ];
 
     if (currentIssueId && currentIssue) {
-      const identifier = currentIssue.identifier;
+      const { id: issueId, identifier } = currentIssue;
       items.push(
         {
           key: "copy-issue-link",
@@ -489,12 +490,12 @@ export function SearchCommand() {
             // still can't load, no comments are on screen — dropping the
             // action matches the visible state.
             void queryClient
-              .ensureQueryData(issueTimelineOptions(currentIssueId))
+              .ensureQueryData(issueTimelineOptions(issueId))
               .then((entries) => {
                 useCommentCollapseStore
                   .getState()
-                  .collapseAll(currentIssueId, rootCommentIds(entries));
-                useResolvedExpandStore.getState().collapseAll(currentIssueId);
+                  .collapseAll(issueId, rootCommentIds(entries));
+                useResolvedExpandStore.getState().collapseAll(issueId);
               })
               .catch(() => {});
             setOpen(false);
@@ -507,12 +508,12 @@ export function SearchCommand() {
           keywords: ["unfold", "expand", "comments", "展开", "评论"],
           onSelect: () => {
             void queryClient
-              .ensureQueryData(issueTimelineOptions(currentIssueId))
+              .ensureQueryData(issueTimelineOptions(issueId))
               .then((entries) => {
-                useCommentCollapseStore.getState().expandAll(currentIssueId);
+                useCommentCollapseStore.getState().expandAll(issueId);
                 useResolvedExpandStore
                   .getState()
-                  .expandAll(currentIssueId, resolvedThreadRootIds(entries));
+                  .expandAll(issueId, resolvedThreadRootIds(entries));
               })
               .catch(() => {});
             setOpen(false);
@@ -668,7 +669,7 @@ export function SearchCommand() {
         abortRef.current = controller;
         try {
           const [issueRes, projectRes] = await Promise.all([
-            api.searchIssues({
+            (documentsOnly ? api.searchIssues : searchIssues)({
               q: q.trim(),
               kind: documentsOnly ? "doc" : undefined,
               limit: 20,
@@ -677,7 +678,7 @@ export function SearchCommand() {
             }),
             documentsOnly
               ? Promise.resolve({ projects: [] })
-              : api.searchProjects({
+              : searchProjects({
                   q: q.trim(),
                   limit: 10,
                   include_closed: true,
@@ -701,7 +702,7 @@ export function SearchCommand() {
             setIsLoading(false);
           }
         }
-      }, 300);
+      }, !documentsOnly && isLocalSearchReady() ? 0 : 300);
     },
     [documentsOnly],
   );

@@ -112,6 +112,17 @@ import { ProjectPicker } from "../../projects/components/project-picker";
 import { useT } from "../../i18n";
 import { useIssueSurfaceActionsOptional } from "../surface/actions-context";
 import { useIssueSurfaceSelection } from "../surface/selection-context";
+import {
+  PEEK_TARGET_ATTR,
+  useIssuePeekClick,
+  useIssuePeekActions,
+  useIssuePeekId,
+} from "../surface/peek-context";
+
+// A peeked table row: the same tint and leading bar as a peeked list row, on
+// the cells, because pinned cells paint an opaque background over the row.
+const PEEKED_TABLE_ROW_CLASS =
+  "[&>td]:bg-[color-mix(in_oklab,var(--brand)_6%,var(--background))] [&>td:first-child]:shadow-[inset_2px_0_0_var(--brand)]";
 import type { IssueCreateDefaults } from "../surface/types";
 import { ProgressRing } from "./progress-ring";
 import {
@@ -133,6 +144,7 @@ import {
 import type { ChildProgress } from "./list-row";
 import { ListLoadMoreFooter } from "./list-load-more-footer";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
+import { IssueDuplicateOfMarker } from "./issue-duplicates";
 
 // Enough placeholder rows to cover a typical viewport; the virtualizer only
 // mounts what fits, so overshooting costs nothing.
@@ -594,6 +606,7 @@ export function InlineTitle({
           >
             {row.issue.title}
           </button>
+          <IssueDuplicateOfMarker issue={row.issue} />
           {/* Lifted out of the flex flow, the way SidebarMenuAction is. Laid
             * out inline these two reserved ~40px of the title column for
             * buttons that are invisible until hovered — and title is the
@@ -1887,6 +1900,14 @@ export function TableView({
   useEffect(() => {
     onLoadedIssuesChange(loadedIssues);
   }, [loadedIssues, onLoadedIssuesChange]);
+  // Side peek steps through the loaded rows top to bottom.
+  const peek = useIssuePeekActions();
+  const peekedId = useIssuePeekId();
+  const handlePeekClick = useIssuePeekClick();
+  useEffect(() => {
+    peek?.publishColumns([visibleIssueIds]);
+  }, [peek, visibleIssueIds]);
+  useEffect(() => () => peek?.publishColumns(null), [peek]);
   const selectedIssues = useMemo(
     () => loadedIssues.filter((issue) => selection.selectedIds.has(issue.id)),
     [loadedIssues, selection.selectedIds],
@@ -1955,6 +1976,11 @@ export function TableView({
 
   const openIssue = useCallback(
     (issue: Issue, event?: React.MouseEvent) => {
+      // Match card links, including the preferred default and modifier keys.
+      if (handlePeekClick(issue.id, event)) {
+        if (event?.shiftKey) window.getSelection()?.removeAllRanges();
+        return;
+      }
       // Standard link semantics: plain click navigates in place; modifier /
       // middle clicks open tabs. Callbacks without an event (keyboard
       // affordances) count as plain clicks.
@@ -1964,7 +1990,7 @@ export function TableView({
         issue.identifier,
       );
     },
-    [intentNavigate, paths],
+    [intentNavigate, paths, handlePeekClick],
   );
 
   const createSubIssue = useCallback(
@@ -2256,6 +2282,14 @@ export function TableView({
             openIssue(row.original.issue, event);
           }
         }}
+        getRowProps={(row) =>
+          row.original.kind === "issue"
+            ? {
+                [PEEK_TARGET_ATTR]: row.original.issue.id,
+                className: row.original.issue.id === peekedId ? PEEKED_TABLE_ROW_CLASS : undefined,
+              }
+            : undefined
+        }
         renderRow={(row, columnCount) => {
           if (row.original.kind === "group") {
             return (

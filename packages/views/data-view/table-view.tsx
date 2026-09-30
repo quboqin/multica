@@ -26,7 +26,7 @@ import {
   type Row,
   type TableMeta,
 } from "@tanstack/react-table";
-import { DataTable } from "@multica/ui/components/ui/data-table";
+import { DataTable, type DataTableRowProps } from "@multica/ui/components/ui/data-table";
 import {
   dataSourceIdentityKey,
   type DataSourceIdentity,
@@ -46,6 +46,7 @@ export interface DataViewTableProps<DataRow>
   meta?: TableMeta<DataRow>;
   emptyMessage?: string;
   onRowClick?: (row: Row<DataRow>, event: React.MouseEvent) => void;
+  getRowProps?: (row: Row<DataRow>) => DataTableRowProps | undefined;
   renderRow?: (row: Row<DataRow>, columnCount: number) => React.ReactNode;
   className?: string;
 }
@@ -76,6 +77,7 @@ function TableInstance<DataRow>({
   meta,
   emptyMessage,
   onRowClick,
+  getRowProps,
   renderRow,
   className,
 }: DataViewTableProps<DataRow>) {
@@ -132,6 +134,7 @@ function TableInstance<DataRow>({
           virtualizeRows
           emptyMessage={emptyMessage}
           onRowClick={onRowClick}
+          getRowProps={getRowProps}
           renderRow={
             renderRow
               ? (row) => renderRow(row, table.getVisibleLeafColumns().length)

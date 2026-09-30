@@ -19,7 +19,7 @@ import (
 // authenticate as ownerID, plus the caller shape for its requests.
 func agentOnRuntimeOwnedBy(t *testing.T, ownerID string) (string, agentCaller) {
 	t.Helper()
-	runtime := dbfx.Runtime(t, t.Name()+" runtime", testutil.Cols{"owner_id": ownerID, "visibility": "workspace"})
+	runtime := dbfx.Runtime(t, t.Name()+" runtime", testutil.Cols{"owner_id": ownerID, "visibility": "public"})
 	agentID := dbfx.Agent(t, t.Name()+" agent", runtime, testutil.Cols{
 		"visibility": "workspace", "permission_mode": "public_to", "instructions": "",
 		"custom_env": testutil.Raw("'{}'::jsonb"), "custom_args": testutil.Raw("'[]'::jsonb"),
@@ -35,6 +35,7 @@ func runFor(t *testing.T, caller agentCaller, issueID, originator string) agentC
 	cols := testutil.Cols{"issue_id": issueID, "runtime_id": handlerTestRuntimeID(t), "status": "running"}
 	if originator != "" {
 		cols["originator_user_id"] = originator
+		cols["accountable_user_id"] = originator
 	}
 	caller.taskID = dbfx.Task(t, caller.agentID, cols)
 	return caller
@@ -153,9 +154,11 @@ func TestInvitedRunUsesTheGrantOnItsDocument(t *testing.T) {
 	// Granted edit: read, reply and save on that document; nothing an owner
 	// does, and nothing on any other document.
 	agent.taskID = mentionWithGrants(t, doc, agentID, []map[string]string{{"agent_id": agentID, "permission": "edit"}}, 201)
+	var triggerCommentID string
+	dbfx.QueryRow(t, `SELECT trigger_comment_id FROM agent_task_queue WHERE id=$1`, agent.taskID).Scan(&triggerCommentID)
 	on(agent, testHandler.GetIssue, "GET", doc.ID, "/api/issues/"+doc.ID, nil).Want(200)
 	on(agent, testHandler.ListComments, "GET", doc.ID, "/api/issues/"+doc.ID+"/comments", nil).Want(200)
-	on(agent, testHandler.CreateComment, "POST", doc.ID, "/api/issues/"+doc.ID+"/comments", map[string]any{"content": "Assessment attached."}).Want(201)
+	on(agent, testHandler.CreateComment, "POST", doc.ID, "/api/issues/"+doc.ID+"/comments", map[string]any{"content": "Assessment attached.", "parent_id": triggerCommentID}).Want(201)
 	on(agent, testHandler.UpdateIssue, "PUT", doc.ID, "/api/issues/"+doc.ID, map[string]any{"description": "edited by the invited run", "expected_document_revision": 1}).Want(200)
 	on(agent, testHandler.UpdateDocumentAccess, "PUT", doc.ID, "/api/documents/"+doc.ID+"/access", map[string]any{"scope": "workspace", "expected_revision": 1}).Want(403)
 	on(agent, testHandler.DeleteIssue, "DELETE", doc.ID, "/api/issues/"+doc.ID, nil).Want(403)
@@ -172,7 +175,7 @@ func TestInvitedRunUsesTheGrantOnItsDocument(t *testing.T) {
 	// The grant is a floor, not a ceiling: sharing the document with the
 	// runtime owner as a viewer takes nothing away from the invited run.
 	shareDocument(t, doc.ID, "private", "view", nil, []map[string]string{{"user_id": runner, "role": "view"}}, 1, 200)
-	on(agent, testHandler.CreateComment, "POST", doc.ID, "/api/issues/"+doc.ID+"/comments", map[string]any{"content": "still allowed"}).Want(201)
+	on(agent, testHandler.CreateComment, "POST", doc.ID, "/api/issues/"+doc.ID+"/comments", map[string]any{"content": "still allowed", "parent_id": triggerCommentID}).Want(201)
 
 	// Granted view only: read, not reply.
 	dbfx.Exec(t, "DELETE FROM agent_task_queue WHERE id=$1", agent.taskID)
@@ -243,13 +246,10 @@ func TestPreviewReportsWhatARunCanReachOnTheDocument(t *testing.T) {
 	if access.RuntimeOwnerPermission != "edit" || access.MaxGrant != "" {
 		t.Fatalf("runtime can already write, nothing to grant: %+v", access)
 	}
-	// A viewer sees the run capped at their own access and can grant no more.
+	// A viewer cannot post comments, so the composer preview is also denied.
 	viewer := newWorkspaceMember(t, "viewer")
 	shareDocument(t, doc.ID, "private", "view", nil, []map[string]string{{"user_id": viewer, "role": "view"}}, 3, 200)
-	access = preview(viewer).Agents[0].DocumentAccess
-	if access.RuntimeOwnerPermission != "" || access.MaxGrant != "view" {
-		t.Fatalf("viewer mentioning an agent: %+v", access)
-	}
+	testutil.Call(t, testHandler.PreviewCommentTriggers, withURLParam(newRequestAs(viewer, "POST", "/api/issues/"+doc.ID+"/comments/preview-triggers", map[string]any{"content": "[@Agent](mention://agent/" + agentID + ") hi"}), "id", doc.ID)).Want(403)
 	// A task issue carries no document access.
 	issue := dbfx.Issue(t, t.Name()+" issue")
 	var out CommentTriggerPreviewResponse
