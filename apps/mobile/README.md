@@ -14,9 +14,11 @@ This connects to the same backend as `multica.ai`, so your existing account just
 
 **Prerequisites**: Mac with Xcode, a free Apple ID added under Xcode → Settings → Accounts, iPhone connected via USB with [Developer Mode enabled](https://docs.expo.dev/guides/ios-developer-mode/). Walk through Expo's [Set up your environment](https://docs.expo.dev/get-started/set-up-your-environment/) (pick **Development build → iOS Device**) if any of that is missing.
 
+The app requires iOS 16 or newer. The Xcode 27 compatibility build raises the deployment target from iOS 15.1 to 16.0.
+
 Xcode signs the build with the "Personal Team" your Apple ID automatically owns — created silently the first time you signed into Xcode, no setup needed. The first build downloads CocoaPods + compiles React Native from source — expect 10–20 minutes. Subsequent builds reuse Xcode's cache.
 
-**If Xcode rejects signing with "No matching provisioning profiles found"** — rare, happens if someone has claimed the default bundle id `ai.multica.mobile` on Apple's developer portal. Pick any reverse-domain you own and re-run:
+**If Xcode rejects signing with "No matching provisioning profiles found"** — for example, if your Apple ID cannot sign the default bundle id `com.cosinetech.multica`. Pick a reverse-domain you own and re-run:
 
 ```bash
 export EXPO_BUNDLE_IDENTIFIER_PROD=com.yourname.multica
