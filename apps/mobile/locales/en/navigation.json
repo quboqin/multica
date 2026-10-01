@@ -10,6 +10,8 @@
     "pinned": "Pinned",
     "issues": "Issues",
     "projects": "Projects",
+    "documents": "Documents",
+    "collections": "Collections",
     "account_settings": "Account settings"
   },
   "routes": {
@@ -21,6 +23,11 @@
     "search": "Search",
     "issue": "Issue",
     "project": "Project",
+    "documents": "Documents",
+    "collections": "Collections",
+    "document": "Document",
+    "collection": "Collection",
+    "edit_document": "Edit document",
     "assignee": "Assignee",
     "mention": "Mention",
     "agents": "Agents",

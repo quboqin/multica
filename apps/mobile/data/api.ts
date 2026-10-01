@@ -138,6 +138,20 @@ import { getCurrentSlug } from "./workspace-store";
 import { parseWithFallback } from "@/lib/parse-response";
 import { createRequestId } from "@/lib/request-id";
 import { buildCommentUpdateBody } from "./revision";
+import {
+  CollectionDetailSchema,
+  CollectionListSchema,
+  CollectionPageSchema,
+  CollectionRecordSchema,
+  CollectionSchema,
+  DocumentListSchema,
+  ResourceAccessSchema,
+  type Collection,
+  type CollectionDetail,
+  type CollectionPage,
+  type CollectionRecord,
+} from "./resource-schemas";
+import type { z } from "zod";
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL;
 
@@ -686,6 +700,71 @@ class ApiClient {
       EMPTY_ISSUE_FALLBACK,
       { ...opts, endpoint: "getIssue" },
     );
+  }
+
+  // Documents are issues with kind=doc. Keep their navigator independent of
+  // the task issue list so server-side visibility rules remain authoritative.
+  async listDocuments(opts?: { signal?: AbortSignal }): Promise<Issue[]> {
+    return this.fetchValidated("/api/documents", DocumentListSchema, [], opts);
+  }
+
+  async createDocument(title: string): Promise<Issue | null> {
+    return this.fetchValidatedWith("/api/issues", IssueSchema, null, {
+      method: "POST", body: JSON.stringify({ kind: "doc", title }),
+    });
+  }
+
+  async getDocumentAccess(id: string, opts?: { signal?: AbortSignal }): Promise<z.infer<typeof ResourceAccessSchema> | null> {
+    return this.fetchValidated(`/api/documents/${id}/access`, ResourceAccessSchema, null, opts);
+  }
+
+  async listCollections(opts?: { signal?: AbortSignal }): Promise<Collection[]> {
+    return this.fetchValidated("/api/collections", CollectionListSchema, [], opts);
+  }
+
+  async getCollection(id: string, opts?: { signal?: AbortSignal }): Promise<CollectionDetail | null> {
+    return this.fetchValidated(`/api/collections/${id}`, CollectionDetailSchema, null, opts);
+  }
+
+  async listCollectionRecords(id: string, cursor?: string | null, opts?: { signal?: AbortSignal }): Promise<CollectionPage> {
+    const params = new URLSearchParams({ limit: "50" });
+    if (cursor) params.set("cursor", cursor);
+    return this.fetchValidated(
+      `/api/collections/${id}/records?${params.toString()}`,
+      CollectionPageSchema,
+      { records: [], total: 0, next_cursor: null },
+      opts,
+    );
+  }
+
+  async createCollection(name: string): Promise<Collection | null> {
+    return this.fetchValidatedWith("/api/collections", CollectionSchema, null, {
+      method: "POST", body: JSON.stringify({ name }),
+    });
+  }
+
+  async updateCollection(id: string, body: { name?: string; description?: string }): Promise<Collection | null> {
+    return this.fetchValidatedWith(`/api/collections/${id}`, CollectionSchema, null, {
+      method: "PATCH", body: JSON.stringify(body),
+    });
+  }
+
+  async createCollectionRecord(id: string, title: string): Promise<CollectionRecord | null> {
+    return this.fetchValidatedWith(`/api/collections/${id}/records`, CollectionRecordSchema, null, {
+      method: "POST", body: JSON.stringify({ title }),
+    });
+  }
+
+  async updateCollectionRecord(id: string, recordId: string, title: string, titleBase: string): Promise<CollectionRecord | null> {
+    return this.fetchValidatedWith(`/api/collections/${id}/records/${recordId}`, CollectionRecordSchema, null, {
+      method: "PUT", body: JSON.stringify({ title, title_base: titleBase }),
+    });
+  }
+
+  async setCollectionRecordField(id: string, recordId: string, fieldId: string, value: unknown, expectedValue: unknown): Promise<CollectionRecord | null> {
+    return this.fetchValidatedWith(`/api/collections/${id}/records/${recordId}/fields/${fieldId}`, CollectionRecordSchema, null, {
+      method: "PUT", body: JSON.stringify({ value, expected_value: expectedValue }),
+    });
   }
 
   // Write endpoint — mirrors POST /api/issues
