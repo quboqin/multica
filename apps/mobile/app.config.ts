@@ -57,7 +57,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       // auto-loads `.env.<mode>.local` regardless of APP_ENV) and collapse
       // dev / staging / prod onto a single id.
       bundleIdentifier: isProd
-        ? (process.env.EXPO_BUNDLE_IDENTIFIER_PROD ?? "ai.multica.mobile")
+        ? (process.env.EXPO_BUNDLE_IDENTIFIER_PROD ?? "com.cosinetech.multica")
         : isStaging
           ? "ai.multica.mobile.staging"
           : (process.env.EXPO_BUNDLE_IDENTIFIER_DEV ?? "ai.multica.mobile.dev"),
@@ -67,6 +67,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       "expo-secure-store",
       "@react-native-community/datetimepicker",
       "react-native-enriched-markdown",
+      // Xcode 27 (iOS 27 SDK) compatibility: scene-based life cycle and pod
+      // deployment targets. See plugins/withIosXcode27Support.js.
+      "./plugins/withIosXcode27Support",
       [
         "expo-image-picker",
         {
@@ -85,6 +88,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           ios: {
             buildReactNativeFromSource: true,
+            deploymentTarget: "16.0",
           },
         },
       ],

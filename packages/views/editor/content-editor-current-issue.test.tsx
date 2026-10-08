@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { WorkspaceSlugProvider } from "@multica/core/paths";
+import { workspaceKeys } from "@multica/core/workspace/queries";
+import { issueKeys } from "@multica/core/issues/queries";
 import { renderWithI18n } from "../test/i18n";
 import { NavigationProvider } from "../navigation/context";
 import type { NavigationAdapter } from "../navigation/types";
@@ -34,15 +37,6 @@ vi.mock("./link-hover-card", () => ({
   LinkHoverCard: () => null,
 }));
 
-vi.mock("@multica/core/paths", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/paths")>()),
-  useWorkspacePaths: () => ({
-    issueDetail: (id: string) => `/acme/issues/${id}`,
-    projectDetail: (id: string) => `/acme/projects/${id}`,
-  }),
-  useWorkspaceSlug: () => "acme",
-}));
-
 import { ContentEditor } from "./content-editor";
 
 const CURRENT_ID = "11111111-1111-4111-8111-111111111111";
@@ -66,19 +60,33 @@ function adapter(): NavigationAdapter {
 
 function renderEditor() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: Infinity } },
+  });
+  queryClient.setQueryData(workspaceKeys.list(), [{ id: "ws-1", slug: "acme" }]);
+  queryClient.setQueryData(issueKeys.listSorted("ws-1"), {
+    byStatus: {
+      unstarted: {
+        issues: [
+          { id: CURRENT_ID, identifier: "MUL-7", kind: "task" },
+          { id: OTHER_ID, identifier: "MUL-8", kind: "task" },
+        ],
+        total: 2,
+      },
+    },
   });
   return renderWithI18n(
     <NavigationProvider value={adapter()}>
       <QueryClientProvider client={queryClient}>
-        <CurrentIssueRenderContextProvider
-          value={{ id: CURRENT_ID, identifier: "MUL-7" }}
-        >
-          <ContentEditor
-            defaultValue={CONTENT}
-            showBubbleMenu={false}
-          />
-        </CurrentIssueRenderContextProvider>
+        <WorkspaceSlugProvider slug="acme">
+          <CurrentIssueRenderContextProvider
+            value={{ id: CURRENT_ID, identifier: "MUL-7" }}
+          >
+            <ContentEditor
+              defaultValue={CONTENT}
+              showBubbleMenu={false}
+            />
+          </CurrentIssueRenderContextProvider>
+        </WorkspaceSlugProvider>
       </QueryClientProvider>
     </NavigationProvider>,
   );

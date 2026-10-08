@@ -1801,6 +1801,10 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
+	if !h.checkDocumentResource(w, r, task.IssueID, wsUUID) {
+		return
+	}
+
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
 
 	var (

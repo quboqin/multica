@@ -39,6 +39,9 @@ import { Button } from "@multica/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { documentAccessOptions } from "@multica/core/documents";
+import { ReadonlyContent } from "../../editor/readonly-content";
+import { DocumentBodyEditor } from "../../documents/document-body-editor";
 import { ContentEditor, type ContentEditorRef, TitleEditor, type TitleEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useEditorUpload, PreviewSequenceProvider, collectPreviewSequence } from "../../editor";
 import {
   WAKEUP_ACTIVITY_ACTIONS,
@@ -111,6 +114,7 @@ import { IssueWakeupHeaderChip } from "./issue-wakeup-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { WakeupsSection } from "./wakeups-section";
 import { QuickActionsSection } from "./quick-actions-section";
+import { LinkedRecordsSection } from "./linked-records-section";
 import { PluginPanelSection } from "../../plugins";
 import { PullRequestsSection } from "./pull-requests-section";
 import { useGitHubSettings } from "@multica/core/github";
@@ -1160,12 +1164,17 @@ interface IssueDetailProps {
    */
   leadingAction?: ReactNode;
   /**
-   * `"peek"` renders the detail inside the board's side peek (`IssuePeekHost`):
-   * a single column with the core properties as pills under the title, no
-   * properties sidebar, and `trailingActions` where the sidebar toggle sits.
+   * "document" lets the documents page own the chrome: no breadcrumb header,
+   * properties sidebar, parent link or sub-issue block. The host passes its
+   * own meta rows through `documentSlots`.
    */
-  variant?: "page" | "peek";
-  /** Peek only: host controls at the end of the header (open full page, close). */
+  variant?: "page" | "peek" | "document";
+  documentSlots?: {
+    beforeTitle?: ReactNode;
+    afterTitle?: ReactNode;
+    afterBody?: ReactNode;
+  };
+  /** Peek only: host controls at the end of the header. */
   trailingActions?: ReactNode;
 }
 
@@ -1301,8 +1310,9 @@ export function IssueDetailSkeleton({
 // IssueDetail
 // ---------------------------------------------------------------------------
 
-export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId, highlightRequestToken, leadingAction, variant = "page", trailingActions }: IssueDetailProps) {
+export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = true, layoutId = "multica_issue_detail_layout", highlightCommentId, highlightRequestToken, leadingAction, variant = "page", trailingActions, documentSlots }: IssueDetailProps) {
   const isPeek = variant === "peek";
+  const isDocumentVariant = variant === "document";
   const { t } = useT("issues");
   const locale = useLocale();
   const timeAgo = useTimeAgo();
@@ -1537,6 +1547,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       return cached?.description != null ? cached : undefined;
     },
   });
+  const documentAccess = useQuery(documentAccessOptions(wsId,issue?.id ?? id,issue?.kind === "doc"));
+  const documentReadOnly = issue?.kind === "doc" && documentAccess.data?.can_edit !== true;
   const descriptionSourceId = `description:${id}`;
   const descriptionAnnotations = useCommentAnnotations({
     draftKey: `new:${id}`,
@@ -1544,7 +1556,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     enabled: !!user && !!issue,
     editable: true,
   });
-  const canAnnotateDescription = !!user;
+  const canAnnotateDescription = !!user && !documentReadOnly;
   const descriptionSelectionAction = useMemo(() => canAnnotateDescription ? {
     label: t(($) => $.reply.annotations.add_comment),
     onSelect: descriptionAnnotations.addSelection,
@@ -2417,7 +2429,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   const handleDescriptionUpload = useCallback(
     async (file: File) => {
-      const result = await uploadWithToast(file);
+      const result = await uploadWithToast(file, issue?.kind === "doc" ? {issueId: id} : undefined);
       if (result) {
         descPendingAttachmentsRef.current = [
           ...descPendingAttachmentsRef.current,
@@ -2427,7 +2439,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
       }
       return result;
     },
-    [uploadWithToast],
+    [uploadWithToast, issue?.kind, id],
   );
 
   useEffect(() => {
@@ -2610,7 +2622,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     return <IssueDetailSkeleton leading={leadingAction} trailing={trailingActions} sidebar={!isPeek} />;
   }
 
-  if (!issue) {
+  if (!issue || (issue.kind === "doc" && documentAccess.isError)) {
     return <IssueNotFound showBackLink={!onDelete} leading={leadingAction} trailing={trailingActions} />;
   }
 
@@ -2676,6 +2688,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         {propertiesOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
+            {issue.kind === "doc" ? <span>{issue.status_name || issue.status}</span> : (
             <StatusPicker
               status={issue.status}
               onUpdate={handleUpdateField}
@@ -2683,6 +2696,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               onMarkDuplicate={actions.openMarkDuplicate}
               isDuplicate={isDuplicateIssue(issue)}
             />
+            )}
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
@@ -2697,7 +2711,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           {/* Optional props — rendered only when set on the issue OR added
               via "+ Add property" in this session. Row order follows the
               order of `OPTIONAL_PROP_KEYS`. */}
-          {visibleOptionalProps.has("priority") && (
+          {issue.kind !== "doc" && visibleOptionalProps.has("priority") && (
             <PropRow label={t(($) => $.detail.prop_priority)}>
               <PriorityPicker
                 priority={issue.priority}
@@ -2918,6 +2932,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
       )}
 
+      {/* Table records that link to this task through a relation field.
+          Self-contained, and renders nothing when there are none. */}
+      <LinkedRecordsSection issueId={issue.id} />
       <IssueDuplicatesSection issueId={issue.id} />
 
       {/* Pull requests — hidden when the workspace disables the PR sidebar
@@ -3044,6 +3061,14 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
       );
     }
+    if (item.kind === "comment" && documentReadOnly) {
+      return <div className="space-y-3 pb-3" id={`comment-${item.id}`}>
+        {[item.entry, ...(timelineView.threadReplies.get(item.id) ?? EMPTY_REPLIES)].map(entry => <article key={entry.id} className="rounded-md border p-3">
+          <p className="mb-2 text-caption text-muted-foreground">{getActorName(entry.actor_type,entry.actor_id)} · {timeAgo(entry.created_at)}</p>
+          <ReadonlyContent content={entry.content ?? ""} attachments={entry.attachments}/>
+        </article>)}
+      </div>;
+    }
     if (item.kind === "comment") {
       const isResolved = !!item.entry.resolved_at;
       return (
@@ -3144,12 +3169,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             className={cn("absolute top-14 z-30", isMobile ? "right-4" : "right-10")}
           />
         )}
-        <BreadcrumbHeader
+        {!isDocumentVariant && <BreadcrumbHeader
           leading={leadingAction}
           segments={breadcrumbSegments}
           leaf={
             <AppLink
-              href={paths.issueDetail(issue.id)}
+              href={issue.kind === "doc" ? paths.documentDetail(issue.id) : paths.issueDetail(issue.id)}
               className="flex min-w-0 transition-opacity hover:opacity-80"
             >
               <span className="truncate font-medium text-foreground">
@@ -3164,7 +3189,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 It self-hides when no agent is active. */}
             <IssueAgentHeaderChip issueId={id} />
             <IssueWakeupHeaderChip issueId={id} onOpen={openWakeups} />
-            {onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
+            {issue.kind !== "doc" && onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -3247,7 +3272,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             )}
             </>
           }
-        />
+        />}
 
         {/* scrollbar-gutter both-edges: with classic (space-taking) scrollbars —
             macOS with a mouse or "always show", Windows, Linux — the global
@@ -3271,10 +3296,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             "mx-auto w-full",
             // The peek is already a narrow column, so it takes a tighter gutter
             // and never reaches the chat launcher's corner (see IssuePeekHost).
-            isPeek ? "px-6 py-5" : "max-w-4xl px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8",
+            isPeek ? "px-6 py-5" : isDocumentVariant ? "max-w-[784px] px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8 md:pt-10" : "max-w-4xl px-3 py-6 max-md:pb-chat-launcher md:px-8 md:py-8",
           )}
         >
-          <IssueDuplicateBanner
+          {documentSlots?.beforeTitle}
+          {!isDocumentVariant && <IssueDuplicateBanner
             issue={issue}
             onUnmark={() =>
               handleUpdateField(
@@ -3282,8 +3308,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 { onSuccess: () => toast.success(t(($) => $.duplicates.unmark_toast)) },
               )
             }
-          />
-          {titleLazy.active && (
+          />}
+          {documentReadOnly && <h1 className="text-display-sm font-bold leading-snug tracking-tight">{issue.title}</h1>}
+          {!documentReadOnly && titleLazy.active && (
             <div className={titleLazy.ready ? undefined : "hidden"}>
               <TitleEditor
                 key={`title-${id}-${titleResetToken}`}
@@ -3314,7 +3341,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
             </div>
           )}
-          {!titleLazy.ready && (
+          {!documentReadOnly && !titleLazy.ready && (
             <div
               role="button"
               tabIndex={0}
@@ -3386,8 +3413,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               )}
             />
           ) : null}
+          {documentSlots?.afterTitle}
 
-          {parentIssue && !issue.source_context && (
+          {!isDocumentVariant && parentIssue && !issue.source_context && (
             <AppLink
               href={paths.issueDetail(parentIssue.id)}
               className="mt-2 inline-flex max-w-full items-center gap-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors group/parent"
@@ -3463,8 +3491,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             }}
           >
             {descriptionAnnotations.popup}
-            <div data-comment-content={descriptionSourceId}>
-              <ContentEditor
+            <div data-comment-content={descriptionSourceId} data-document-body={isDocumentVariant ? "" : undefined}>
+              {documentReadOnly ? <ReadonlyContent content={issue.description ?? ""} attachments={issueAttachments}/> : issue.kind === "doc" ? <DocumentBodyEditor
+                key={id} issue={issue}
+                attachmentIds={(markdown)=>descPendingAttachmentsRef.current.filter(a=>contentReferencesAttachment(markdown,a)).map(a=>a.id)}
+                onUploadFile={handleDescriptionUpload} debounceMs={1500} flushPendingOnUnmount
+                currentIssueId={id} attachments={descEditorAttachments}
+              /> : (              <ContentEditor
                 ref={descEditorRef}
                 key={id}
                 value={issue.description ?? ""}
@@ -3505,10 +3538,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 currentIssueId={id}
                 selectionAction={descriptionSelectionAction}
                 attachments={descEditorAttachments}
-              />
+              />)}
+
             </div>
 
-            <div className="flex items-center gap-1 mt-3">
+            {!isDocumentVariant && <div className="flex items-center gap-1 mt-3">
               <ReactionBar
                 reactions={issueReactions}
                 currentUserId={user?.id}
@@ -3520,12 +3554,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 multiple
                 onSelect={(file) => descEditorRef.current?.uploadFile(file)}
               />
-            </div>
+            </div>}
             {descDragOver && <FileDropOverlay />}
           </div>
 
           {/* Sub-issues — Linear-style */}
-          {childIssues.length === 0 && (
+          {issue.kind !== "doc" && childIssues.length === 0 && (
             <div className="mt-6">
               <button
                 type="button"
@@ -3537,7 +3571,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </button>
             </div>
           )}
-          {childIssues.length > 0 && (() => {
+          {documentSlots?.afterBody}
+          {!isDocumentVariant && childIssues.length > 0 && (() => {
             const doneCount = childIssues.filter((c) => issueBehavesAs(c, "done")).length;
             return (
               // Provider hosts the shared right-click actions menu the rows
@@ -3644,7 +3679,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           <div className="my-8 border-t" />
 
           {/* Activity / Comments */}
-          <div>
+          <div data-document-discussion={isDocumentVariant ? "" : undefined}>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <h2 className="text-title-sm font-semibold">{t(($) => $.detail.activity_section)}</h2>
@@ -3869,13 +3904,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 keeps the previous issue's in-memory content and the
                 next keystroke would flush it into the new issue's
                 draft key. */}
-            <CommentInput
+            {!documentReadOnly && <CommentInput
               key={id}
               issueId={id}
               onSubmit={submitComment}
               onAccepted={scrollToTimelineBottom}
               onEditAnnotation={(annotationId) => descriptionAnnotations.editAnnotation(annotationId, true)}
-            />
+            />}
           </div>
         </div>
         </div>
@@ -3928,7 +3963,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   // The peek has no room for the properties sidebar: its core properties are
   // the pills under the title, and the rest is one click away on the page.
-  if (isPeek) {
+  if (isPeek || isDocumentVariant) {
     return withPreview(<div className="flex flex-1 min-h-0">{detailContent}</div>);
   }
 

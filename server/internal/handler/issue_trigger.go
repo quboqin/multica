@@ -112,6 +112,7 @@ func memberActorUserID(actorType, actorID string) pgtype.UUID {
 // these issues (or create one), which runs will start". All fields are
 // optional; a nil prospective field means "leave unchanged".
 type IssueTriggerPreviewRequest struct {
+	Kind string `json:"kind"`
 	// IssueIDs are existing issues to evaluate (single assign, single status,
 	// or a batch). Empty with IsCreate=true evaluates a candidate new issue.
 	IssueIDs []string `json:"issue_ids"`
@@ -206,6 +207,7 @@ func (h *Handler) PreviewIssueTrigger(w http.ResponseWriter, r *http.Request) {
 			status = *req.Status
 		}
 		candidate := db.Issue{
+			Kind:         req.Kind,
 			WorkspaceID:  wsUUID,
 			Status:       status,
 			AssigneeType: newAssigneeType,

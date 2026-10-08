@@ -155,7 +155,7 @@ $ErrorActionPreference = "Stop"
 
 if (-not $env:USERPROFILE) { $env:USERPROFILE = [System.IO.Path]::GetTempPath() }
 $env:MULTICA_INSTALL_DIR = $WorkDir
-$env:MULTICA_SELFHOST_REF = "main"
+$env:MULTICA_SELFHOST_REF = "qqb_main"
 
 $source = Get-Content -Raw -Path $InstallerPath
 $index = $source.IndexOf("# Entry point")

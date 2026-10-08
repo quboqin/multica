@@ -11,45 +11,62 @@ on:
 permissions:
   contents: write
   packages: write
+  actions: read
 
 # Deleting and recreating a tag can enqueue multiple runs for the same ref.
 # Serialize them so publishers never race while replacing same-name assets.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-stable
   cancel-in-progress: false
 
 jobs:
   verify:
+    if: github.repository == 'quboqin/multica'
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.release_meta.outputs.tag_name }}
       is_stable: ${{ steps.release_meta.outputs.is_stable }}
+      commit_sha: ${{ steps.release_meta.outputs.commit_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Validate tag name
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate release source
         id: release_meta
-        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          tag="${GITHUB_REF_NAME}"
-          echo "Triggered by tag: $tag"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Release tags must look like vX.Y.Z or vX.Y.Z-suffix; got '$tag'."
-            exit 1
-          fi
-          if [[ "$tag" == *-dirty* ]]; then
-            echo "::error::Refusing to release from dirty tag '$tag'."
-            exit 1
-          fi
-          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
-          if [[ "$tag" == *-* ]]; then
-            echo "is_stable=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_stable=true" >> "$GITHUB_OUTPUT"
-          fi
+          bash scripts/check-release-origin.sh "$RELEASE_TAG"
+          echo "tag_name=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "is_stable=true" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Require successful CI on the tagged commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-release-ci.mjs
+
+      - name: Require publisher credentials before uploading any artifacts
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for key in HOMEBREW_TAP_GITHUB_TOKEN MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing publisher secret: $key"
+              exit 1
+            fi
+          done
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -82,12 +99,8 @@ jobs:
 
   release:
     needs: verify
-    # Only run on the canonical upstream repo. Forks don't have the
-    # HOMEBREW_TAP_GITHUB_TOKEN secret and should not be publishing to
-    # `multica-ai/homebrew-tap` anyway. Without this guard, every fork's
-    # tag push fails this job (401 against the upstream tap), which makes
-    # downstream CI go red without affecting the actual artifact pipeline.
-    if: github.repository_owner == 'multica-ai'
+    # Publish only this fork; the tap uses a separate repository credential.
+    if: github.repository == 'quboqin/multica'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -110,7 +123,7 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: "~> v2"
+          version: v2.8.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -172,7 +185,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=release-backend-${{ env.PLATFORM_PAIR }}
           build-args: |
             VERSION=${{ needs.verify.outputs.tag_name }}
-            COMMIT=${{ github.sha }}
+            COMMIT=${{ needs.verify.outputs.commit_sha }}
           outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/multica-backend,push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
@@ -356,7 +369,7 @@ jobs:
 
   helm-chart:
     needs: [verify, docker-backend-merge, docker-web-merge]
-    if: github.repository_owner == 'multica-ai'
+    if: github.repository == 'quboqin/multica'
     runs-on: ubuntu-latest
     concurrency:
       group: release-helm-chart-${{ github.ref }}
@@ -395,11 +408,7 @@ jobs:
       - name: Verify published chart
         run: helm show chart "$OCI_REGISTRY/multica" --version "$CHART_VERSION"
 
-  # Build the Desktop installers for Linux and Windows and upload them to
-  # the GitHub Release that the `release` job above just published. macOS
-  # Desktop continues to ship via the manual `release-desktop` skill so it
-  # can be signed + notarized with Apple Developer credentials that are
-  # not (yet) wired into CI.
+  # Linux and Windows installers are unsigned; macOS is signed separately.
   desktop:
     needs: release
     strategy:
@@ -460,3 +469,76 @@ jobs:
           # Windows signing later.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: node scripts/package.mjs --${{ matrix.target }} --x64 --arm64 --publish always
+
+  desktop-mac:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+          cache-dependency-path: server/go.sum
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Sign, notarize and publish both macOS architectures
+        working-directory: apps/desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EP_GH_IGNORE_TIME: "true"
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for key in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing signing secret: $key"
+              exit 1
+            fi
+          done
+          node scripts/package.mjs --mac --x64 --arm64 --publish always -c.forceCodeSigning=true
+
+  release-complete:
+    needs: [verify, release, desktop, desktop-mac, docker-backend-merge, docker-web-merge, helm-chart]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify downloads and updater references
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.verify.outputs.tag_name }}
+        run: node scripts/verify-release-assets.mjs "$RELEASE_TAG"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify both image architectures
+        env:
+          RELEASE_TAG: ${{ needs.verify.outputs.tag_name }}
+        run: |
+          for image in multica-backend multica-web; do
+            docker buildx imagetools inspect "ghcr.io/quboqin/$image:$RELEASE_TAG" --raw > manifest.json
+            jq -e '[.manifests[].platform | .os + "/" + .architecture] | index("linux/amd64") != null and index("linux/arm64") != null' manifest.json
+          done
+
+  deploy:
+    needs: [verify, release-complete]
+    if: vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tag: ${{ needs.verify.outputs.tag_name }}
+    secrets: inherit

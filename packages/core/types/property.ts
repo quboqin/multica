@@ -9,31 +9,12 @@
  * a boolean, number a number, text/url strings, actor a "member:<user_id>"
  * reference string, multi_actor an array of them (insertion order).
  */
-export type IssuePropertyType =
-  | "text"
-  | "number"
-  | "select"
-  | "multi_select"
-  | "date"
-  | "checkbox"
-  | "url"
-  | "actor"
-  | "multi_actor";
-
-export const ISSUE_PROPERTY_TYPES: IssuePropertyType[] = [
-  "text",
-  "number",
-  "select",
-  "multi_select",
-  "date",
-  "checkbox",
-  "url",
-  "actor",
-  "multi_actor",
-];
+import { FIELD_TYPES, type FieldType } from "../data-source/types";
+export type IssuePropertyType = FieldType;
+export const ISSUE_PROPERTY_TYPES: readonly IssuePropertyType[] = FIELD_TYPES;
 
 export function isKnownPropertyType(type: string): type is IssuePropertyType {
-  return (ISSUE_PROPERTY_TYPES as string[]).includes(type);
+  return (ISSUE_PROPERTY_TYPES as readonly string[]).includes(type);
 }
 
 /**
@@ -79,13 +60,23 @@ export function isFilterablePropertyType(type: string): boolean {
 }
 
 /** Single-valued scalar properties: text / number / date / url. */
-export type ScalarIssuePropertyType = Extract<IssuePropertyType, "text" | "number" | "date" | "url">;
+export type ScalarIssuePropertyType = Extract<
+  IssuePropertyType,
+  "text" | "number" | "date" | "url"
+>;
 
-export function isScalarPropertyType(type: string): type is ScalarIssuePropertyType {
-  return type === "text" || type === "url" || type === "number" || type === "date";
+export function isScalarPropertyType(
+  type: string,
+): type is ScalarIssuePropertyType {
+  return (
+    type === "text" || type === "url" || type === "number" || type === "date"
+  );
 }
 
-export function formatActorRef(kind: IssuePropertyActorKind, id: string): string {
+export function formatActorRef(
+  kind: IssuePropertyActorKind,
+  id: string,
+): string {
   return `${kind}:${id}`;
 }
 
@@ -110,7 +101,9 @@ export function parseActorRef(raw: unknown): IssuePropertyActorRef | null {
  * would otherwise drop every unknown-kind entry the moment the user toggles
  * one it does understand — a silent data loss the user never sees.
  */
-export function actorRefValuesFromValue(value: IssuePropertyValue | undefined): string[] {
+export function actorRefValuesFromValue(
+  value: IssuePropertyValue | undefined,
+): string[] {
   if (typeof value === "string") return value ? [value] : [];
   if (Array.isArray(value)) {
     return value.filter((entry): entry is string => typeof entry === "string");
@@ -123,13 +116,17 @@ export function actorRefValuesFromValue(value: IssuePropertyValue | undefined): 
  * Unknown kinds are dropped rather than thrown on — see
  * `actorRefValuesFromValue` for the edit path, which must keep them.
  */
-export function actorRefsFromValue(value: IssuePropertyValue | undefined): IssuePropertyActorRef[] {
+export function actorRefsFromValue(
+  value: IssuePropertyValue | undefined,
+): IssuePropertyActorRef[] {
   if (typeof value === "string") {
     const ref = parseActorRef(value);
     return ref ? [ref] : [];
   }
   if (Array.isArray(value)) {
-    return value.map(parseActorRef).filter((ref): ref is IssuePropertyActorRef => ref !== null);
+    return value
+      .map(parseActorRef)
+      .filter((ref): ref is IssuePropertyActorRef => ref !== null);
   }
   return [];
 }
@@ -143,8 +140,12 @@ export function actorRefsFromValue(value: IssuePropertyValue | undefined): Issue
  * unresolvable value renders as empty, and letting the user "fill in the empty
  * field" would overwrite a value they were never shown (MUL-6286 review).
  */
-export function hasUnknownActorRef(value: IssuePropertyValue | undefined): boolean {
-  return actorRefValuesFromValue(value).length !== actorRefsFromValue(value).length;
+export function hasUnknownActorRef(
+  value: IssuePropertyValue | undefined,
+): boolean {
+  return (
+    actorRefValuesFromValue(value).length !== actorRefsFromValue(value).length
+  );
 }
 
 export interface IssuePropertyOption {
@@ -211,7 +212,9 @@ export const PROPERTY_FILTER_OPS: readonly PropertyFilterOp[] = [
 ];
 
 /** Mathematical symbols shared by the scalar filter picker and active chips. */
-export const PROPERTY_FILTER_OP_SYMBOLS: Partial<Record<PropertyFilterOp, string>> = {
+export const PROPERTY_FILTER_OP_SYMBOLS: Partial<
+  Record<PropertyFilterOp, string>
+> = {
   gt: ">",
   gte: "≥",
   lt: "<",
@@ -241,7 +244,9 @@ export function propertyFilterValueKey(value: PropertyFilterValue): string {
   return typeof value === "string" ? value : `${value.op}\u0000${value.value}`;
 }
 
-export function isPropertyOperatorFilter(value: unknown): value is PropertyOperatorFilter {
+export function isPropertyOperatorFilter(
+  value: unknown,
+): value is PropertyOperatorFilter {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -257,7 +262,10 @@ export function isPropertyOperatorFilter(value: unknown): value is PropertyOpera
  * intentionally empty: keeping the record exhaustive forces each future
  * property type to make an explicit operator decision.
  */
-export const PROPERTY_FILTER_OPS_BY_TYPE: Record<IssuePropertyType, readonly PropertyFilterOp[]> = {
+export const PROPERTY_FILTER_OPS_BY_TYPE: Record<
+  IssuePropertyType,
+  readonly PropertyFilterOp[]
+> = {
   text: ["contains"],
   number: ["gt", "gte", "lt", "lte"],
   select: [],

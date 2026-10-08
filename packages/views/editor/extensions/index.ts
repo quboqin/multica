@@ -56,6 +56,7 @@ import { createSubmitShortcutExtension } from "./submit-shortcut";
 import { createFileUploadExtension } from "./file-upload";
 import { FileCardExtension } from "./file-card";
 import { ImageView } from "./image-view";
+import { SavedViewEmbed } from "./saved-view-embed";
 import { BlockMathExtension, InlineMathExtension } from "./math";
 import { HighlightExtension } from "./highlight";
 import { codeLowlight } from "../syntax-highlight";
@@ -249,6 +250,7 @@ export function createEditorExtensions(
     TableHeader,
     TableCell,
     BlockMathExtension,
+    SavedViewEmbed,
     InlineMathExtension,
     HighlightExtension,
     // 3-space indent so nested ordered lists survive CommonMark in ReadonlyContent.

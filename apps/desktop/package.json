@@ -4,15 +4,15 @@
   "version": "0.6.0",
   "private": true,
   "description": "Multica Desktop — native desktop client for the Multica platform.",
-  "homepage": "https://multica.ai",
+  "homepage": "https://github.com/quboqin/multica",
   "repository": {
     "type": "git",
-    "url": "https://github.com/multica-ai/multica.git",
+    "url": "https://github.com/quboqin/multica.git",
     "directory": "apps/desktop"
   },
   "author": {
-    "name": "Multica",
-    "email": "support@multica.ai"
+    "name": "quboqin",
+    "url": "https://github.com/quboqin"
   },
   "license": "SEE LICENSE IN ../../LICENSE",
   "main": "./out/main/index.js",

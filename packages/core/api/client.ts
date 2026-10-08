@@ -1,3 +1,6 @@
+import { PinnedItemSchema, PinnedItemsSchema } from "../pins/schema";
+import { DocumentAccessSchema, DocumentSnapshotSchema, DocumentVersionsSchema, type DocumentSharingInput, type DocumentAccess, type DocumentSnapshot, type DocumentVersions } from "../documents/schema";
+import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, CollectionTrashSchema, RecordBacklinksSchema, type CollectionFieldInput, type CollectionFieldPatch, type CollectionPatch, type CollectionQuery, type RecordBacklink } from "../collections";
 import type { ZodType } from "zod";
 import type { IssueWakeup, IssueWakeupInput, IssueWakeupSummaryRow, PausedWakeup, SystemWakeup, WakeupRun, WorkspaceSystemWakeup } from "../types/issue-wakeup";
 import type { WorkspaceWakeupPage, WorkspaceWakeupFilters } from "../types/issue-wakeup";
@@ -55,6 +58,7 @@ import type {
   IssueSubscriber,
   Comment,
   CommentTriggerPreview,
+  CommentAgentGrant,
   IssueTriggerPreview,
   IssueTriggerPreviewParams,
   Reaction,
@@ -1182,8 +1186,9 @@ export class ApiClient {
     });
   }
 
-  async listIssueTableGroups(params: IssueTableGroupsRequest): Promise<IssueTableGroupsResponse> {
+  async listIssueTableGroups(params: IssueTableGroupsRequest, options?: {workspaceId: string; signal?: AbortSignal}): Promise<IssueTableGroupsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/groups", {
+      signal: options?.signal, headers: options ? {"X-Workspace-ID":options.workspaceId} : undefined,
       method: "POST",
       body: JSON.stringify(params),
     });
@@ -1195,8 +1200,9 @@ export class ApiClient {
     );
   }
 
-  async listIssueTableRows(params: IssueTableRowsRequest): Promise<IssueTableRowsResponse> {
+  async listIssueTableRows(params: IssueTableRowsRequest, options?: {workspaceId: string; signal?: AbortSignal}): Promise<IssueTableRowsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/rows", {
+      signal: options?.signal, headers: options ? {"X-Workspace-ID":options.workspaceId} : undefined,
       method: "POST",
       body: JSON.stringify(params),
     });
@@ -1221,8 +1227,9 @@ export class ApiClient {
     );
   }
 
-  async searchIssues(params: { q: string; limit?: number; offset?: number; include_closed?: boolean; signal?: AbortSignal }): Promise<SearchIssuesResponse> {
+  async searchIssues(params: { kind?: string; q: string; limit?: number; offset?: number; include_closed?: boolean; signal?: AbortSignal }): Promise<SearchIssuesResponse> {
     const search = new URLSearchParams({ q: params.q });
+    if ("kind" in params && typeof params.kind === "string") search.set("kind",params.kind);
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     if (params.offset !== undefined) search.set("offset", String(params.offset));
     if (params.include_closed) search.set("include_closed", "true");
@@ -1388,10 +1395,10 @@ export class ApiClient {
     await this.fetch(`/api/issues/${encodeURIComponent(issueId)}/wakeups/${encodeURIComponent(wakeupId)}/disable`, { method: "POST" });
   }
 
-  async getIssue(id: string, options?: { signal?: AbortSignal }): Promise<Issue> {
+  async getIssue(id: string, options?: { signal?: AbortSignal; workspaceId?: string }): Promise<Issue> {
     const raw = await this.fetch<unknown>(
       `/api/issues/${encodeURIComponent(id)}`,
-      options?.signal ? { signal: options.signal } : undefined,
+      { signal: options?.signal, headers: options?.workspaceId ? {"X-Workspace-ID":options.workspaceId} : undefined },
     );
     const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
       endpoint: "GET /api/issues/:id",
@@ -1544,10 +1551,461 @@ export class ApiClient {
   }
 
   async updateIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
-    return this.fetch(`/api/issues/${id}`, {
+    const raw = await this.fetch<unknown>(`/api/issues/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
+      endpoint: "PUT /api/issues/:id",
+    });
+    if (!issue) throw new Error("Invalid issue response");
+    return issue;
+  }
+
+  async listCollections(options?: {
+    archived?: boolean;
+    workspaceId: string;
+    signal?: AbortSignal;
+  }) {
+    return parseWithFallback(
+      await this.fetch<unknown>(`/api/collections${options?.archived ? "?archived=true" : ""}`, {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      }),
+      CollectionSchema.array(),
+      [] as import("../collections").Collection[],
+      { endpoint: "GET /api/collections" },
+    );
+  }
+  async createCollection(name: string, projectId?: string, metadata?: {icon?: string; description?: string}) {
+    const raw = await this.fetch<unknown>("/api/collections", {
+      method: "POST",
+      body: JSON.stringify({ name, project_id: projectId, ...metadata }),
+    });
+    const result = parseWithFallback(
+      raw,
+      CollectionSchema,
+      null as import("../collections").Collection | null,
+      { endpoint: "POST /api/collections" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async getCollection(
+    id: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ) {
+    const result = parseWithFallback(
+      await this.fetch<unknown>(`/api/collections/${id}`, {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      }),
+      CollectionDetailSchema,
+      null as import("zod").infer<typeof CollectionDetailSchema> | null,
+      { endpoint: "GET /api/collections/:id" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async createCollectionField(id: string, field: CollectionFieldInput) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/fields`, {
+      method: "POST",
+      body: JSON.stringify(field),
+    });
+    const result = parseWithFallback(
+      raw,
+      CollectionFieldSchema,
+      null as import("../collections").CollectionField | null,
+      { endpoint: "POST /api/collections/:id/fields" },
+    );
+    if (!result) throw new Error("Invalid field response");
+    return result;
+  }
+  async listCollectionRecords(
+    id: string,
+    query: CollectionQuery,
+    cursor: string | null,
+    signal?: AbortSignal,
+    workspaceId?: string,
+  ) {
+    const params = new URLSearchParams({ limit: "50" });
+    if (cursor) params.set("cursor", cursor);
+    if (query.search) params.set("search", query.search);
+    if (query.record_id) params.set("record_id", query.record_id);
+    for (const key of ["date_field", "date_start", "date_end"] as const) {
+      if (query[key]) params.set(key, query[key]);
+    }
+    if (query.properties)
+      params.set("properties", JSON.stringify(query.properties));
+    if (query.group_by) params.set("group_by", query.group_by);
+    if (query.group_key !== undefined) params.set("group_key", query.group_key);
+    if (query.sort_by) {
+      params.set("sort_by", query.sort_by);
+      params.set("sort_dir", query.sort_dir ?? "asc");
+    }
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/records?${params}`,
+      {
+        signal,
+        headers: workspaceId ? { "X-Workspace-ID": workspaceId } : undefined,
+      },
+    );
+    const result = parseWithFallback(
+      raw,
+      CollectionPageSchema,
+      null as import("zod").infer<typeof CollectionPageSchema> | null,
+      { endpoint: "GET /api/collections/:id/records" },
+    );
+    if (!result) throw new Error("Invalid records response");
+    return result;
+  }
+  async restoreCollection(id: string) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/restore`, { method: "POST" });
+    const result = parseWithFallback<import("../collections").Collection | null>(
+      raw, CollectionSchema, null, { endpoint: "restore collection" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async previewCollectionImport(workspaceId: string, file: File, options: import("../collections/import").CollectionImportOptions = {}, signal?: AbortSignal) {
+    const { CollectionImportPreviewSchema } = await import("../collections/import");
+    const raw = await this.uploadCollectionImport(workspaceId, file, { ...options, dry_run: true }, signal);
+    const result = parseWithFallback<import("../collections/import").CollectionImportPreview | null>(
+      raw, CollectionImportPreviewSchema, null, { endpoint: "preview collection import" },
+    );
+    if (!result) throw new Error("Invalid import preview response");
+    return result;
+  }
+  async createCollectionFromFile(workspaceId: string, file: File, options: import("../collections/import").CollectionImportOptions) {
+    const { z } = await import("zod");
+    const schema = z.object({ collection: CollectionSchema, count: z.number().int().positive().max(10000) });
+    const raw = await this.uploadCollectionImport(workspaceId, file, { ...options, dry_run: false });
+    const result = parseWithFallback<import("zod").infer<typeof schema> | null>(raw, schema, null, { endpoint: "create collection from file" });
+    if (!result) throw new Error("Invalid imported collection response");
+    return result;
+  }
+  private async uploadCollectionImport(workspaceId: string, file: File, options: import("../collections/import").CollectionImportOptions & { dry_run: boolean }, signal?: AbortSignal): Promise<unknown> {
+    const body = new FormData();
+    body.append("file", file);
+    body.append("options", JSON.stringify(options));
+    const res = await this.fetchRaw("/api/collections/import", {
+      method: "POST", body, signal, headers: { "X-Workspace-ID": workspaceId },
+    });
+    return res.json();
+  }
+  async listArchivedCollectionFields(id: string, workspaceId: string, signal?: AbortSignal) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/fields/archived`, {
+      signal, headers: { "X-Workspace-ID": workspaceId },
+    });
+    return parseWithFallback<import("../collections").CollectionField[]>(
+      raw, CollectionFieldSchema.array(), [], { endpoint: "archived fields" },
+    );
+  }
+  async restoreCollectionField(id: string, fieldId: string) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/fields/${fieldId}/restore`, { method: "POST" });
+    const result = parseWithFallback<import("../collections").CollectionField | null>(
+      raw, CollectionFieldSchema, null, { endpoint: "restore field" },
+    );
+    if (!result) throw new Error("Invalid field response");
+    return result;
+  }
+  async batchCollectionRecords(id: string, input: import("../collections").CollectionBatchInput) {
+    return this.collectionBulkCommand(id, "batch", input);
+  }
+  async importCollectionCSV(id: string, csv: string, dryRun: boolean) {
+    return this.collectionBulkCommand(id, "import", { csv, dry_run: dryRun });
+  }
+  private async collectionBulkCommand(id: string, action: string, input: unknown) {
+    const { CollectionBatchResultSchema } = await import("../collections");
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/records/${action}`, {
+      method: "POST", body: JSON.stringify(input),
+    });
+    const schema = action === "import"
+      ? CollectionBatchResultSchema.required({ dry_run: true })
+      : CollectionBatchResultSchema;
+    const result = parseWithFallback<import("zod").infer<typeof CollectionBatchResultSchema> | null>(
+      raw, schema, null, { endpoint: `collection ${action}` },
+    );
+    if (!result) throw new Error(`Invalid ${action} response`);
+    return result;
+  }
+  async createCollectionRecord(
+    id: string,
+    title: string,
+    fields?: Record<string, unknown>,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      "",
+      fields && Object.keys(fields).length ? { title, fields } : { title },
+      "POST",
+    );
+  }
+  async updateCollection(id: string, patch: CollectionPatch) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    const result = parseWithFallback(
+      raw,
+      CollectionSchema,
+      null as import("../collections").Collection | null,
+      { endpoint: "PATCH /api/collections/:id" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async updateCollectionField(
+    id: string,
+    fieldId: string,
+    patch: CollectionFieldPatch,
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/fields/${fieldId}`,
+      { method: "PATCH", body: JSON.stringify(patch) },
+    );
+    const result = parseWithFallback(
+      raw,
+      CollectionFieldSchema,
+      null as import("../collections").CollectionField | null,
+      { endpoint: "PATCH /api/collections/:id/fields/:fieldId" },
+    );
+    if (!result) throw new Error("Invalid field response");
+    return result;
+  }
+  async deleteCollectionRecord(id: string, recordId: string) {
+    return this.collectionRecordCommand(id, `/${recordId}`, undefined, "DELETE");
+  }
+  async restoreCollectionRecord(id: string, recordId: string) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/restore`,
+      undefined,
+      "POST",
+    );
+  }
+  async listCollectionTrash(
+    id: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ) {
+    return parseWithFallback(
+      await this.fetch<unknown>(`/api/collections/${id}/trash`, {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      }),
+      CollectionTrashSchema,
+      { records: [], total: 0, retention_days: 30 } as import("../collections").CollectionTrash,
+      { endpoint: "GET /api/collections/:id/trash" },
+    );
+  }
+  async updateCollectionRecord(
+    id: string,
+    recordId: string,
+    title: string,
+    base: string,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}`,
+      { title, title_base: base },
+      "PUT",
+    );
+  }
+  async setCollectionRecordField(
+    id: string,
+    recordId: string,
+    fieldId: string,
+    value: unknown,
+    expected: unknown,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/fields/${fieldId}`,
+      { value, expected_value: expected ?? null },
+      "PUT",
+    );
+  }
+  /** Adds one edge to a relation cell. Linking the same target twice is a no-op. */
+  async linkCollectionRecord(
+    id: string,
+    recordId: string,
+    fieldId: string,
+    toId: string,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/links`,
+      { field_id: fieldId, to_id: toId },
+      "POST",
+    );
+  }
+  async unlinkCollectionRecord(id: string, recordId: string, linkId: string) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/links/${linkId}`,
+      undefined,
+      "DELETE",
+    );
+  }
+  /** Records whose relation fields point at this task. */
+  async listIssueRecordLinks(
+    issueId: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ): Promise<RecordBacklink[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${encodeURIComponent(issueId)}/record-links`,
+      {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      },
+    );
+    return parseWithFallback(raw, RecordBacklinksSchema, { links: [] as RecordBacklink[] }, {
+      endpoint: "GET /api/issues/:id/record-links",
+    }).links;
+  }
+  /** Records whose relation fields point at this record. */
+  async listCollectionRecordBacklinks(
+    id: string,
+    recordId: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ): Promise<RecordBacklink[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/records/${recordId}/backlinks`,
+      {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      },
+    );
+    return parseWithFallback(raw, RecordBacklinksSchema, { links: [] as RecordBacklink[] }, {
+      endpoint: "GET /api/collections/:id/records/:recordId/backlinks",
+    }).links;
+  }
+  private async collectionRecordCommand(
+    id: string,
+    suffix: string,
+    body: unknown,
+    method: "POST" | "PUT" | "DELETE",
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/records${suffix}`,
+      body === undefined ? { method } : { method, body: JSON.stringify(body) },
+    );
+    const result = parseWithFallback(
+      raw,
+      CollectionRecordSchema,
+      null as import("../collections").CollectionRecord | null,
+      { endpoint: "collection record write" },
+    );
+    if (!result) throw new Error("Invalid record response");
+    return result;
+  }
+
+  async listDocuments(
+    projectId?: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ): Promise<Issue[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/documents${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+      {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      },
+    );
+    return parseWithFallback<Issue[]>(raw, IssueSchema.array(), [], {
+      endpoint: "GET /api/documents",
+    });
+  }
+
+  async getCollectionAccess(id: string, options: {workspaceId: string; signal?: AbortSignal}) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/access`, {signal: options.signal, headers: {"X-Workspace-ID": options.workspaceId}});
+    const result = parseWithFallback<import("../collections").CollectionAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "GET /api/collections/:id/access"});
+    if (!result) throw new Error("Invalid collection sharing response");
+    return result;
+  }
+  async updateCollectionAccess(id: string, input: DocumentSharingInput, workspaceId: string) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/access`, {method:"PUT",headers:{"X-Workspace-ID":workspaceId},body:JSON.stringify(input)});
+    const result = parseWithFallback<import("../collections").CollectionAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "PUT /api/collections/:id/access"});
+    if (!result) throw new Error("Invalid collection sharing response");
+    return result;
+  }
+  async getDocumentAccess(id: string, options: {workspaceId: string; signal?: AbortSignal}) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/access`, {signal: options.signal, headers: {"X-Workspace-ID": options.workspaceId}});
+    const result = parseWithFallback<DocumentAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "GET /api/documents/:id/access"});
+    if (!result) throw new Error("Invalid document sharing response");
+    return result;
+  }
+  async updateDocumentAccess(id: string, input: DocumentSharingInput, workspaceId: string) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/access`, {method:"PUT",headers:{"X-Workspace-ID":workspaceId},body:JSON.stringify(input)});
+    const result = parseWithFallback<DocumentAccess | null>(raw, DocumentAccessSchema, null, {endpoint: "PUT /api/documents/:id/access"});
+    if (!result) throw new Error("Invalid document sharing response");
+    return result;
+  }
+  async listDocumentVersions(id: string, workspaceId: string, before?: number) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/versions${before ? `?before=${before}` : ""}`, {headers:{"X-Workspace-ID":workspaceId}});
+    const result = parseWithFallback<DocumentVersions | null>(raw, DocumentVersionsSchema, null, {endpoint: "GET /api/documents/:id/versions"});
+    if (!result) throw new Error("Invalid document versions response");
+    return result;
+  }
+  async getDocumentVersion(id: string, version: number, workspaceId: string) {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/versions/${version}`, {headers:{"X-Workspace-ID":workspaceId}});
+    const result = parseWithFallback<DocumentSnapshot | null>(raw, DocumentSnapshotSchema, null, {endpoint: "GET /api/documents/:id/versions/:version"});
+    if (!result) throw new Error("Invalid document version response");
+    return result;
+  }
+  async restoreDocumentVersion(id: string, version: number, revision: number) {
+    return this.documentCommand(id, `versions/${version}/restore`, {expected_revision: revision});
+  }
+
+  async moveDocument(
+    id: string,
+    parentId: string | null,
+    position: number,
+    beforeId?: string,
+  ): Promise<Issue> {
+    return this.documentCommand(id, "move", {
+      parent_issue_id: parentId,
+      position,
+      before_id: beforeId,
+    });
+  }
+
+  async transitionDocument(
+    id: string,
+    action: "review" | "publish" | "draft",
+    revision: number,
+  ): Promise<Issue> {
+    return this.documentCommand(id, "transition", {
+      action,
+      expected_document_revision: revision,
+    });
+  }
+
+  private async documentCommand(
+    id: string,
+    command: "move" | "transition" | `versions/${number}/restore`,
+    body: unknown,
+  ): Promise<Issue> {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/${command}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
+      endpoint: `POST /api/documents/:id/${command}`,
+    });
+    if (!issue) throw new Error("Invalid document response");
+    return issue;
   }
 
   async moveIssue(id: string, data: MoveIssueRequest): Promise<Issue> {
@@ -1644,6 +2102,7 @@ export class ApiClient {
     attachmentIds?: string[],
     suppressAgentIds?: string[],
     steerTaskIds?: string[],
+    agentGrants?: CommentAgentGrant[],
   ): Promise<Comment> {
     return this.fetch(`/api/issues/${issueId}/comments`, {
       method: "POST",
@@ -1654,6 +2113,7 @@ export class ApiClient {
         ...(attachmentIds?.length ? { attachment_ids: attachmentIds } : {}),
         ...(suppressAgentIds?.length ? { suppress_agent_ids: suppressAgentIds } : {}),
         ...(steerTaskIds?.length ? { steer_task_ids: steerTaskIds } : {}),
+        ...(agentGrants?.length ? { agent_grants: agentGrants } : {}),
       }),
     });
   }
@@ -4384,11 +4844,13 @@ export class ApiClient {
   // desktop builds survive backend drift; a malformed list degrades to []
   // (selector shows only built-ins) rather than blanking the page.
   async listIssueViews(params: {
+    collection_id?: string|null;
     scope_type: string;
     scope_id?: string | null;
   }): Promise<IssueView[]> {
     const qs = new URLSearchParams({ scope_type: params.scope_type });
     if (params.scope_id) qs.set("scope_id", params.scope_id);
+    if (params.collection_id) qs.set("collection_id",params.collection_id);
     const raw = await this.fetch<unknown>(`/api/issue-views?${qs.toString()}`);
     return parseWithFallback(raw, IssueViewListSchema, [], {
       endpoint: "GET /api/issue-views",
@@ -4469,14 +4931,18 @@ export class ApiClient {
     // include=view is the capability opt-in: the server withholds view pins
     // from clients that don't declare support (old builds treated any
     // non-issue pin as a project pin and auto-deleted it on 404).
-    return this.fetch("/api/pins?include=view");
+    const raw = await this.fetch<unknown>("/api/pins?include=view,collection");
+    return parseWithFallback<PinnedItem[]>(raw, PinnedItemsSchema, [], {endpoint:"GET /api/pins"});
   }
 
   async createPin(data: CreatePinRequest): Promise<PinnedItem> {
-    return this.fetch("/api/pins", {
+    const raw = await this.fetch<unknown>("/api/pins", {
       method: "POST",
       body: JSON.stringify(data),
     });
+    const result=parseWithFallback<PinnedItem|null>(raw,PinnedItemSchema,null,{endpoint:"POST /api/pins"});
+    if(!result) throw new Error("Invalid pin response");
+    return result;
   }
 
   async deletePin(itemType: PinnedItemType, itemId: string): Promise<void> {

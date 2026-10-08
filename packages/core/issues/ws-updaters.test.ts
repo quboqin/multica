@@ -537,6 +537,17 @@ describe("project progress invalidation", () => {
   });
 });
 
+describe("onIssueCreated document isolation", () => {
+  it("does not insert a document into task query buckets", () => {
+    const qc = new QueryClient();
+    const before = makeListCache();
+    qc.setQueryData<ListIssuesCache>(issueKeys.list(WS_ID), before);
+    onIssueCreated(qc, WS_ID, { ...baseIssue, kind: "doc", status: "draft" });
+    expect(qc.getQueryData(issueKeys.list(WS_ID))).toEqual(before);
+    qc.clear();
+  });
+});
+
 describe("onIssueCreated — carries the label snapshot into list cache", () => {
   it("keeps the created issue's labels so members other than the creator render it already labeled", () => {
     // The backend now attaches labels in the create transaction and echoes

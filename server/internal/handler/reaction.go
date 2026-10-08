@@ -78,6 +78,9 @@ func (h *Handler) AddReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
+		return
+	}
 	var req struct {
 		Emoji string `json:"emoji"`
 	}
@@ -168,6 +171,9 @@ func (h *Handler) RemoveReaction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
+		return
+	}
 	var req struct {
 		Emoji string `json:"emoji"`
 	}

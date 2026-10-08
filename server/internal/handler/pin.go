@@ -72,12 +72,34 @@ func (h *Handler) ListPins(w http.ResponseWriter, r *http.Request) {
 	// contract would let an old Desktop DESTROY the user's view pins just by
 	// opening the sidebar — so view rows only ship to clients that declare
 	// they understand them (?include=view).
+	includeCollections := strings.Contains(r.URL.Query().Get("include"), "collection")
 	includeViews := strings.Contains(r.URL.Query().Get("include"), "view")
 
 	resp := make([]PinnedItemResponse, 0, len(pins))
 	for _, p := range pins {
+		if p.ItemType == "collection" {
+			if !includeCollections {
+				continue
+			}
+			c, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
+			if err != nil || h.requestCollectionPermission(r, h.Queries, c) == "" {
+				continue
+			}
+		}
 		if p.ItemType == "view" && !includeViews {
 			continue
+		}
+		if p.ItemType == "view" {
+			v, err := h.Queries.GetIssueView(r.Context(), db.GetIssueViewParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
+			if err != nil || !canReadIssueView(v, parseUUID(userID)) || (v.CollectionID.Valid && !h.canReadCollection(r, v.CollectionID, v.WorkspaceID)) {
+				continue
+			}
+		}
+		if p.ItemType == "issue" {
+			issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: p.ItemID, WorkspaceID: p.WorkspaceID})
+			if err != nil || (issue.Kind == "doc" && h.requestDocumentPermission(r, h.Queries, issue) == "") {
+				continue
+			}
 		}
 		resp = append(resp, pinnedItemToResponse(p))
 	}
@@ -96,8 +118,8 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.ItemType != "issue" && req.ItemType != "project" && req.ItemType != "view" {
-		writeError(w, http.StatusBadRequest, "item_type must be 'issue', 'project' or 'view'")
+	if req.ItemType != "issue" && req.ItemType != "project" && req.ItemType != "view" && req.ItemType != "collection" {
+		writeError(w, http.StatusBadRequest, "item_type must be 'issue', 'project', 'view' or 'collection'")
 		return
 	}
 	if req.ItemID == "" {
@@ -117,6 +139,11 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 	// Verify the item exists in this workspace
 	switch req.ItemType {
 	case "issue":
+		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: itemUUID, WorkspaceID: wsUUID})
+		if err != nil || (issue.Kind == "doc" && h.requestDocumentPermission(r, h.Queries, issue) == "") {
+			writeError(w, 404, "issue not found")
+			return
+		}
 		if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 			ID: itemUUID, WorkspaceID: wsUUID,
 		}); err != nil {
@@ -130,6 +157,12 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "project not found")
 			return
 		}
+	case "collection":
+		c, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{ID: itemUUID, WorkspaceID: wsUUID})
+		if err != nil || h.requestCollectionPermission(r, h.Queries, c) == "" {
+			writeError(w, 404, "collection not found")
+			return
+		}
 	case "view":
 		// Same read rule as the view endpoints: your own views, or views
 		// shared to the workspace. Foreign private views 404 — a pin must
@@ -137,7 +170,7 @@ func (h *Handler) CreatePin(w http.ResponseWriter, r *http.Request) {
 		view, err := h.Queries.GetIssueView(r.Context(), db.GetIssueViewParams{
 			ID: itemUUID, WorkspaceID: wsUUID,
 		})
-		if err != nil || !canReadIssueView(view, parseUUID(userID)) {
+		if err != nil || !canReadIssueView(view, parseUUID(userID)) || (view.CollectionID.Valid && !h.canReadCollection(r, view.CollectionID, view.WorkspaceID)) {
 			writeError(w, http.StatusNotFound, "view not found")
 			return
 		}

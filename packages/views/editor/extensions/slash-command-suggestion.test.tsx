@@ -711,3 +711,32 @@ describe("builtin `/` menu — async quick action rendering", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("builtin `/view` command", () => {
+  it("inserts an empty saved-view embed flagged to open the picker", () => {
+    const calls: unknown[] = [];
+    const chain = {
+      focus: () => chain,
+      insertContentAt: (range: unknown, content: unknown) => {
+        calls.push({ range, content });
+        return chain;
+      },
+      run: () => true,
+    };
+    const suggestion = createBuiltinCommandSuggestion();
+    suggestion.command!({
+      editor: { chain: () => chain },
+      range: { from: 1, to: 6 },
+      props: { id: "view", label: "view", descriptionKey: "view" },
+    } as never);
+    expect(calls).toEqual([
+      {
+        range: { from: 1, to: 6 },
+        content: {
+          type: "savedViewEmbed",
+          attrs: { viewId: "", autoOpen: true },
+        },
+      },
+    ]);
+  });
+});

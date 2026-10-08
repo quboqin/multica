@@ -2340,6 +2340,12 @@ describe("TaskMessageListSchema", () => {
   });
 });
 
+it("preserves old task/view defaults and rejects invalid document versions",()=>{
+ const old=ListIssuesResponseSchema.parse({issues:[baseIssue],total:1}).issues[0];
+ expect(old?.kind).toBe("task");expect(old?.document_revision).toBe(1);
+ expect(ListIssuesResponseSchema.safeParse({issues:[{...baseIssue,kind:"doc",document_revision:-1}],total:1}).success).toBe(false);
+ expect(IssueViewSchema.parse({id:"v1"}).collection_id).toBeNull();
+});
 
 describe("AgentActivityBucketListSchema duration", () => {
   const bucket = { agent_id: "a", bucket_at: "2026-09-24T00:00:00Z", task_count: 201,

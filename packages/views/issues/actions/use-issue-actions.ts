@@ -68,6 +68,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
   const openModal = useModalStore((s) => s.open);
 
   const issueId = issue?.id ?? null;
+  const isDocument = issue?.kind === "doc";
   const issueIdentifier = issue?.identifier ?? null;
   const issueProjectId = issue?.project_id ?? null;
   const issueAssigneeType = issue?.assignee_type ?? null;
@@ -134,7 +135,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     // tab at the shareable URL, so it is a link the user sees and may copy out
     // of the address bar. Opening on the UUID would also make the route
     // immediately rewrite the fresh tab's URL.
-    const path = paths.issueDetail(issueIdentifier || issueId);
+    const path = (isDocument ? paths.documentDetail(issueId) : paths.issueDetail(issueIdentifier || issueId));
     if (navigation.openInNewTab) {
       navigation.openInNewTab(path, issueIdentifier ?? undefined, {
         activate: true,
@@ -146,7 +147,7 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
       "_blank",
       "noopener,noreferrer",
     );
-  }, [issueId, issueIdentifier, navigation, paths]);
+  }, [issueId, issueIdentifier, navigation, paths, isDocument]);
 
   const togglePin = useCallback(() => {
     if (!issueId) return;
@@ -162,13 +163,13 @@ export function useIssueActions(issue: Issue | null): UseIssueActionsResult {
     // Share the identifier form (`/{ws}/issues/MUL-123`): a pasted link should
     // say which issue it points at. The UUID form stays valid, so links copied
     // before this still resolve.
-    const url = navigation.getShareableUrl(paths.issueDetail(issueIdentifier || issueId));
+    const url = navigation.getShareableUrl((isDocument ? paths.documentDetail(issueId) : paths.issueDetail(issueIdentifier || issueId)));
     if (await copyText(url)) {
       toast.success(t(($) => $.detail.link_copied));
     } else {
       toast.error(t(($) => $.detail.link_copy_failed));
     }
-  }, [paths, issueId, issueIdentifier, navigation, t]);
+  }, [paths, issueId, issueIdentifier, navigation, t, isDocument]);
 
   // Built during render so `copyCommentLink` depends on this string alone:
   // `paths` is rebuilt on every render, and the handler is passed to every

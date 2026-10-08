@@ -3,6 +3,7 @@ import { api } from "../api";
 
 /** The (scope_type, scope_id) container a surface's views live in. */
 export interface IssueViewScope {
+  collection_id?: string | null;
   scope_type: "workspace" | "my" | "project";
   scope_id?: string | null;
 }
@@ -10,7 +11,7 @@ export interface IssueViewScope {
 export const issueViewKeys = {
   all: (wsId: string) => ["issue-views", wsId] as const,
   list: (wsId: string, scope: IssueViewScope) =>
-    [...issueViewKeys.all(wsId), scope.scope_type, scope.scope_id ?? null] as const,
+    [...issueViewKeys.all(wsId), scope.scope_type, scope.scope_id ?? null, scope.collection_id ?? null] as const,
   detail: (wsId: string, id: string) =>
     [...issueViewKeys.all(wsId), "detail", id] as const,
 };

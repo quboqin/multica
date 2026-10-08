@@ -5347,7 +5347,8 @@ FROM agent_task_queue atq
 JOIN issue i ON i.id = atq.issue_id
 JOIN workspace w ON w.id = i.workspace_id
 WHERE i.workspace_id = $1
-  AND (i.id = $2::uuid OR i.parent_issue_id = $2::uuid)
+  AND (i.kind <> 'doc' OR document_can_read(i.id, $2::uuid))
+  AND (i.id = $3::uuid OR i.parent_issue_id = $3::uuid)
   AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 ORDER BY
     CASE atq.status
@@ -5357,11 +5358,12 @@ ORDER BY
         ELSE 3
     END,
     atq.created_at DESC
-LIMIT $3
+LIMIT $4
 `
 
 type ListActiveTasksByIssueFamilyParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
 	RootIssueID pgtype.UUID `json:"root_issue_id"`
 	RowLimit    int32       `json:"row_limit"`
 }
@@ -5405,7 +5407,12 @@ type ListActiveTasksByIssueFamilyRow struct {
 // interesting rows, and bounded because a parent with hundreds of children must
 // not turn one coordination read into an unbounded scan.
 func (q *Queries) ListActiveTasksByIssueFamily(ctx context.Context, arg ListActiveTasksByIssueFamilyParams) ([]ListActiveTasksByIssueFamilyRow, error) {
-	rows, err := q.db.Query(ctx, listActiveTasksByIssueFamily, arg.WorkspaceID, arg.RootIssueID, arg.RowLimit)
+	rows, err := q.db.Query(ctx, listActiveTasksByIssueFamily,
+		arg.WorkspaceID,
+		arg.UserID,
+		arg.RootIssueID,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}

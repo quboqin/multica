@@ -416,6 +416,23 @@ func (h *Handler) PreviewCommentSubIssue(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
+	anchor, anchorErr := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{ID: anchorCommentID, WorkspaceID: wsUUID})
+	if anchorErr != nil {
+		writeError(w, 404, "comment not found")
+		return
+	}
+	source, sourceErr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: anchor.IssueID, WorkspaceID: wsUUID})
+	if sourceErr != nil {
+		writeError(w, 404, "source issue not found")
+		return
+	}
+	if !h.checkDocumentAccess(w, r, source) {
+		return
+	}
+	if source.Kind == "doc" {
+		writeError(w, 400, "document comments cannot be copied into workspace tasks")
+		return
+	}
 	build, err := service.BuildSourceContext(r.Context(), h.Queries, wsUUID, anchorCommentID)
 	if err != nil {
 		h.writeSourceContextError(w, err, build.Limits)
@@ -463,6 +480,23 @@ func (h *Handler) CreateCommentSubIssue(w http.ResponseWriter, r *http.Request) 
 	wantDigest, tokenIssueID, validToken := service.ParseSourceContextToken(strings.TrimSpace(req.CaptureToken))
 	if !validToken {
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "source_context_changed", "error": "source context preview is invalid; refresh and try again"})
+		return
+	}
+	anchor, anchorErr := h.Queries.GetCommentInWorkspace(r.Context(), db.GetCommentInWorkspaceParams{ID: anchorCommentID, WorkspaceID: wsUUID})
+	if anchorErr != nil {
+		writeError(w, 404, "comment not found")
+		return
+	}
+	source, sourceErr := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: anchor.IssueID, WorkspaceID: wsUUID})
+	if sourceErr != nil {
+		writeError(w, 404, "source issue not found")
+		return
+	}
+	if !h.checkDocumentAccess(w, r, source) {
+		return
+	}
+	if source.Kind == "doc" {
+		writeError(w, 400, "document comments cannot be copied into workspace tasks")
 		return
 	}
 	build, err := service.BuildSourceContext(r.Context(), h.Queries, wsUUID, anchorCommentID)

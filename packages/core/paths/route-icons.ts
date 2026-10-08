@@ -48,6 +48,8 @@ export type NavLabelKey =
   | "chat"
   | "my_issues"
   | "issues"
+  | "documents"
+  | "collections"
   | "projects"
   | "autopilots"
   | "agents"
@@ -63,6 +65,8 @@ export type WorkspacePageKey =
   | "chat"
   | "myIssues"
   | "issues"
+  | "documents"
+  | "collections"
   | "projects"
   | "autopilots"
   | "agents"
@@ -89,6 +93,8 @@ export const WORKSPACE_PAGES: Record<WorkspacePageKey, WorkspacePage> = {
   inbox: { segment: "inbox", icon: "Inbox", navKey: "inbox" },
   chat: { segment: "chat", icon: "MessageSquare", navKey: "chat" },
   myIssues: { segment: "my-issues", icon: "CircleUser", navKey: "my_issues" },
+  documents: { segment: "documents", icon: "FileText", navKey: "documents" },
+  collections: { segment: "collections", icon: "FolderKanban", navKey: "collections" },
   issues: { segment: "issues", icon: "ListTodo", navKey: "issues" },
   projects: { segment: "projects", icon: "FolderKanban", navKey: "projects" },
   autopilots: { segment: "autopilots", icon: "Zap", navKey: "autopilots" },

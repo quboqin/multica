@@ -31,10 +31,10 @@ func (q *Queries) CountIssueViewsByOwner(ctx context.Context, arg CountIssueView
 const createIssueView = `-- name: CreateIssueView :one
 INSERT INTO issue_view (
     workspace_id, owner_id, name, scope_type, scope_id, scope_variant,
-    visibility, definition_version, query, display
+    visibility, definition_version, query, display, collection_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at, collection_id
 `
 
 type CreateIssueViewParams struct {
@@ -48,6 +48,7 @@ type CreateIssueViewParams struct {
 	DefinitionVersion int32       `json:"definition_version"`
 	Query             []byte      `json:"query"`
 	Display           []byte      `json:"display"`
+	CollectionID      pgtype.UUID `json:"collection_id"`
 }
 
 func (q *Queries) CreateIssueView(ctx context.Context, arg CreateIssueViewParams) (IssueView, error) {
@@ -62,6 +63,7 @@ func (q *Queries) CreateIssueView(ctx context.Context, arg CreateIssueViewParams
 		arg.DefinitionVersion,
 		arg.Query,
 		arg.Display,
+		arg.CollectionID,
 	)
 	var i IssueView
 	err := row.Scan(
@@ -79,6 +81,7 @@ func (q *Queries) CreateIssueView(ctx context.Context, arg CreateIssueViewParams
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CollectionID,
 	)
 	return i, err
 }
@@ -180,7 +183,7 @@ func (q *Queries) DeletePrivateIssueViewsByOwner(ctx context.Context, arg Delete
 }
 
 const getIssueView = `-- name: GetIssueView :one
-SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at FROM issue_view
+SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at, collection_id FROM issue_view
 WHERE id = $1 AND workspace_id = $2
 `
 
@@ -209,25 +212,28 @@ func (q *Queries) GetIssueView(ctx context.Context, arg GetIssueViewParams) (Iss
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CollectionID,
 	)
 	return i, err
 }
 
 const listIssueViewsForUser = `-- name: ListIssueViewsForUser :many
-SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at FROM issue_view
+SELECT id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at, collection_id FROM issue_view
 WHERE workspace_id = $1
+  AND collection_id IS NOT DISTINCT FROM $4::uuid
   AND scope_type = $2
-  AND scope_id IS NOT DISTINCT FROM $4::uuid
+  AND scope_id IS NOT DISTINCT FROM $5::uuid
   AND (owner_id = $3 OR visibility = 'workspace')
 ORDER BY created_at ASC
 LIMIT 200
 `
 
 type ListIssueViewsForUserParams struct {
-	WorkspaceID pgtype.UUID `json:"workspace_id"`
-	ScopeType   string      `json:"scope_type"`
-	OwnerID     pgtype.UUID `json:"owner_id"`
-	ScopeID     pgtype.UUID `json:"scope_id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	ScopeType    string      `json:"scope_type"`
+	OwnerID      pgtype.UUID `json:"owner_id"`
+	CollectionID pgtype.UUID `json:"collection_id"`
+	ScopeID      pgtype.UUID `json:"scope_id"`
 }
 
 // One surface's selector list: the caller's own views plus workspace-shared
@@ -241,6 +247,7 @@ func (q *Queries) ListIssueViewsForUser(ctx context.Context, arg ListIssueViewsF
 		arg.WorkspaceID,
 		arg.ScopeType,
 		arg.OwnerID,
+		arg.CollectionID,
 		arg.ScopeID,
 	)
 	if err != nil {
@@ -265,6 +272,7 @@ func (q *Queries) ListIssueViewsForUser(ctx context.Context, arg ListIssueViewsF
 			&i.Revision,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CollectionID,
 		); err != nil {
 			return nil, err
 		}
@@ -286,7 +294,7 @@ UPDATE issue_view SET
     revision = revision + 1,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND revision = $8
-RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at
+RETURNING id, workspace_id, owner_id, name, scope_type, scope_id, scope_variant, visibility, definition_version, query, display, revision, created_at, updated_at, collection_id
 `
 
 type UpdateIssueViewParams struct {
@@ -330,6 +338,7 @@ func (q *Queries) UpdateIssueView(ctx context.Context, arg UpdateIssueViewParams
 		&i.Revision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CollectionID,
 	)
 	return i, err
 }

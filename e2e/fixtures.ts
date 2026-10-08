@@ -51,6 +51,8 @@ export class TestApiClient {
   private workspaceId: string | null = null;
   private email: string | null = null;
   private createdIssueIds: string[] = [];
+  private createdMemberIds: string[] = [];
+  private createdCollectionIds: string[] = [];
   private createdProjectIds: string[] = [];
   private seededIssueIds: string[] = [];
 
@@ -185,6 +187,11 @@ export class TestApiClient {
     }
   }
 
+  async addTestWorkspaceMember(workspaceId: string, userId: string) {
+    const client=new pg.Client(DATABASE_URL);await client.connect();
+    try {const result=await client.query("INSERT INTO member (workspace_id,user_id,role) VALUES($1,$2,'member') RETURNING id",[workspaceId,userId]);this.createdMemberIds.push(result.rows[0].id);} finally {await client.end();}
+  }
+
   /** Create a project and register it for cleanup. */
   async createProject(title: string, opts?: Record<string, unknown>) {
     const res = await this.authedFetch("/api/projects", {
@@ -222,6 +229,19 @@ export class TestApiClient {
     const issue = await res.json();
     this.createdIssueIds.push(issue.id);
     return issue;
+  }
+
+  trackCollection(id: string) { this.createdCollectionIds.push(id); }
+
+  async createCollection(name:string) {
+    const response=await this.authedFetch("/api/collections",{method:"POST",body:JSON.stringify({name})});
+    if(!response.ok)throw new Error(`Create collection failed: ${response.status} ${await response.text()}`);
+    const collection=await response.json();this.createdCollectionIds.push(collection.id);return collection;
+  }
+
+  async cortexRequest(path:string,method="GET",body?:unknown) {
+    const response=await this.authedFetch(path,{method,body:body===undefined?undefined:JSON.stringify(body)});
+    return {status:response.status,body:response.status===204?null:await response.json()};
   }
 
   /**
@@ -404,6 +424,18 @@ export class TestApiClient {
 
   /** Clean up all issues created during this test. */
   async cleanup() {
+    if(this.createdCollectionIds.length>0&&this.workspaceId){
+      const client=new pg.Client(DATABASE_URL);await client.connect();
+      try {await client.query("BEGIN");
+        for(const table of ["record_link","record","collection_field","collection_collaborator","collection_access"]){await client.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])`,[this.workspaceId,this.createdCollectionIds]);}
+        await client.query("DELETE FROM issue_view WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
+        await client.query("DELETE FROM pinned_item WHERE workspace_id=$1 AND item_type='collection' AND item_id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
+        await client.query("DELETE FROM collection WHERE workspace_id=$1 AND id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
+        await client.query("COMMIT");
+      } finally {await client.end();}
+      this.createdCollectionIds=[];
+    }
+
     if (this.seededIssueIds.length > 0 && this.workspaceId) {
       const client = new pg.Client(DATABASE_URL);
       await client.connect();
@@ -435,6 +467,7 @@ export class TestApiClient {
       }
     }
     this.createdProjectIds = [];
+    if(this.createdMemberIds.length){const client=new pg.Client(DATABASE_URL);await client.connect();try {await client.query("DELETE FROM member WHERE id=ANY($1::uuid[])",[this.createdMemberIds]);this.createdMemberIds=[];}finally{await client.end();}}
   }
 
   getToken() {

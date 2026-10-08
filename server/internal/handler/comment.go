@@ -1490,11 +1490,20 @@ type CreateCommentRequest struct {
 	ParentID         *string  `json:"parent_id"`
 	AttachmentIDs    []string `json:"attachment_ids"`
 	SuppressAgentIDs []string `json:"suppress_agent_ids"`
+	// AgentGrants is what the poster allows the runs this comment triggers to
+	// do on this document, when their runtime owner could not otherwise reach
+	// it (task_resource_access.go). Documents only; ignored elsewhere.
+	AgentGrants []CommentAgentGrantInput `json:"agent_grants,omitempty"`
 	// SteerTaskIDs are the running turns the author chose to add this comment
 	// to, instead of starting a follow-up run for their agents. A turn that
 	// has ended, or cannot take additional input, is never swapped for another
 	// one: its agent keeps the normal trigger.
 	SteerTaskIDs []string `json:"steer_task_ids"`
+}
+
+type CommentAgentGrantInput struct {
+	AgentID    string `json:"agent_id"`
+	Permission string `json:"permission"`
 }
 
 type CommentTriggerPreviewRequest struct {
@@ -1518,6 +1527,19 @@ type CommentTriggerAgentResponse struct {
 	AvatarURL *string `json:"avatar_url,omitempty"`
 	Source    string  `json:"source"`
 	Reason    string  `json:"reason"`
+	// DocumentAccess is set when the comment is on a document and a person is
+	// posting it: whether a run of this agent can reach the document as things
+	// stand, and the most the poster may grant it for that run.
+	DocumentAccess *CommentTriggerDocumentAccess `json:"document_access,omitempty"`
+}
+
+type CommentTriggerDocumentAccess struct {
+	// RuntimeOwnerPermission is what the run will hold with no grant: the
+	// runtime owner's permission on the document, capped at the poster's.
+	RuntimeOwnerPermission string `json:"runtime_owner_permission"`
+	// MaxGrant is the most the poster may grant: their own permission, capped
+	// at edit. Empty when nothing needs granting.
+	MaxGrant string `json:"max_grant,omitempty"`
 }
 
 type commentAgentTriggerSource string
@@ -1667,7 +1689,11 @@ func (h *Handler) PreviewCommentTriggers(w http.ResponseWriter, r *http.Request)
 		Blocked: commentBlockedTargetOutcomes(targets),
 	}
 	for _, trigger := range triggers {
-		resp.Agents = append(resp.Agents, h.commentAgentTriggerToResponse(trigger))
+		agent := h.commentAgentTriggerToResponse(trigger)
+		if issue.Kind == "doc" && actorType == "member" {
+			agent.DocumentAccess = h.commentTriggerDocumentAccess(r.Context(), issue, trigger.Agent, userID)
+		}
+		resp.Agents = append(resp.Agents, agent)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1767,6 +1793,10 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	suppressAgentIDs, ok := parseUUIDSliceOrBadRequest(w, req.SuppressAgentIDs, "suppress_agent_ids")
+	if !ok {
+		return
+	}
+	agentGrants, ok := h.validateCommentAgentGrants(w, r, issue, req.AgentGrants)
 	if !ok {
 		return
 	}
@@ -1984,6 +2014,9 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), rootComment, uuidToString(issue.WorkspaceID), authorType, authorID, h.wakeupSourceTaskID(r))
 
 	originatorUserID := h.invokeOriginatorFromRequest(r, authorType, authorID)
+	// Grants are recorded before the runs they apply to are enqueued, so a run
+	// claimed straight away already finds them.
+	h.recordCommentAgentGrants(r, issue, comment, agentGrants)
 	// The comment is already saved; a blocked mention must not fail the whole
 	// request. Surface the per-target outcomes so the client can show partial
 	// success instead of a silent no-op (MUL-4525 §2).
@@ -3394,6 +3427,9 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.checkDocumentResource(w, r, existing.IssueID, existing.WorkspaceID) {
+		return
+	}
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
 		return
@@ -3665,6 +3701,9 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
+		return
+	}
 	member, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
 		return
@@ -4084,6 +4123,9 @@ func (h *Handler) loadCommentForActor(w http.ResponseWriter, r *http.Request) (d
 		return db.Comment{}, "", "", "", false
 	}
 	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+	if !h.checkDocumentResource(w, r, comment.IssueID, comment.WorkspaceID) {
+		return db.Comment{}, "", "", "", false
+	}
 	return comment, workspaceID, actorType, actorID, true
 }
 

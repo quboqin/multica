@@ -106,7 +106,13 @@
     ".github/workflows/ci.yml",
     ".github/ci-paths.json",
     "scripts/ci-scope.mjs",
-    "scripts/ci-scope.test.mjs"
+    "scripts/ci-scope.test.mjs",
+    "scripts/check-release*",
+    "scripts/verify-release-assets*",
+    "scripts/deploy-selfhost*",
+    ".github/workflows/release.yml",
+    ".github/workflows/deploy.yml",
+    ".goreleaser.yml"
   ],
   "installer": [
     "scripts/install.sh",

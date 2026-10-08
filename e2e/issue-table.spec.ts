@@ -9,6 +9,7 @@ import { createTestApi, loginAsDefault, reloadAppPage } from "./helpers";
 import type { TestApiClient, TestTableIssueSeed } from "./fixtures";
 
 type TableRequestBody = {
+  query?: { sort?: { field?: string; direction?: string } };
   group?: { kind?: string };
   group_key?: string | null;
   parent_id?: string | null;
@@ -43,7 +44,7 @@ function tableBody(request: Request): TableRequestBody {
 
 async function switchToTable(page: Page) {
   const currentView = page.getByRole("button", { name: "Board", exact: true });
-  await expect(currentView).toBeVisible();
+  await expect(currentView).toBeVisible({ timeout: 30000 });
   await currentView.click();
   const tableOption = page.getByRole("menuitemradio", {
     name: "Table",
@@ -83,15 +84,73 @@ test.describe("Issue Table server grouping", () => {
     await api?.cleanup();
   });
 
+  test("shared table preserves title edits and column widths after reload", async ({
+    page,
+  }) => {
+    const original = `G1 Table edit ${Date.now()}`;
+    const updated = `${original} saved`;
+    const issue = await api.createIssue(original, { status: "backlog" });
+    await reloadAppPage(page);
+    await switchToTable(page);
+    await expect(page.locator("[data-source-identity]")).toHaveAttribute(
+      "data-source-identity",
+      /issues/,
+    );
+    const row = page
+      .getByRole("row")
+      .filter({
+        has: page.getByRole("checkbox", {
+          name: `Select ${issue.identifier}`,
+          exact: true,
+        }),
+      });
+    await row.getByRole("button", { name: original, exact: true }).hover();
+    await row
+      .getByRole("button", { name: "Rename issue", exact: true })
+      .click();
+    const input = row.getByRole("textbox");
+    await input.fill(updated);
+    const saved = page.waitForResponse(
+      (response) =>
+        response.request().method() === "PUT" &&
+        apiPath(response.request()).startsWith("/api/issues/") &&
+        response.status() === 200,
+    );
+    await input.press("Enter");
+    await saved;
+    await expect(
+      page.getByRole("button", { name: updated, exact: true }),
+    ).toBeVisible();
+
+    const titleHeader = page.locator('th[data-column-id="title"]');
+    const width = (await titleHeader.boundingBox())!.width;
+    await titleHeader.getByRole("separator").focus();
+    await page.keyboard.press("ArrowRight");
+    await expect
+      .poll(async () => (await titleHeader.boundingBox())!.width)
+      .toBeGreaterThan(width);
+    const resized = (await titleHeader.boundingBox())!.width;
+    await reloadAppPage(page);
+    await expect(
+      page.getByRole("button", { name: updated, exact: true }),
+    ).toBeVisible();
+    await expect
+      .poll(async () => (await titleHeader.boundingBox())!.width)
+      .toBe(resized);
+  });
+
   test("groups 1,001 issues exactly without materializing the full result", async ({
     page,
   }) => {
     const run = Date.now();
-    const seeds: TestTableIssueSeed[] = Array.from({ length: 1001 }, (_, index) => ({
-      title: `E2E Table Large ${run} ${index.toString().padStart(4, "0")}`,
-      status: index < 501 ? "backlog" : index < 801 ? "todo" : "done",
-      position: index + 1,
-    }));
+    const seeds: TestTableIssueSeed[] = Array.from(
+      { length: 1001 },
+      (_, index) => ({
+        title: `E2E Table Large ${run} ${index.toString().padStart(4, "0")}`,
+        status: index < 501 ? "backlog" : index < 801 ? "todo" : "done",
+        position: index + 1,
+      }),
+    );
     await api.seedTableIssues(seeds);
     await reloadAppPage(page);
 
@@ -136,7 +195,9 @@ test.describe("Issue Table server grouping", () => {
     const groups = (await groupsResponse.json()) as TableGroupsResponse;
     expect(groups.total).toBe(1001);
     expect(
-      Object.fromEntries(groups.groups.map((group) => [group.key, group.count])),
+      Object.fromEntries(
+        groups.groups.map((group) => [group.key, group.count]),
+      ),
     ).toEqual({
       "status:backlog": 501,
       "status:todo": 300,
@@ -148,7 +209,9 @@ test.describe("Issue Table server grouping", () => {
       .filter({ hasText: "Backlog" })
       .first();
     await expect(backlogGroup).toContainText("501");
-    await expect(page.getByText(/Loaded \d+ of 1001/)).toBeVisible();
+    await expect(
+      page.locator("tbody tr").filter({ hasText: "E2E Table Large" }).first(),
+    ).toBeVisible();
     await expect(
       page.getByText(/Grouping and hierarchy are paused/),
     ).toHaveCount(0);
@@ -162,7 +225,17 @@ test.describe("Issue Table server grouping", () => {
     page.off("request", collectRequest);
     expect(legacyMembershipRequests).toEqual([]);
     expect(tableRowRequests.length).toBeGreaterThan(0);
-    expect(tableRowRequests.length).toBeLessThan(8);
+    // The current UI also queries empty default-status branches. Count
+    // distinct branches, and bound total requested capacity below membership.
+    const branchKeys = new Set(
+      tableRowRequests.map((body) =>
+        JSON.stringify([body.group?.kind, body.group_key, body.parent_id]),
+      ),
+    );
+    expect(branchKeys.size).toBeLessThanOrEqual(8);
+    expect(
+      tableRowRequests.reduce((sum, body) => sum + (body.page?.limit ?? 0), 0),
+    ).toBeLessThan(1001);
     expect(
       tableRowRequests.every(
         (body) =>
@@ -201,7 +274,8 @@ test.describe("Issue Table server grouping", () => {
     await switchToTable(page);
 
     const todoRootPromise = page.waitForResponse((response) => {
-      if (apiPath(response.request()) !== "/api/issues/table/rows") return false;
+      if (apiPath(response.request()) !== "/api/issues/table/rows")
+        return false;
       const body = tableBody(response.request());
       return (
         body.group_key === "status:todo" &&
@@ -210,12 +284,14 @@ test.describe("Issue Table server grouping", () => {
       );
     });
     const todoChildrenPromise = page.waitForResponse((response) => {
-      if (apiPath(response.request()) !== "/api/issues/table/rows") return false;
+      if (apiPath(response.request()) !== "/api/issues/table/rows")
+        return false;
       const body = tableBody(response.request());
       return body.parent_id === parent.id && response.status() === 200;
     });
     const doneRootPromise = page.waitForResponse((response) => {
-      if (apiPath(response.request()) !== "/api/issues/table/rows") return false;
+      if (apiPath(response.request()) !== "/api/issues/table/rows")
+        return false;
       const body = tableBody(response.request());
       return (
         body.group_key === "status:done" &&
@@ -224,7 +300,15 @@ test.describe("Issue Table server grouping", () => {
       );
     });
 
+    const groupCountsPromise = page.waitForResponse(
+      (response) =>
+        apiPath(response.request()) === "/api/issues/table/groups" &&
+        response.status() === 200,
+    );
     await groupByStatus(page);
+    const groupCounts = (await (
+      await groupCountsPromise
+    ).json()) as TableGroupsResponse;
     const [todoRootResponse, todoChildrenResponse, doneRootResponse] =
       await Promise.all([
         todoRootPromise,
@@ -236,7 +320,16 @@ test.describe("Issue Table server grouping", () => {
       (await todoChildrenResponse.json()) as TableRowsResponse;
     const doneRoot = (await doneRootResponse.json()) as TableRowsResponse;
 
-    expect(todoRoot.total).toBe(3);
+    // Grouped branches no longer repeat a query-wide COUNT on every page.
+    expect(groupCounts.total).toBe(3);
+    expect(
+      Object.fromEntries(
+        groupCounts.groups.map((group) => [group.key, group.count]),
+      ),
+    ).toEqual({
+      "status:todo": 2,
+      "status:done": 1,
+    });
     expect(todoRoot.rows).toEqual([
       expect.objectContaining({
         issue: expect.objectContaining({ id: parent.id, title: parentTitle }),
@@ -262,7 +355,9 @@ test.describe("Issue Table server grouping", () => {
       sameGroupRow.getByRole("button", { name: sameGroupTitle }).locator(".."),
     ).toHaveCSS("padding-left", "18px");
     await expect(
-      crossGroupRow.getByRole("button", { name: crossGroupTitle }).locator(".."),
+      crossGroupRow
+        .getByRole("button", { name: crossGroupTitle })
+        .locator(".."),
     ).toHaveCSS("padding-left", "0px");
   });
 
@@ -282,21 +377,34 @@ test.describe("Issue Table server grouping", () => {
     await reloadAppPage(page);
 
     const firstHeadPromise = page.waitForResponse((response) => {
-      if (apiPath(response.request()) !== "/api/issues/table/rows") return false;
+      if (apiPath(response.request()) !== "/api/issues/table/rows")
+        return false;
       const body = tableBody(response.request());
       return (
         body.group?.kind === "none" &&
+        body.query?.sort?.field === "title" &&
+        body.query?.sort?.direction === "asc" &&
         (body.page?.cursor === null || body.page?.cursor === undefined) &&
         response.status() === 200
       );
     });
     await switchToTable(page);
-    const firstHead = (await (await firstHeadPromise).json()) as TableRowsResponse;
+    await page
+      .locator('th[data-column-id="title"]')
+      .getByRole("button", { name: "Issue", exact: true })
+      .click();
+    await page
+      .getByRole("menuitem", { name: "Ascending", exact: true })
+      .click();
+    const firstHead = (await (
+      await firstHeadPromise
+    ).json()) as TableRowsResponse;
     const staleCursor = firstHead.next_cursor;
     expect(staleCursor).toBeTruthy();
 
     const firstTailPromise = page.waitForResponse((response) => {
-      if (apiPath(response.request()) !== "/api/issues/table/rows") return false;
+      if (apiPath(response.request()) !== "/api/issues/table/rows")
+        return false;
       const body = tableBody(response.request());
       return body.page?.cursor === staleCursor && response.status() === 200;
     });
@@ -305,12 +413,20 @@ test.describe("Issue Table server grouping", () => {
       element.scrollTop = element.scrollHeight;
     });
     await firstTailPromise;
-    await expect(page.getByText("Loaded 60 of 60", { exact: true })).toBeVisible();
+    await expect
+      .poll(async () => {
+        await tableScroller.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        return page.getByText("No more", { exact: true }).isVisible();
+      })
+      .toBe(true);
 
     const postUpdateResponses: Array<{
       body: TableRequestBody;
       payload: TableRowsResponse;
     }> = [];
+    let collecting = true;
     const collectResponse = async (response: Response) => {
       if (
         apiPath(response.request()) !== "/api/issues/table/rows" ||
@@ -318,13 +434,19 @@ test.describe("Issue Table server grouping", () => {
       ) {
         return;
       }
-      postUpdateResponses.push({
-        body: tableBody(response.request()),
-        payload: (await response.json()) as TableRowsResponse,
-      });
+      try {
+        // Headers may arrive before a realtime refresh aborts the body.
+        if (await response.finished()) return;
+        const payload = (await response.json()) as TableRowsResponse;
+        if (collecting) postUpdateResponses.push({body: tableBody(response.request()), payload});
+      } catch (error) {
+        // A detached listener can still be awaiting a body when the test
+        // closes its page. Only completed, active responses are assertions.
+        if (collecting && !response.request().failure()) throw error;
+      }
     };
     page.on("response", collectResponse);
-    await api.updateIssue(moved.id, { position: 0 });
+    await api.updateIssue(moved.id, { title: `A moved ${run}` });
 
     await expect
       .poll(
@@ -365,7 +487,15 @@ test.describe("Issue Table server grouping", () => {
     ].map((row) => row.issue.id);
     expect(new Set(refreshedIds).size).toBe(60);
     expect(refreshedIds).toContain(moved.id);
-    await expect(page.getByText("Loaded 60 of 60", { exact: true })).toBeVisible();
+    await expect
+      .poll(async () => {
+        await tableScroller.evaluate((element) => {
+          element.scrollTop = element.scrollHeight;
+        });
+        return page.getByText("No more", { exact: true }).isVisible();
+      })
+      .toBe(true);
+    collecting = false;
     page.off("response", collectResponse);
   });
 

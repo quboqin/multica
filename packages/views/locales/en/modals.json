@@ -13,6 +13,8 @@
   "delete_issue": {
     "title": "Delete issue",
     "description": "This will permanently delete this issue and all its comments. This action cannot be undone.",
+    "linked_records_one": "{{count}} table record links to this issue. Its link will read as deleted.",
+    "linked_records_other": "{{count}} table records link to this issue. Their links will read as deleted.",
     "cancel": "Cancel",
     "confirm": "Delete",
     "deleting": "Deleting...",

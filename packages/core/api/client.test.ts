@@ -25,6 +25,80 @@ describe("ApiClient status reorder", () => {
   });
 });
 
+describe("ApiClient record links", () => {
+  const respond = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  const record = {
+    id: "r1",
+    workspace_id: "w1",
+    collection_id: "c1",
+    title: "Row",
+    fields: {},
+    revision: 2,
+    created_at: "2026-09-20T00:00:00Z",
+  };
+
+  it("links and unlinks through the record's own endpoints", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        respond(
+          { ...record, links: { f1: [{ id: "l1", to_type: "issue", to_id: "i1", identifier: "MUL-7" }] } },
+          201,
+        ),
+      )
+      // An older server answers without links at all.
+      .mockResolvedValueOnce(respond(record));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    const linked = await client.linkCollectionRecord("c1", "r1", "f1", "i1");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.example.test/api/collections/c1/records/r1/links",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      field_id: "f1",
+      to_id: "i1",
+    });
+    expect(linked.links.f1?.[0]).toMatchObject({ id: "l1", identifier: "MUL-7", missing: false });
+
+    const unlinked = await client.unlinkCollectionRecord("c1", "r1", "l1");
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      "https://api.example.test/api/collections/c1/records/r1/links/l1",
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("DELETE");
+    expect(unlinked.links).toEqual({});
+  });
+
+  it("reads a malformed reverse lookup as no links", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(respond({ links: { not: "a list" } }))
+      .mockResolvedValueOnce(respond(null))
+      .mockResolvedValueOnce(
+        respond({ links: [{ id: "l1", collection_id: "c1", record_id: "r1", record_title: "Row" }] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    expect(await client.listIssueRecordLinks("MUL-7")).toEqual([]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      "https://api.example.test/api/issues/MUL-7/record-links",
+    );
+    expect(await client.listCollectionRecordBacklinks("c1", "r1")).toEqual([]);
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      "https://api.example.test/api/collections/c1/records/r1/backlinks",
+    );
+    expect(await client.listIssueRecordLinks("i1")).toEqual([
+      { id: "l1", collection_id: "c1", collection_name: "", record_id: "r1", record_title: "Row", field_id: "", field_name: "" },
+    ]);
+  });
+});
+
 describe("ApiClient agent conversation-starter compatibility", () => {
   const prompt = {
     label: "Review a PR",
@@ -92,11 +166,9 @@ describe("ApiClient agent conversation-starter compatibility", () => {
 
 describe("ApiClient edit guards", () => {
   it("serializes field baselines for issue and comment writes", async () => {
+    const response = {id:"issue-1",workspace_id:"ws-1",number:1,identifier:"MUL-1",title:"Latest",description:null,status:"todo",priority:"none",assignee_type:null,assignee_id:null,creator_type:"member",creator_id:"user-1",parent_issue_id:null,project_id:null,position:0,start_date:null,due_date:null,created_at:"2026-09-18",updated_at:"2026-09-18"};
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
-      new Response("{}", {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(JSON.stringify(response), {status:200,headers:{"Content-Type":"application/json"}}),
     ));
     vi.stubGlobal("fetch", fetchMock);
     const client = new ApiClient("https://api.example.test");
@@ -1451,6 +1523,8 @@ describe("ApiClient", () => {
       "parent-1",
       ["attachment-1"],
       ["agent-1"],
+      ["task-1"],
+      [{ agent_id: "agent-2", permission: "edit" }],
     );
     await client.updateComment("comment-1", "updated", ["attachment-1"], ["agent-1"]);
 
@@ -1473,6 +1547,8 @@ describe("ApiClient", () => {
           parent_id: "parent-1",
           attachment_ids: ["attachment-1"],
           suppress_agent_ids: ["agent-1"],
+          steer_task_ids: ["task-1"],
+          agent_grants: [{ agent_id: "agent-2", permission: "edit" }],
         }),
       },
       {
@@ -3140,4 +3216,41 @@ describe("ApiClient shared credential across windows", () => {
 
     expect(onUnauthorized).toHaveBeenCalledTimes(1);
   });
+});
+
+it("validates bulk results and keeps archived collection reads workspace scoped", async () => {
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ count: "not a number" }))
+    .mockResolvedValueOnce(Response.json({ count: 1 }))
+    .mockResolvedValueOnce(Response.json([]));
+  vi.stubGlobal("fetch", fetchMock);
+  const client = new ApiClient("https://api.example.test");
+  await expect(client.batchCollectionRecords("c1", {
+    action: "delete", record_ids: ["r1"], confirmed: true,
+  })).rejects.toThrow("Invalid batch response");
+  await expect(client.importCollectionCSV("c1", "title\nExample", true))
+    .rejects.toThrow("Invalid import response");
+  await client.listCollections({ workspaceId: "ws1", archived: true });
+  const archivedRequest = fetchMock.mock.calls[2]!;
+  expect(archivedRequest[0]).toContain("/api/collections?archived=true");
+  expect(new Headers(archivedRequest[1]?.headers).get("X-Workspace-ID")).toBe("ws1");
+});
+
+it("uploads a worksheet in the selected workspace and rejects malformed import responses", async () => {
+  const fetchMock = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(Response.json({ name: "Import", row_count: "unknown" }))
+    .mockResolvedValueOnce(Response.json({ count: 2, collection: null }));
+  vi.stubGlobal("fetch", fetchMock);
+  const client = new ApiClient("https://api.example.test");
+  const file = new File(["Customer,Seats\nAcme,25"], "customers.csv", { type: "text/csv" });
+  await expect(client.previewCollectionImport("ws-import", file)).rejects.toThrow("Invalid import preview response");
+  await expect(client.createCollectionFromFile("ws-import", file, { name: "Customers" }))
+    .rejects.toThrow("Invalid imported collection response");
+  const request = fetchMock.mock.calls[0]![1]!;
+  expect(new Headers(request.headers).get("X-Workspace-ID")).toBe("ws-import");
+  expect(new Headers(request.headers).has("Content-Type")).toBe(false);
+  expect(request.body).toBeInstanceOf(FormData);
+  expect(JSON.parse((request.body as FormData).get("options") as string)).toEqual({ dry_run: true });
+  const submitted = fetchMock.mock.calls[1]![1]!.body as FormData;
+  expect(JSON.parse(submitted.get("options") as string)).toEqual({ name: "Customers", dry_run: false });
 });

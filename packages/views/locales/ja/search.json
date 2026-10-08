@@ -9,7 +9,8 @@
     "projects": "プロジェクト",
     "issues": "タスク",
     "cancelled": "キャンセル済み",
-    "recent": "最近の項目"
+    "recent": "最近の項目",
+    "documents": "ドキュメント"
   },
   "commands": {
     "current_theme_aria": "現在のテーマ",
@@ -33,5 +34,6 @@
   },
   "trigger": {
     "label": "検索..."
-  }
+  },
+  "documents_only": "ドキュメントのみ"
 }

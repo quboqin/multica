@@ -31,7 +31,7 @@ import { isTriggerArmedAt } from "./suggestion-trigger-arming";
 const MAX_ITEMS = 20;
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
-export type BuiltinCommandKey = "note";
+export type BuiltinCommandKey = "note" | "view";
 
 export interface SlashCommandItem {
   id: string;
@@ -128,8 +128,8 @@ export const SlashCommandList = forwardRef<
   // Built-in commands carry an i18n key so the visible description stays
   // localized; skills carry a raw description string from their config.
   const describe = (item: SlashCommandItem): string | undefined =>
-    item.descriptionKey === "note"
-      ? t(($) => $.slash_command.commands.note)
+    item.descriptionKey
+      ? t(($) => $.slash_command.commands[item.descriptionKey!])
       : item.description;
 
   return (
@@ -284,6 +284,7 @@ export function createSlashCommandSuggestion(qc: QueryClient): Omit<
  * `noteCommentPrefix` in server/internal/handler/comment.go.
  */
 export const BUILTIN_COMMANDS: SlashCommandItem[] = [
+  { id: "view", label: "view", descriptionKey: "view" },
   { id: "note", label: "note", descriptionKey: "note" },
 ];
 
@@ -401,6 +402,20 @@ export function createBuiltinCommandSuggestion(
             // it by hand; the host surfaces why nothing was inserted.
             options.onRenderError?.(error);
           });
+        return;
+      }
+
+      // `/view` drops an empty embed whose node view opens the saved-view
+      // picker immediately (autoOpen is never serialized).
+      if (props.id === "view") {
+        editor
+          .chain()
+          .focus()
+          .insertContentAt(range, {
+            type: "savedViewEmbed",
+            attrs: { viewId: "", autoOpen: true },
+          })
+          .run();
         return;
       }
 

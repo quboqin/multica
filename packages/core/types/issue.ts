@@ -168,6 +168,8 @@ export interface IssueDuplicateOf {
 }
 
 export interface Issue {
+  kind?: "task" | "doc" | "knowledge" | "workflow_run" | (string & {});
+  document_revision?: number;
   id: string;
   workspace_id: string;
   number: number;
@@ -195,6 +197,7 @@ export interface Issue {
   assignee_id: string | null;
   creator_type: IssueAssigneeType;
   creator_id: string;
+  document_owner_id?: string;
   parent_issue_id: string | null;
   /**
    * The original this issue duplicates (MUL-7349): present only while the

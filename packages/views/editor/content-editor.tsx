@@ -127,6 +127,8 @@ interface ContentEditorBaseProps {
    * substitute the latest prop value for this base.
    */
   onUpdate?: (markdown: string, baseMarkdown: string) => void;
+  /** Capture a durable draft and its read version before the save debounce. */
+  onDraftChange?: (markdown: string, baseMarkdown: string) => void;
   placeholder?: string;
   className?: string;
   debounceMs?: number;
@@ -362,6 +364,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       defaultValue,
       value,
       onUpdate,
+      onDraftChange,
       placeholder: placeholderText = "",
       className,
       debounceMs = 300,
@@ -393,6 +396,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
     const pendingFlushRef = useRef<string | null>(null);
     const pendingBaseRef = useRef<string | null>(null);
     const onUpdateRef = useRef(onUpdate);
+    const onDraftChangeRef = useRef(onDraftChange);
     const onSubmitRef = useRef(onSubmit);
     const onBlurRef = useRef(onBlur);
     const onReadyRef = useRef(onReady);
@@ -502,6 +506,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
 
     // Keep refs in sync without recreating editor
     onUpdateRef.current = onUpdate;
+    onDraftChangeRef.current = onDraftChange;
     onSubmitRef.current = onSubmit;
     onBlurRef.current = onBlur;
     onReadyRef.current = onReady;
@@ -622,8 +627,13 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         resolveIssueIdentifierRef,
       }),
       onUpdate: ({ editor: ed }) => {
-        if (!onUpdateRef.current) return;
+        if (!onUpdateRef.current || lastEmittedRef.current === null) return;
+        const markdown = normalizeEditorMarkdown(ed);
+        // Node initialization and presentation attributes may emit updates
+        // without changing serialized content. They are not user drafts.
+        if (markdown === lastEmittedRef.current && pendingBaseRef.current === null) return;
         pendingBaseRef.current = documentBaseRef.current;
+        onDraftChangeRef.current?.(markdown, documentBaseRef.current);
         if (flushPendingOnUnmountRef.current) {
           pendingFlushRef.current = normalizeEditorMarkdown(ed);
         }
@@ -634,7 +644,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
           const base = pendingBaseRef.current ?? documentBaseRef.current;
           pendingBaseRef.current = null;
           const md = normalizeEditorMarkdown(ed);
-          if (md === lastEmittedRef.current) return;
+          if (md === lastEmittedRef.current && !onDraftChangeRef.current) return;
           lastEmittedRef.current = md;
           onUpdateRef.current?.(md, base);
         }, debounceMs);

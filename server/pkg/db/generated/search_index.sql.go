@@ -36,13 +36,15 @@ const getSearchIndexManifest = `-- name: GetSearchIndexManifest :one
 WITH ws AS (SELECT $1::uuid AS id)
 SELECT
     pg_current_snapshot()::text AS snapshot,
-    (SELECT count(*) FROM issue i, ws WHERE i.workspace_id = ws.id)::bigint AS issue_count,
+    (SELECT count(*) FROM issue i, ws WHERE i.workspace_id = ws.id AND i.kind = 'task')::bigint AS issue_count,
     (SELECT COALESCE(sum(octet_length(i.title) + COALESCE(octet_length(i.description), 0)), 0)
-        FROM issue i, ws WHERE i.workspace_id = ws.id)::bigint AS issue_bytes,
+        FROM issue i, ws WHERE i.workspace_id = ws.id AND i.kind = 'task')::bigint AS issue_bytes,
     (SELECT count(*) FROM comment c, ws
-        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL)::bigint AS comment_count,
+        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task'))::bigint AS comment_count,
     (SELECT COALESCE(sum(octet_length(c.content)), 0) FROM comment c, ws
-        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL)::bigint AS comment_bytes,
+        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task'))::bigint AS comment_bytes,
     (SELECT count(*) FROM project p, ws WHERE p.workspace_id = ws.id)::bigint AS project_count,
     (SELECT COALESCE(sum(octet_length(p.title) + COALESCE(octet_length(p.description), 0)), 0)
         FROM project p, ws WHERE p.workspace_id = ws.id)::bigint AS project_bytes
@@ -143,9 +145,10 @@ func (q *Queries) ListSearchIndexChanges(ctx context.Context, arg ListSearchInde
 }
 
 const listSearchIndexCommentsByIDs = `-- name: ListSearchIndexCommentsByIDs :many
-SELECT id, issue_id, content, created_at, deleted_at
-FROM comment
-WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+SELECT c.id, c.issue_id, c.content, c.created_at, c.deleted_at
+FROM comment c
+WHERE c.workspace_id = $1 AND c.id = ANY($2::uuid[])
+  AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task')
 `
 
 type ListSearchIndexCommentsByIDsParams struct {
@@ -189,11 +192,12 @@ func (q *Queries) ListSearchIndexCommentsByIDs(ctx context.Context, arg ListSear
 }
 
 const listSearchIndexCommentsByIssues = `-- name: ListSearchIndexCommentsByIssues :many
-SELECT id, issue_id, content, created_at
-FROM comment
-WHERE workspace_id = $1
-  AND issue_id = ANY($2::uuid[])
-  AND deleted_at IS NULL
+SELECT c.id, c.issue_id, c.content, c.created_at
+FROM comment c
+WHERE c.workspace_id = $1
+  AND c.issue_id = ANY($2::uuid[])
+  AND c.deleted_at IS NULL
+  AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task')
 `
 
 type ListSearchIndexCommentsByIssuesParams struct {
@@ -234,8 +238,8 @@ func (q *Queries) ListSearchIndexCommentsByIssues(ctx context.Context, arg ListS
 }
 
 const listSearchIndexIssuesByIDs = `-- name: ListSearchIndexIssuesByIDs :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1 AND id = ANY($2::uuid[])
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, kind, document_revision FROM issue
+WHERE kind = 'task' AND workspace_id = $1 AND id = ANY($2::uuid[])
 `
 
 type ListSearchIndexIssuesByIDsParams struct {
@@ -283,6 +287,8 @@ func (q *Queries) ListSearchIndexIssuesByIDs(ctx context.Context, arg ListSearch
 			&i.LastActivityAt,
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
+			&i.Kind,
+			&i.DocumentRevision,
 		); err != nil {
 			return nil, err
 		}
@@ -295,8 +301,8 @@ func (q *Queries) ListSearchIndexIssuesByIDs(ctx context.Context, arg ListSearch
 }
 
 const listSearchIndexIssuesPage = `-- name: ListSearchIndexIssuesPage :many
-SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id FROM issue
-WHERE workspace_id = $1 AND number > $2
+SELECT id, workspace_id, title, description, status, priority, assignee_type, assignee_id, creator_type, creator_id, parent_issue_id, acceptance_criteria, context_refs, position, due_date, created_at, updated_at, number, project_id, origin_type, origin_id, first_executed_at, start_date, metadata, stage, properties, revision, last_activity_at, triage_state, duplicate_of_issue_id, kind, document_revision FROM issue
+WHERE kind = 'task' AND workspace_id = $1 AND number > $2
 ORDER BY number
 LIMIT $3
 `
@@ -348,6 +354,8 @@ func (q *Queries) ListSearchIndexIssuesPage(ctx context.Context, arg ListSearchI
 			&i.LastActivityAt,
 			&i.TriageState,
 			&i.DuplicateOfIssueID,
+			&i.Kind,
+			&i.DocumentRevision,
 		); err != nil {
 			return nil, err
 		}

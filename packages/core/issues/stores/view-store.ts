@@ -9,7 +9,7 @@ import { PROJECT_STATUS_ORDER } from "../../projects/config";
 import { createWorkspaceAwareStorage, registerForWorkspaceRehydration } from "../../platform/workspace-storage";
 import { defaultStorage } from "../../platform/storage";
 
-export type ViewMode = "board" | "list" | "table" | "gantt" | "swimlane";
+export type ViewMode = "board" | "list" | "table" | "gantt" | "swimlane" | "calendar" | "gallery";
 export type GanttZoom = "day" | "week" | "month";
 /**
  * Board grouping. Besides the three built-ins, a select-type custom property

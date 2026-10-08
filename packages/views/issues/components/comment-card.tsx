@@ -39,7 +39,7 @@ import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useRecipientActions } from "../hooks/use-recipient-actions";
 import { SteerBadge, SteerReceipts } from "./steer-receipts";
-import type { AgentTask, TimelineEntry, Attachment } from "@multica/core/types";
+import type { AgentTask, TimelineEntry, Attachment, CommentAgentGrant } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
 import { isDeletedComment } from "@multica/core/issues/comment-deletion";
 import { commentSupplementReceipts, isSupplementInFlight } from "@multica/core/issues/run-steering";
@@ -131,7 +131,7 @@ interface CommentCardProps {
    * `CommentRow` has to rerun the rule per row.
    */
   canModerate?: boolean;
-  onReply: (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[]) => Promise<string | boolean>;
+  onReply: (parentId: string, content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[], agentGrants?: CommentAgentGrant[]) => Promise<string | boolean>;
   onReplyAccepted?: (commentId: string) => void;
   onEdit: (commentId: string, content: string, attachmentIds: string[], suppressAgentIds?: string[], contentBase?: string) => Promise<void>;
   onDelete: (commentId: string) => void;
@@ -1521,7 +1521,7 @@ function CommentCardImpl({
                   draftKey={`reply:${issueId}:${entry.id}`}
                   onEditAnnotation={(id) => annotation.editAnnotation(id, true)}
                   steerByDefault={steerThreadRunByDefault}
-                  onSubmit={(content, attachmentIds, suppressAgentIds, steerTaskIds) => replyTargetMissing ? Promise.resolve(false) : onReply(replyTargetId, content, attachmentIds, suppressAgentIds, steerTaskIds)}
+                  onSubmit={(content, attachmentIds, suppressAgentIds, steerTaskIds, agentGrants) => replyTargetMissing ? Promise.resolve(false) : onReply(replyTargetId, content, attachmentIds, suppressAgentIds, steerTaskIds, agentGrants)}
                   onAccepted={onReplyAccepted}
                 />
               </div>

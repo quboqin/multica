@@ -1,5 +1,7 @@
 "use client";
 
+import { refreshDataSource } from "../data-source";
+
 import { useEffect, useRef } from "react";
 import { forgetLocalSearchIndex } from "../search-index/instance";
 import { useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
@@ -10,6 +12,7 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
+import { issueViewKeys } from "../issue-views/queries";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -642,7 +645,10 @@ export async function handleInboxNew(
 function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
   const wsId = getCurrentWsId();
   if (wsId) {
-    qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+    void refreshDataSource(qc, issueKeys.all(wsId));
+    for (const prefix of ["documents", "collections"]) {
+      void refreshDataSource(qc, [prefix, wsId]);
+    }
     // Through the inbox's own entry point, not a plain invalidate: a reconnect
     // can land during the list's first load, and a plain invalidate would be
     // answered by the request already on the wire (see refreshInboxQuery).
@@ -796,6 +802,7 @@ export function useRealtimeSync(
         const wsId = getCurrentWsId();
         if (wsId) {
           qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+          void qc.resetQueries({ queryKey: ["documents", wsId] });
           // The issue table can filter on a project's status, so a
           // project create/update/delete changes which issues a filtered
           // window holds. The payload carries no previous status to compare
@@ -1005,6 +1012,10 @@ export function useRealtimeSync(
     ]);
 
     const unsubAny = ws.onAny((msg) => {
+      if (msg.type.startsWith("issue:") || msg.type.startsWith("issue_properties:")) {
+        const wsId = getCurrentWsId();
+        if (wsId) void refreshDataSource(qc, issueKeys.tableAll(wsId));
+      }
       if (specificEvents.has(msg.type)) return;
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];
@@ -1016,12 +1027,54 @@ export function useRealtimeSync(
     // Filtering by actor_id would block other tabs of the same user.
     // Instead, both mutations and WS handlers use dedup checks to be idempotent.
 
+    const refreshCollections = () => {
+      const wsId = getCurrentWsId();
+      if (wsId) void refreshDataSource(qc, ["collections", wsId]);
+    };
+    const refreshDocuments = () => {
+      const wsId = getCurrentWsId();
+      if (wsId) void refreshDataSource(qc, ["documents", wsId]);
+    };
+    const unsubDocumentAccessChanged = ws.on(
+      "document:access_changed",
+      (payload) => {
+        if (
+          !payload || typeof payload !== "object" ||
+          !("document_id" in payload) || typeof payload.document_id !== "string"
+        ) return;
+        const { document_id } = payload;
+        const wsId = getCurrentWsId();
+        if (!wsId) return;
+        // Remove cached bodies before refetch: former readers receive this event too.
+        void qc.resetQueries({ queryKey: issueKeys.detail(wsId, document_id) });
+        void qc.resetQueries({ queryKey: issueKeys.timeline(document_id) });
+        void qc.resetQueries({ queryKey: ["documents", wsId] });
+        void qc.resetQueries({ queryKey: issueKeys.attachments(document_id) });
+        void qc.resetQueries({ queryKey: issueKeys.tasks(document_id) });
+        void qc.resetQueries({ queryKey: agentTasksKeys.all(wsId) });
+        void qc.resetQueries({ queryKey: agentTaskSnapshotKeys.all(wsId) });
+        void qc.resetQueries({ queryKey: chatKeys.taskMessagesAll() });
+        qc.invalidateQueries({ queryKey: ["inbox"] });
+      },
+    );
+    const unsubCollectionAccessChanged=ws.on("collection:access_changed",()=>{
+      const wsId=getCurrentWsId();if(!wsId)return;
+      void qc.resetQueries({queryKey:["collections",wsId]});
+      void qc.resetQueries({queryKey:issueViewKeys.all(wsId)});
+      void qc.invalidateQueries({queryKey:["pins",wsId]});
+    });
+    const unsubRecordUpdated=ws.on("record:updated",refreshCollections);
+    const unsubCollectionUpdated=ws.on("collection:updated",refreshCollections);
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
       const payload = p as IssueUpdatedPayload;
       const { issue } = payload;
       if (!issue?.id) return;
       const wsId = getCurrentWsId();
       if (wsId) {
+        refreshDocuments();
+        // Relation cells show the status of the tasks they link to. Only a
+        // status change is worth a refetch: agents update issues constantly.
+        if (payload.status_changed) refreshCollections();
         onIssueUpdated(qc, wsId, issue, {
           assigneeChanged: payload.assignee_changed,
           statusChanged: payload.status_changed,
@@ -1044,7 +1097,10 @@ export function useRealtimeSync(
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
       const wsId = getCurrentWsId();
-      if (wsId) onIssueCreated(qc, wsId, issue);
+      if (wsId) {
+        onIssueCreated(qc, wsId, issue);
+        refreshDocuments();
+      }
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
@@ -1053,6 +1109,9 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
+        refreshDocuments();
+        // A record that linked to this task now shows the link as deleted.
+        refreshCollections();
         void onInboxIssueDeleted(qc, wsId, issue_id);
       }
     });
@@ -1753,7 +1812,11 @@ export function useRealtimeSync(
 
     return () => {
       unsubAny();
+      unsubDocumentAccessChanged();
       unsubIssueUpdated();
+      unsubRecordUpdated();
+      unsubCollectionAccessChanged();
+      unsubCollectionUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
       unsubIssueAttachmentsChanged();

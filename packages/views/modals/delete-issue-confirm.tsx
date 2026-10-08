@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -12,7 +13,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@multica/ui/components/ui/alert-dialog";
+import { issueRecordLinksOptions } from "@multica/core/collections";
 import { useDeleteIssue } from "@multica/core/issues/mutations";
+import { useCurrentWorkspace } from "@multica/core/paths";
 import { useBackOrReplace } from "../navigation";
 import { useT } from "../i18n";
 
@@ -30,6 +33,10 @@ export function DeleteIssueConfirmModal({
   const fallbackPath = (data?.onDeletedFallbackPath as string | undefined) || undefined;
   const [deleting, setDeleting] = useState(false);
   const deleteIssue = useDeleteIssue();
+  // Table records that link to this task keep their link, which then reads as
+  // deleted. Worth knowing before confirming, and only worth a line when true.
+  const wsId = useCurrentWorkspace()?.id ?? "";
+  const { data: recordLinks = [] } = useQuery(issueRecordLinksOptions(wsId, issueId));
   const backOrReplace = useBackOrReplace();
 
   const handleDelete = async () => {
@@ -59,6 +66,11 @@ export function DeleteIssueConfirmModal({
           <AlertDialogTitle>{t(($) => $.delete_issue.title)}</AlertDialogTitle>
           <AlertDialogDescription>
             {t(($) => $.delete_issue.description)}
+            {recordLinks.length > 0 && (
+              <span className="mt-1 block">
+                {t(($) => $.delete_issue.linked_records, { count: recordLinks.length })}
+              </span>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

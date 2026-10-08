@@ -9,7 +9,8 @@
     "projects": "Projets",
     "issues": "Tâches",
     "cancelled": "Annulés",
-    "recent": "Récents"
+    "recent": "Récents",
+    "documents": "Documents"
   },
   "commands": {
     "current_theme_aria": "Thème actuel",
@@ -33,5 +34,6 @@
   },
   "trigger": {
     "label": "Rechercher..."
-  }
+  },
+  "documents_only": "Documents uniquement"
 }

@@ -104,6 +104,8 @@ const LAYOUT_LABEL_KEY = {
   table: "table",
   swimlane: "swimlane",
   gantt: "gantt",
+  calendar: "calendar",
+  gallery: "gallery",
 } as const;
 
 const GROUPING_LABEL_KEY = {

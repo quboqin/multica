@@ -173,6 +173,7 @@ export function IssueActionsMenuItems({
 
   return (
     <>
+      {issue.kind !== "doc" && <>
       {/* Status */}
       <P.Sub>
         <P.SubTrigger>
@@ -211,6 +212,8 @@ export function IssueActionsMenuItems({
         </P.SubContent>
       </P.Sub>
 
+      </>}
+      {issue.kind !== "doc" && <>
       {/* Priority */}
       <P.Sub>
         <P.SubTrigger>
@@ -234,6 +237,7 @@ export function IssueActionsMenuItems({
         </P.SubContent>
       </P.Sub>
 
+      </>}
       {/* Assignee — closes this menu and hands off to the shared
           AssigneePicker (members + agents + squads, with search and
           permission checks). Keeps a single source of truth for the
@@ -328,6 +332,7 @@ export function IssueActionsMenuItems({
 
       <P.Separator />
 
+      {issue.kind !== "doc" && <>
       {/* Relationship actions live under "Relations" — a semantically explicit
           label (unlike the old "More") so the first level tells you what the
           submenu does. Holds parent/sub-issue links today, and will grow
@@ -363,6 +368,7 @@ export function IssueActionsMenuItems({
         </P.SubContent>
       </P.Sub>
 
+      </>}
       {/* Manual plugin hooks. Rendered by the host rather than by the plugin
           because the trigger decides identity: a `manual` call acts as the
           person who picked it, so the entry has to live where the host can

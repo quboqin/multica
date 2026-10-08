@@ -11,13 +11,15 @@
 WITH ws AS (SELECT @workspace_id::uuid AS id)
 SELECT
     pg_current_snapshot()::text AS snapshot,
-    (SELECT count(*) FROM issue i, ws WHERE i.workspace_id = ws.id)::bigint AS issue_count,
+    (SELECT count(*) FROM issue i, ws WHERE i.workspace_id = ws.id AND i.kind = 'task')::bigint AS issue_count,
     (SELECT COALESCE(sum(octet_length(i.title) + COALESCE(octet_length(i.description), 0)), 0)
-        FROM issue i, ws WHERE i.workspace_id = ws.id)::bigint AS issue_bytes,
+        FROM issue i, ws WHERE i.workspace_id = ws.id AND i.kind = 'task')::bigint AS issue_bytes,
     (SELECT count(*) FROM comment c, ws
-        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL)::bigint AS comment_count,
+        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task'))::bigint AS comment_count,
     (SELECT COALESCE(sum(octet_length(c.content)), 0) FROM comment c, ws
-        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL)::bigint AS comment_bytes,
+        WHERE c.workspace_id = ws.id AND c.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task'))::bigint AS comment_bytes,
     (SELECT count(*) FROM project p, ws WHERE p.workspace_id = ws.id)::bigint AS project_count,
     (SELECT COALESCE(sum(octet_length(p.title) + COALESCE(octet_length(p.description), 0)), 0)
         FROM project p, ws WHERE p.workspace_id = ws.id)::bigint AS project_bytes;
@@ -28,26 +30,28 @@ SELECT pg_current_snapshot()::text AS snapshot;
 -- name: ListSearchIndexIssuesPage :many
 -- Pages by the unique (workspace_id, number) index.
 SELECT * FROM issue
-WHERE workspace_id = @workspace_id AND number > @after_number
+WHERE kind = 'task' AND workspace_id = @workspace_id AND number > @after_number
 ORDER BY number
 LIMIT @page_limit;
 
 -- name: ListSearchIndexIssuesByIDs :many
 SELECT * FROM issue
-WHERE workspace_id = @workspace_id AND id = ANY(@ids::uuid[]);
+WHERE kind = 'task' AND workspace_id = @workspace_id AND id = ANY(@ids::uuid[]);
 
 -- name: ListSearchIndexCommentsByIssues :many
-SELECT id, issue_id, content, created_at
-FROM comment
-WHERE workspace_id = @workspace_id
-  AND issue_id = ANY(@issue_ids::uuid[])
-  AND deleted_at IS NULL;
+SELECT c.id, c.issue_id, c.content, c.created_at
+FROM comment c
+WHERE c.workspace_id = @workspace_id
+  AND c.issue_id = ANY(@issue_ids::uuid[])
+  AND c.deleted_at IS NULL
+  AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task');
 
 -- name: ListSearchIndexCommentsByIDs :many
 -- Tombstoned comments are returned so the caller can report them as deleted.
-SELECT id, issue_id, content, created_at, deleted_at
-FROM comment
-WHERE workspace_id = @workspace_id AND id = ANY(@ids::uuid[]);
+SELECT c.id, c.issue_id, c.content, c.created_at, c.deleted_at
+FROM comment c
+WHERE c.workspace_id = @workspace_id AND c.id = ANY(@ids::uuid[])
+  AND EXISTS (SELECT 1 FROM issue i WHERE i.id = c.issue_id AND i.kind = 'task');
 
 -- name: ListSearchIndexProjects :many
 SELECT * FROM project

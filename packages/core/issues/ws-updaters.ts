@@ -381,6 +381,7 @@ export function onIssueCreated(
   wsId: string,
   issue: Issue,
 ) {
+  if (issue.kind && issue.kind !== "task") return;
   // A custom status this client cannot resolve to a category has no bucket to
   // go in. Inserting nowhere would silently hide an issue that exists on the
   // server, so invalidate the list instead and let the refetch place it.

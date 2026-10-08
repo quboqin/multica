@@ -90,6 +90,12 @@ func TestSearchIndexBootstrapThenCatchUp(t *testing.T) {
 	editedComment := dbfx.Comment(t, first, "comment to edit", testutil.Cols{"workspace_id": wsID})
 	dbfx.Comment(t, first, "", testutil.Cols{"workspace_id": wsID, "deleted_at": time.Now()})
 	project := dbfx.Project(t, "Indexed project", testutil.Cols{"workspace_id": wsID, "description": "project body"})
+	// Documents have their own audience; workspace membership must never
+	// copy their bodies or discussion into the workspace-wide local index.
+	document := dbfx.Issue(t, "Private document", testutil.Cols{
+		"workspace_id": wsID, "kind": "doc", "description": "private body",
+	})
+	privateComment := dbfx.Comment(t, document, "private discussion", testutil.Cols{"workspace_id": wsID})
 
 	manifest := searchIndexManifest(t, wsID)
 	if manifest.IssueCount != 2 || manifest.CommentCount != 2 || manifest.ProjectCount != 1 {
@@ -140,13 +146,16 @@ func TestSearchIndexBootstrapThenCatchUp(t *testing.T) {
 	dbfx.Exec(t, `DELETE FROM issue WHERE id = $1`, second)
 	third := dbfx.Issue(t, "Third indexed issue", testutil.Cols{"workspace_id": wsID})
 	dbfx.Exec(t, `UPDATE project SET title = 'Indexed project renamed' WHERE id = $1`, project)
+	dbfx.Exec(t, `UPDATE issue SET title = 'Private document renamed' WHERE id = $1`, document)
+	dbfx.Exec(t, `UPDATE comment SET content = 'private discussion edited' WHERE id = $1`, privateComment)
 
 	changes := searchIndexChanges(t, wsID, quiet.Cursor, 100)
 	assertIDs(t, "upserted issues", issueIDs(changes.Issues), []string{first, third})
 	assertIDs(t, "upserted comments", commentIDs(changes.Comments), []string{editedComment})
-	assertIDs(t, "deleted issues", sortedIDs(changes.Deleted.Issues...), []string{second})
-	// The tombstone and the comment cascaded away with its issue both count as deleted.
-	assertIDs(t, "deleted comments", sortedIDs(changes.Deleted.Comments...), []string{liveComment, laterComment})
+	// Out-of-scope documents and their comments produce tombstones rather than
+	// content, removing any stale entries from an existing client index.
+	assertIDs(t, "deleted issues", sortedIDs(changes.Deleted.Issues...), []string{second, document})
+	assertIDs(t, "deleted comments", sortedIDs(changes.Deleted.Comments...), []string{liveComment, laterComment, privateComment})
 	if len(changes.Projects) != 1 || changes.Projects[0].Title != "Indexed project renamed" {
 		t.Fatalf("upserted projects = %+v, want the renamed project", changes.Projects)
 	}

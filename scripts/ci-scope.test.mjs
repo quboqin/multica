@@ -45,7 +45,7 @@ for (const [name, files, selected] of [
   ["mixed docs and migration", ["apps/docs/content/guide.mdx", "server/migrations/999_example.up.sql"], ["quality", "backend", "sqlc"]],
   ["CI configuration", [".github/ci-paths.json"], Object.keys(filters)],
 ]) {
-  test(`PR and main select only affected scopes: ${name}`, () => {
+  test(`PR and qqb_main select only affected scopes: ${name}`, () => {
     for (const event of ["pull_request", "push"]) {
       const outputs = decideScopes(event, filterFiles(files));
       assert.equal(outputs.full, "false");
@@ -58,7 +58,7 @@ for (const [name, files, selected] of [
 
 test("scheduled and manual runs select every scope without a path-filter result", () => {
   for (const event of ["schedule", "workflow_dispatch"]) {
-    const { quality_only, ...scopes } = decideScopes(event, {});
+    const { quality_only, image_check, ...scopes } = decideScopes(event, {});
     assert.ok(Object.values(scopes).every((value) => value === "true"));
     assert.equal(quality_only, "false", "the full frontend build owns quality checks");
   }
@@ -97,7 +97,7 @@ function productionNeeds(gate, outputs) {
   }));
 }
 
-for (const gate of ["frontend", "backend"]) {
+for (const gate of ["frontend", "backend", "ci-gate"]) {
   test(`production ${gate} gate matches every dependency, condition and scope output`, () => {
     const mapping = productionMapping(gate);
     assert.match(jobs[gate], /^    if: \$\{\{ !cancelled\(\) \}\}$/m);
@@ -124,7 +124,9 @@ for (const gate of ["frontend", "backend"]) {
     for (const job of Object.keys(mapping)) {
       // A docs-only run selects the standalone quality runner; a full run
       // selects every other dependency, including the installer matrix.
-      const outputs = job === "frontend-quality"
+      const outputs = job === "image-budget"
+        ? decideScopes("pull_request", filterFiles(["hero.png"]))
+        : job === "frontend-quality"
         ? decideScopes("pull_request", filterFiles(["apps/docs/content/guide.mdx"]))
         : decideScopes("workflow_dispatch", {});
       for (const result of ["failure", "cancelled", "skipped", undefined]) {

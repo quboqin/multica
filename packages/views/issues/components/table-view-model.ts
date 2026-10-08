@@ -1,12 +1,9 @@
-import { propertyIdFromViewKey } from "@multica/core/issues/stores/view-store";
+import { issueTableFieldValue } from "@multica/core/issues/table-fields";
 import type {
   TableCalculation,
   TableColumnKey,
 } from "@multica/core/issues/stores/view-store";
-import type {
-  Issue,
-  IssuePropertyValue,
-} from "@multica/core/types";
+import type { Issue } from "@multica/core/types";
 
 /** Export must fail closed when paged Table responses cannot prove that the
  * complete query window was collected. The UI translates this marker instead
@@ -88,42 +85,6 @@ export function refreshFrozenTableRows(
     return live && live !== row.issue ? { ...row, issue: live } : row;
   });
 }
-function columnValue(
-  issue: Issue,
-  columnKey: TableColumnKey,
-): IssuePropertyValue | string | number | null | undefined {
-  const propertyId = propertyIdFromViewKey(columnKey);
-  if (propertyId) return issue.properties[propertyId];
-  switch (columnKey) {
-    case "identifier":
-      return issue.identifier;
-    case "title":
-      return issue.title;
-    case "status":
-      return issue.status;
-    case "priority":
-      return issue.priority;
-    case "assignee":
-      return issue.assignee_id;
-    case "labels":
-      return issue.labels?.map((label) => label.name).join(", ");
-    case "project":
-      return issue.project_id;
-    case "start_date":
-      return issue.start_date;
-    case "due_date":
-      return issue.due_date;
-    case "created_at":
-      return issue.created_at;
-    case "updated_at":
-      return issue.updated_at;
-    case "child_progress":
-      return undefined;
-    case "creator":
-      return issue.creator_id;
-  }
-  return undefined;
-}
 
 export function calculateIssueTableColumn(
   issues: Issue[],
@@ -132,7 +93,7 @@ export function calculateIssueTableColumn(
 ) {
   if (calculation === "none") return null;
   const values = issues
-    .map((issue) => columnValue(issue, columnKey))
+    .map((issue) => issueTableFieldValue(issue, columnKey))
     .filter((value) => value !== undefined && value !== null && value !== "");
   if (calculation === "count") return values.length;
   const numbers = values.filter((value): value is number => typeof value === "number");

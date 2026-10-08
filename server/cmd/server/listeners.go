@@ -96,6 +96,18 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		if recipientID == "" {
 			return
 		}
+		if e.RecipientUserIDs != nil {
+			allowed := false
+			for _, id := range e.RecipientUserIDs {
+				if id == recipientID {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return
+			}
+		}
 		data, err := json.Marshal(map[string]any{"type": e.Type, "payload": projectOutbound(e.Type, e.Payload), "actor_id": e.ActorID, "actor_type": e.ActorType})
 		if err != nil {
 			return
@@ -274,7 +286,11 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 		// populated by producers so that flipping the switch later is a
 		// one-line change here. See review on PR #1429 for context.
 
-		if e.WorkspaceID != "" {
+		if e.RecipientUserIDs != nil {
+			for _, userID := range e.RecipientUserIDs {
+				b.SendToUser(userID, data)
+			}
+		} else if e.WorkspaceID != "" {
 			realtime.M.RecordEvent(e.Type)
 			b.BroadcastToWorkspace(e.WorkspaceID, data)
 		} else if strings.HasPrefix(e.Type, "daemon:") {

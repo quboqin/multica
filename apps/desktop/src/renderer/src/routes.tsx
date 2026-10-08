@@ -13,6 +13,9 @@ import {
   RuntimeSettingsPage,
 } from "./pages/runtime-detail-page";
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
+import { CollectionsPage } from "@multica/views/collections";
+import { CollectionDetailPage } from "./pages/collection-detail-page";
+import { DocumentsPage } from "./pages/documents-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
 import { DashboardPage } from "@multica/views/dashboard";
@@ -127,6 +130,16 @@ export const appRoutes: RouteObject[] = [
           // safety net instead of an in-router <Navigate> (MUL-4741
           // invariant 1: the router never self-navigates).
           { index: true, element: null },
+          {
+            path: "collections", element: <CollectionsPage />,
+          },
+          {
+            path: "collections/:id", element: <CollectionDetailPage />,
+          },
+          {
+            path: "documents/:id?",
+            element: <DocumentsPage />,
+          },
           {
             path: "issues",
             element: <IssuesPage />,

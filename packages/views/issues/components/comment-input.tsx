@@ -6,13 +6,14 @@ import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay,
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { Button } from "@multica/ui/components/ui/button";
-import { contentReferencesAttachment, type AgentTask } from "@multica/core/types";
+import { contentReferencesAttachment, type AgentTask, type CommentAgentGrant } from "@multica/core/types";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore } from "@multica/core/issues/stores";
 import { composeAnnotatedReply, hasReplyIntent } from "@multica/core/drafts/reply-annotation";
 import { ReplyAnnotations } from "./reply-annotations";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
+import { useAgentAccessGrantPrompt } from "./agent-access-grant-dialog";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useRecipientActions } from "../hooks/use-recipient-actions";
 import { SteerAttachmentNotice } from "./steer-attachment-notice";
@@ -26,7 +27,7 @@ interface CommentInputProps {
   /** Resolves true on success, false on failure. The composer keeps the text
    *  (editor locked + button spinning) until this settles, then clears only on
    *  success — a failed send must not silently discard the user's draft. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[]) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[], agentGrants?: CommentAgentGrant[]) => Promise<string | boolean>;
   /** Called after the server accepts the comment and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   onEditAnnotation?: (id: string) => boolean;
@@ -62,6 +63,9 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
   const composedContent = useMemo(() => composeAnnotatedReply(content, annotations), [content, annotations]);
   const canSend = annotations.length ? hasReplyIntent(content, annotations) : !isEmpty;
   const triggerPreview = useCommentTriggerPreview({ issueId, content: canSend ? composedContent : "" });
+  // On a document, a mentioned agent's run may not be able to reach the page
+  // it was invited onto; the poster settles that before the comment goes out.
+  const grantPrompt = useAgentAccessGrantPrompt();
   // Uploads for this composer session (MUL-5181). Owned by the module-level
   // coordinator and persisted in the draft store, so closing/scrolling the
   // composer away no longer drops an in-flight upload — its result lands in the
@@ -173,6 +177,9 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
       // A preview still catching up with an edited @mention can name a
       // recipient this comment no longer addresses: never stop a run on it.
       const restartTaskIds = triggerPreview.isCurrent ? routing.restartTaskIds : [];
+      const triggering = triggerPreview.agents.filter((agent) => !suppressAgentIds.includes(agent.id));
+      const agentGrants = await grantPrompt.ask(triggering);
+      if (agentGrants === null) return false;
       if (!(await stopRunsBeforeSend(restartTaskIds))) return false;
       // Flush the editor's pending debounce before snapshotting — a late flush
       // of pre-submit typing must not read as an edit made during the request.
@@ -191,6 +198,7 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
         steerTaskIds.length > 0 ? steerTaskIds : undefined,
+        agentGrants.length > 0 ? agentGrants : undefined,
       ).then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
@@ -342,6 +350,7 @@ function CommentInput({ issueId, onSubmit, onAccepted, onEditAnnotation }: Comme
         />}
       </div>
       {isDragOver && <FileDropOverlay />}
+      {grantPrompt.dialog}
     </div>
   );
 }

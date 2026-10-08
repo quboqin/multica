@@ -1988,6 +1988,45 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 
+			r.Route("/api/collections", func(r chi.Router) {
+				r.Get("/", h.ListCollections)
+				r.Post("/", h.CreateCollection)
+				r.Post("/import", h.ImportCollection)
+				r.Route("/{collectionID}", func(r chi.Router) {
+					r.Get("/", h.GetCollection)
+					r.Get("/access", h.GetCollectionAccess)
+					r.Put("/access", h.UpdateCollectionAccess)
+					r.Patch("/", h.UpdateCollection)
+					r.Post("/restore", h.RestoreCollection)
+					r.Get("/fields/archived", h.ListArchivedCollectionFields)
+					r.Post("/fields/{fieldID}/restore", h.RestoreCollectionField)
+					r.Post("/records/batch", h.BatchCollectionRecords)
+					r.Post("/records/import", h.ImportCollectionCSV)
+					r.Post("/fields", h.CreateCollectionField)
+					r.Patch("/fields/{fieldID}", h.UpdateCollectionField)
+					r.Get("/records", h.ListCollectionRecords)
+					r.Post("/records", h.CreateCollectionRecord)
+					r.Get("/trash", h.ListCollectionTrash)
+					r.Put("/records/{recordID}", h.UpdateCollectionRecord)
+					r.Delete("/records/{recordID}", h.DeleteCollectionRecord)
+					r.Post("/records/{recordID}/restore", h.RestoreCollectionRecord)
+					r.Put("/records/{recordID}/fields/{fieldID}", h.SetCollectionRecordField)
+					// Relation fields: edges are written one at a time, and a
+					// record can list what points at it.
+					r.Post("/records/{recordID}/links", h.CreateCollectionRecordLink)
+					r.Delete("/records/{recordID}/links/{linkID}", h.DeleteCollectionRecordLink)
+					r.Get("/records/{recordID}/backlinks", h.ListCollectionRecordBacklinks)
+				})
+			})
+			// Documents have owner-controlled sharing and immutable version history.
+			r.Get("/api/documents", h.ListDocuments)
+			r.Get("/api/documents/{id}/access", h.GetDocumentAccess)
+			r.Put("/api/documents/{id}/access", h.UpdateDocumentAccess)
+			r.Get("/api/documents/{id}/versions", h.ListDocumentVersions)
+			r.Get("/api/documents/{id}/versions/{version}", h.GetDocumentVersion)
+			r.Post("/api/documents/{id}/versions/{version}/restore", h.RestoreDocumentVersion)
+			r.Post("/api/documents/{id}/move", h.MoveDocument)
+			r.Post("/api/documents/{id}/transition", h.TransitionDocument)
 			// Local search index sync for Web/Desktop (MUL-7754). Human clients
 			// only: agents search through /api/issues/search.
 			r.Route("/api/search-index", func(r chi.Router) {
@@ -1997,7 +2036,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/snapshot", h.GetSearchIndexSnapshot)
 				r.Post("/changes", h.ListSearchIndexChanges)
 			})
-
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)
@@ -2065,6 +2103,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/properties/{propertyId}", h.SetIssueProperty)
 					r.Delete("/properties/{propertyId}", h.DeleteIssueProperty)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
+					r.Get("/record-links", h.ListIssueRecordLinks)
 					r.Post("/pull-requests", h.LinkIssuePullRequest)
 					r.Delete("/pull-requests/{prId}", h.UnlinkIssuePullRequest)
 					r.Put("/pr-auto-complete", h.SetIssuePRAutoComplete)

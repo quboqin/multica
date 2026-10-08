@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up down status list destroy gc env-exec api-dev web-dev desktop-dev
+.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree remove-worktree db-up db-down db-drop db-reset selfhost selfhost-build selfhost-stop up preview down status list destroy gc env-exec api-dev web-dev desktop-dev
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -79,7 +79,7 @@ makehelp: help ## Alias for `make help`
 # ---------- Self-hosting (Docker Compose) ----------
 ##@ Self-hosting
 
-selfhost: ## Create .env if needed, then pull and start the official self-hosted images
+selfhost: ## Create .env if needed, then pull and start the published fork images
 	$(REQUIRE_COMPOSE)
 	@if [ ! -f .env ]; then \
 		echo "==> Creating .env from .env.example..."; \
@@ -100,10 +100,10 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		fi; \
 		echo "==> Generated random JWT_SECRET, POSTGRES_PASSWORD, and MULTICA_VCS_SECRET_KEY"; \
 	fi
-	@echo "==> Pulling official Multica images..."
+	@echo "==> Pulling published fork images..."
 	@if ! $(COMPOSE) -f docker-compose.selfhost.yml pull; then \
 		echo ""; \
-		echo "Official images for tag '$${MULTICA_IMAGE_TAG:-latest}' are not published yet."; \
+		echo "Fork images for tag '$${MULTICA_IMAGE_TAG:-latest}' are not published yet."; \
 		echo "If this is before the first GHCR release, build from the current checkout:"; \
 		echo "  make selfhost-build"; \
 		exit 1; \
@@ -154,11 +154,14 @@ selfhost-stop: ## Stop the self-hosted Docker Compose stack
 #   make up C=desktop           Electron against this environment's backend
 #   make up ARGS=--ephemeral    agent-owned, expires, collected by `make gc`
 
-up: ## Start this checkout's environment (C=api,web,daemon,desktop; default api,web)
+up: ## Start this checkout's environment (C=api,web,preview,daemon,desktop; default api,web)
 	@bash scripts/dev-env.sh up $(if $(C),--components $(C)) $(ARGS)
 
+preview: ## Start a local production web preview with API and daemon (ARGS=--rebuild to update it)
+	@bash scripts/dev-env.sh up --components api,preview,daemon $(ARGS)
+
 down: ## Stop this environment's processes, keeping its database and profile
-	@bash scripts/dev-env.sh down $(ARGS)
+	@bash scripts/dev-env.sh down $(if $(C),--components $(C)) $(ARGS)
 
 status: ## Show what is running for this environment, with proof of identity
 	@bash scripts/dev-env.sh status $(ARGS)

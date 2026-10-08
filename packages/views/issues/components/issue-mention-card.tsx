@@ -1,5 +1,8 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { issueDetailOptions, issueListOptions } from "@multica/core/issues/queries";
 import { AppLink } from "../../navigation";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { IssueChip } from "./issue-chip";
@@ -27,8 +30,8 @@ function CurrentIssueChipContent({ identifier }: { identifier: string }) {
 
 /**
  * Navigable chip — wraps IssueChip in an AppLink pointing at the issue's
- * detail page. Hover/cursor affordance is layered onto the chip itself so
- * the visual target matches the clickable target.
+ * detail page, using Documents for document targets. Hover/cursor affordance
+ * is layered onto the chip itself so the visual target matches the clickable target.
  *
  * AppLink owns the click semantics: plain click navigates in place, modifier
  * and middle clicks open tabs. There is deliberately no per-surface or
@@ -41,6 +44,15 @@ function CurrentIssueChipContent({ identifier }: { identifier: string }) {
  */
 export function IssueMentionCard({ issueId, fallbackLabel }: IssueMentionCardProps) {
   const p = useWorkspacePaths();
+  const wsId = useWorkspaceId();
+  // Share the chip's list/detail queries so links and labels resolve together.
+  const { data: issues = [] } = useQuery(issueListOptions(wsId));
+  const listIssue = issues.find((issue) => issue.id === issueId);
+  const { data: detailIssue } = useQuery({
+    ...issueDetailOptions(wsId, issueId),
+    enabled: !listIssue,
+  });
+  const issue = listIssue ?? detailIssue;
   const currentIssue = useCurrentIssueRenderContext();
   const currentIdentifier =
     currentIssue && issueId === currentIssue.id
@@ -49,7 +61,7 @@ export function IssueMentionCard({ issueId, fallbackLabel }: IssueMentionCardPro
   return (
     <IssueHoverCard issueId={issueId} fallbackLabel={fallbackLabel}>
       <AppLink
-        href={p.issueDetail(issueId)}
+        href={issue?.kind === "doc" ? p.documentDetail(issue.id) : p.issueDetail(issueId)}
         newTabTitle={fallbackLabel}
         className="issue-mention align-middle"
       >

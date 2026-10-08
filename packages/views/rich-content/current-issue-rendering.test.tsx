@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { WorkspaceSlugProvider } from "@multica/core/paths";
+import { workspaceKeys } from "@multica/core/workspace/queries";
+import { issueKeys } from "@multica/core/issues/queries";
 import type { ReactNode } from "react";
 import type { Issue } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
@@ -54,15 +58,6 @@ vi.mock("@multica/core/api", () => ({
   api: { getAttachmentTextContent: vi.fn() },
   PreviewTooLargeError: class extends Error {},
   PreviewUnsupportedError: class extends Error {},
-}));
-
-vi.mock("@multica/core/paths", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@multica/core/paths")>()),
-  useWorkspacePaths: () => ({
-    issueDetail: (id: string) => `/acme/issues/${id}`,
-    projectDetail: (id: string) => `/acme/projects/${id}`,
-  }),
-  useWorkspaceSlug: () => "acme",
 }));
 
 vi.mock("mermaid", () => ({
@@ -127,15 +122,31 @@ function renderContent(
   context?: CurrentIssueRenderContextValue,
   content = CONTENT,
 ) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: Infinity } },
+  });
+  queryClient.setQueryData(workspaceKeys.list(), [{ id: "ws-1", slug: "acme" }]);
+  queryClient.setQueryData(issueKeys.listSorted("ws-1"), {
+    byStatus: {
+      unstarted: {
+        issues: [resolvedIssues.current, resolvedIssues.other],
+        total: 2,
+      },
+    },
+  });
   return renderWithI18n(
     <NavigationProvider value={adapter()}>
-      {context ? (
-        <CurrentIssueRenderContextProvider value={context}>
-          <RichContent content={content} />
-        </CurrentIssueRenderContextProvider>
-      ) : (
-        <RichContent content={content} />
-      )}
+      <QueryClientProvider client={queryClient}>
+        <WorkspaceSlugProvider slug="acme">
+          {context ? (
+            <CurrentIssueRenderContextProvider value={context}>
+              <RichContent content={content} />
+            </CurrentIssueRenderContextProvider>
+          ) : (
+            <RichContent content={content} />
+          )}
+        </WorkspaceSlugProvider>
+      </QueryClientProvider>
     </NavigationProvider>,
   );
 }

@@ -8,9 +8,9 @@
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
-       i.revision, i.duplicate_of_issue_id
+       i.revision, i.kind, i.document_revision, i.duplicate_of_issue_id
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -142,6 +142,11 @@ FOR UPDATE;
 -- preserving user-authored bytes takes precedence over layout fidelity.
 -- This is asynchronous system materialization, not a new user action, so it
 -- intentionally preserves last_activity_at while still advancing revision.
+WITH locked AS MATERIALIZED (
+    SELECT id FROM issue WHERE id = sqlc.arg(id) AND workspace_id = sqlc.arg(workspace_id) FOR UPDATE
+), authorized AS MATERIALIZED (
+    SELECT set_config('multica.document_media', id::text, true) FROM locked
+)
 UPDATE issue
 SET description = CASE
         WHEN sqlc.narg('base_description')::text IS NOT NULL
@@ -152,9 +157,10 @@ SET description = CASE
     END,
     revision = revision + 1,
     updated_at = now()
-WHERE id = sqlc.arg(id)
-  AND workspace_id = sqlc.arg(workspace_id)
-RETURNING *;
+WHERE issue.id = sqlc.arg(id)
+  AND issue.workspace_id = sqlc.arg(workspace_id)
+  AND EXISTS (SELECT 1 FROM authorized)
+RETURNING issue.*;
 
 -- name: LockIssueForDelete :one
 -- Issue deletion must collect every attachment URL after it has won the same
@@ -182,10 +188,10 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    stage, properties, last_activity_at, id
+    stage, properties, last_activity_at, id, kind
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), COALESCE(sqlc.narg('kind')::text, 'task')
 ) RETURNING *;
 
 -- name: GetIssueByNumber :one
@@ -410,10 +416,10 @@ INSERT INTO issue (
     workspace_id, title, description, status, priority,
     assignee_type, assignee_id, creator_type, creator_id,
     parent_issue_id, position, start_date, due_date, number, project_id,
-    origin_type, origin_id, stage, properties, last_activity_at, id
+    origin_type, origin_id, stage, properties, last_activity_at, id, kind
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-    sqlc.narg('origin_type'), sqlc.narg('origin_id'), sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid())
+    sqlc.narg('origin_type'), sqlc.narg('origin_id'), sqlc.narg('stage'), COALESCE(sqlc.narg('properties')::jsonb, '{}'::jsonb), now(), COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), COALESCE(sqlc.narg('kind')::text, 'task')
 ) RETURNING *;
 
 -- name: LockIssueDuplicateKey :exec
@@ -421,7 +427,7 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
 
 -- name: FindActiveDuplicateIssue :one
 SELECT * FROM issue
-WHERE workspace_id = $1
+WHERE issue.kind = 'task' AND workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains active.
   AND NOT (status = ANY(sqlc.arg('terminal_status_keys')::text[]))
   -- An entry waiting in Triage has not been taken on, so it never blocks
@@ -436,7 +442,7 @@ LIMIT 1;
 
 -- name: FindRecentAutopilotDuplicateIssue :one
 SELECT i.* FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains active.
   AND NOT (i.status = ANY(sqlc.arg('terminal_status_keys')::text[]))
   -- An entry waiting in Triage has not been taken on, so it never blocks
@@ -510,9 +516,9 @@ DELETE FROM issue WHERE issue.id IN (SELECT target.id FROM target);
 SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
-       i.revision, i.duplicate_of_issue_id
+       i.revision, i.kind, i.document_revision, i.duplicate_of_issue_id
 FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   -- Negate only known terminal keys so an unknown legacy key remains visible.
   AND NOT (i.status = ANY(sqlc.arg('terminal_status_keys')::text[]))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
@@ -615,7 +621,7 @@ ORDER BY i.position ASC, i.created_at DESC;
 -- name: CountIssues :one
 -- See ListIssues for the semantics of involves_user_id.
 SELECT count(*) FROM issue i
-WHERE i.workspace_id = $1
+WHERE i.kind = 'task' AND i.workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -700,7 +706,7 @@ SELECT
   assignee_id,
   COUNT(*)::bigint as frequency
 FROM issue
-WHERE workspace_id = $1
+WHERE issue.kind = 'task' AND workspace_id = $1
   AND creator_id = $2
   AND creator_type = 'member'
   AND assignee_type IS NOT NULL
@@ -710,7 +716,7 @@ GROUP BY assignee_type, assignee_id;
 -- name: ChildIssueProgress :many
 SELECT parent_issue_id,
        COUNT(*)::bigint AS total,
-       COUNT(*) FILTER (WHERE status = ANY(sqlc.arg('terminal_status_keys')::text[]))::bigint AS done
+       COUNT(*) FILTER (WHERE issue.kind = 'task' AND status = ANY(sqlc.arg('terminal_status_keys')::text[]))::bigint AS done
 FROM issue
 WHERE workspace_id = $1
   AND parent_issue_id IS NOT NULL

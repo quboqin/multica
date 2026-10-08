@@ -11,6 +11,7 @@ import { useMyIssuesRealtime } from "@/data/realtime/use-my-issues-realtime";
 import { useChatSessionsRealtime } from "@/data/realtime/use-chat-sessions-realtime";
 import { useProjectsRealtime } from "@/data/realtime/use-projects-realtime";
 import { usePinsRealtime } from "@/data/realtime/use-pins-realtime";
+import { useResourcesRealtime } from "@/data/realtime/use-resources-realtime";
 import { usePresenceRealtime } from "@/data/realtime/use-presence-realtime";
 import { useWorkspacePresencePrefetch } from "@/lib/use-workspace-presence-prefetch";
 import { ModalCloseButton } from "@/components/ui/modal-close-button";
@@ -80,6 +81,7 @@ function RealtimeSubscriptions() {
   useChatSessionsRealtime();
   useProjectsRealtime();
   usePinsRealtime();
+  useResourcesRealtime();
   // Presence: warm the three queries up front so avatars don't flash a
   // dotless first render, and listen for daemon/agent/task events to keep
   // the runtime + snapshot caches fresh. See use-presence-realtime.ts for
@@ -134,6 +136,11 @@ export default function WorkspaceLayout() {
       <RealtimeSubscriptions />
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="more/documents" options={{ title: t("routes.documents") }} />
+        <Stack.Screen name="more/collections" options={{ title: t("routes.collections") }} />
+        <Stack.Screen name="document/[id]" options={{ title: t("routes.document") }} />
+        <Stack.Screen name="document/[id]/edit" options={{ title: t("routes.edit_document"), presentation: "modal", headerLeft: () => <ModalCloseButton /> }} />
+        <Stack.Screen name="collection/[id]" options={{ title: t("routes.collection") }} />
         <Stack.Screen
           name="issue/[id]"
           options={{

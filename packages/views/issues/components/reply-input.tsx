@@ -8,13 +8,14 @@ import { FileUploadButton } from "@multica/ui/components/common/file-upload-butt
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
 import { Button } from "@multica/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { contentReferencesAttachment, type AgentTask } from "@multica/core/types";
+import { contentReferencesAttachment, type AgentTask, type CommentAgentGrant } from "@multica/core/types";
 import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore, type CommentDraftKey } from "@multica/core/issues/stores";
 import { cn } from "@multica/ui/lib/utils";
 import type { AvatarSize } from "@multica/ui/lib/avatar-size";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
+import { useAgentAccessGrantPrompt } from "./agent-access-grant-dialog";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useRecipientActions } from "../hooks/use-recipient-actions";
 import { SteerAttachmentNotice } from "./steer-attachment-notice";
@@ -34,7 +35,7 @@ interface ReplyInputProps {
   avatarId: string;
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[]) => Promise<string | boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[], steerTaskIds?: string[], agentGrants?: CommentAgentGrant[]) => Promise<string | boolean>;
   /** Called after the server accepts the reply and the composer is cleared. */
   onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
@@ -93,6 +94,8 @@ function ReplyInput({
   const composedContent = useMemo(() => composeAnnotatedReply(content, annotations), [content, annotations]);
   const canSend = !targetMissing && (annotations.length ? hasReplyIntent(content, annotations) : !isEmpty);
   const triggerPreview = useCommentTriggerPreview({ issueId, parentId, content: canSend ? composedContent : "" });
+  // See CommentInput: settle document access for the runs this reply triggers.
+  const grantPrompt = useAgentAccessGrantPrompt();
   // Uploads for this reply session (MUL-5181) — owned by the coordinator. With
   // a draftKey they persist in the draft store so scroll-out/close no longer
   // drops an in-flight upload; without one (no persistence context) they fall
@@ -182,6 +185,9 @@ function ReplyInput({
       // A preview still catching up with an edited @mention can name a
       // recipient this comment no longer addresses: never stop a run on it.
       const restartTaskIds = triggerPreview.isCurrent ? routing.restartTaskIds : [];
+      const triggering = triggerPreview.agents.filter((agent) => !suppressAgentIds.includes(agent.id));
+      const agentGrants = await grantPrompt.ask(triggering);
+      if (agentGrants === null) return false;
       if (!(await stopRunsBeforeSend(restartTaskIds))) return false;
       if (draftKey) {
         // Flush pending debounce before snapshotting — see CommentInput.
@@ -200,6 +206,7 @@ function ReplyInput({
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
         steerTaskIds.length > 0 ? steerTaskIds : undefined,
+        agentGrants.length > 0 ? agentGrants : undefined,
       ).then((commentId) => {
         acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
         return !!commentId;
@@ -351,6 +358,7 @@ function ReplyInput({
           />}
         </div>
         {isDragOver && <FileDropOverlay />}
+        {grantPrompt.dialog}
       </div>
     </div>
   );

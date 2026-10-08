@@ -39,6 +39,7 @@ WITH newest_groups AS (
       AND i.recipient_type = 'member'
       AND i.recipient_id = $2
       AND i.archived = false
+      AND NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id))
     ORDER BY COALESCE(i.issue_id, i.id), i.created_at DESC, i.id DESC
 ), read_groups AS (
     SELECT group_id
@@ -188,8 +189,8 @@ func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxIt
 }
 
 const countUnreadInbox = `-- name: CountUnreadInbox :one
-SELECT count(*) FROM inbox_item
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND read = false AND archived = false
+SELECT count(*) FROM inbox_item i
+WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.read = false AND i.archived = false AND NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id))
 `
 
 type CountUnreadInboxParams struct {
@@ -215,6 +216,7 @@ FROM (
     WHERE i.recipient_type = 'member'
       AND i.recipient_id = $1
       AND i.archived = false
+      AND NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id))
     ORDER BY i.workspace_id, COALESCE(i.issue_id, i.id), i.created_at DESC
 ) newest
 WHERE newest.read = false
@@ -261,7 +263,8 @@ INSERT INTO inbox_item (
     workspace_id, recipient_type, recipient_id,
     type, severity, issue_id, title, body,
     actor_type, actor_id, details, id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::uuid, gen_random_uuid()))
+) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12::uuid, gen_random_uuid())
+WHERE NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=$6 AND d.kind='doc' AND NOT document_can_read(d.id,$3::uuid))
 RETURNING id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details
 `
 
@@ -317,8 +320,8 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
-WHERE id = $1
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details FROM inbox_item i
+WHERE NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id)) AND i.id = $1
 `
 
 func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -345,8 +348,8 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 }
 
 const getInboxItemInWorkspace = `-- name: GetInboxItemInWorkspace :one
-SELECT id, workspace_id, recipient_type, recipient_id, type, severity, issue_id, title, body, read, archived, created_at, actor_type, actor_id, details FROM inbox_item
-WHERE id = $1 AND workspace_id = $2
+SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details FROM inbox_item i
+WHERE NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id)) AND i.id = $1 AND i.workspace_id = $2
 `
 
 type GetInboxItemInWorkspaceParams struct {
@@ -388,6 +391,7 @@ WITH eligible_archived AS MATERIALIZED (
       AND i.recipient_type = $2
       AND i.recipient_id = $3
       AND i.archived = true
+      AND NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id))
       AND (i.issue_id IS NULL OR NOT EXISTS (
           SELECT 1
           FROM inbox_item active
@@ -523,6 +527,7 @@ SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severit
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
 WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
+AND NOT EXISTS (SELECT 1 FROM issue d WHERE d.id=i.issue_id AND d.kind='doc' AND NOT document_can_read(d.id,i.recipient_id))
 ORDER BY i.created_at DESC
 `
 

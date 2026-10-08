@@ -2412,7 +2412,7 @@ export function IssueDisplayControls({
                           <List className="size-3.5" />
                         )}
                         <span className="hidden md:inline">
-                          {viewMode === "board"
+                          {viewMode === "calendar" ? t($=>$.cortex.calendar) : viewMode === "gallery" ? t($=>$.cortex.gallery) : viewMode === "board"
                             ? t(($) => $.view.board)
                             : viewMode === "table"
                             ? t(($) => $.view.table)
@@ -2458,6 +2458,8 @@ export function IssueDisplayControls({
                   <List />
                   {t(($) => $.view.list)}
                 </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="calendar">{t(($) => $.cortex.calendar)}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="gallery">{t(($) => $.cortex.gallery)}</DropdownMenuRadioItem>
                 <DropdownMenuRadioItem value="table">
                   <Table2 />
                   {t(($) => $.view.table)}

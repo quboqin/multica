@@ -31,6 +31,7 @@ Multica is a task management platform where people and agents collaborate on iss
 Use `Makefile`, workspace `package.json` files, and `pnpm-workspace.yaml` for current commands and versions. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and worktree operations.
 
 - Use the checkout's managed environment: `make up`, `make status`, `make down`. `make down` preserves data; `make destroy` removes the environment and its data.
+- Use `make preview` for a local production frontend against the same test API/data; it also starts the environment's API and daemon. `make preview ARGS=--rebuild` refreshes the frontend. Its build directory and port are isolated from `web`; `make down C=preview` stops only the preview.
 - Worktrees share PostgreSQL but have isolated databases/ports. Use the environment scripts and `.env.worktree`; do not copy the main checkout's `.env` or manually create a database through an assumed PostgreSQL instance.
 - Regenerate sqlc with `make sqlc` after SQL changes.
 - Run the narrowest useful checks while iterating, then broaden when risk warrants it. Report what actually ran and any skipped checks.
@@ -124,4 +125,4 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 - Keep changes scoped; reuse existing patterns. Code comments are English.
 - Do not add internal compatibility shims, dual writes, fallback paths, or legacy adapters unless requested. This does not relax API response compatibility above.
 - New global pre-workspace routes use a single word or `/{noun}/{verb}`, not hyphenated root names. Update `server/internal/handler/reserved_slugs.json`, run `pnpm generate:reserved-slugs`, and commit `packages/core/paths/reserved-slugs.ts` when changing reserved slugs.
-- Use atomic conventional commits and the repository PR template. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.
+- Use atomic conventional commits and the repository PR template. Release this fork only from reviewed `qqb_main` commits using stable `vX.Y.Z` tags. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.

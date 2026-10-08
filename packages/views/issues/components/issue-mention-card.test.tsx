@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { issueKeys } from "@multica/core/issues/queries";
 import type { ReactNode } from "react";
 import { renderWithI18n } from "../../test/i18n";
 import { IssueMentionCard } from "./issue-mention-card";
@@ -13,7 +15,18 @@ import {
 vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     issueDetail: (id: string) => `/acme/issues/${id}`,
+    documentDetail: (id: string) => `/acme/documents/${id}`,
   }),
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "workspace-1",
+}));
+
+vi.mock("@multica/core/api", () => ({
+  api: {
+    getIssue: vi.fn(async (id: string) => ({ id, kind: "doc" })),
+  },
 }));
 
 vi.mock("./issue-chip", () => ({
@@ -53,23 +66,48 @@ function renderCard(
   context?: CurrentIssueRenderContextValue,
   issueId = "issue-1",
 ) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Infinity } },
+  });
+  queryClient.setQueryData(issueKeys.listSorted("workspace-1"), {
+    byStatus: { unstarted: { issues: [{ id: "issue-1", kind: "task" }], total: 1 } },
+  });
   const card = (
     <IssueMentionCard issueId={issueId} fallbackLabel="MUL-7" />
   );
   return renderWithI18n(
-    <NavigationProvider value={adapter}>
-      {context ? (
-        <CurrentIssueRenderContextProvider value={context}>
-          {card}
-        </CurrentIssueRenderContextProvider>
-      ) : (
-        card
-      )}
-    </NavigationProvider>,
+    <QueryClientProvider client={queryClient}>
+      <NavigationProvider value={adapter}>
+        {context ? (
+          <CurrentIssueRenderContextProvider value={context}>
+            {card}
+          </CurrentIssueRenderContextProvider>
+        ) : (
+          card
+        )}
+      </NavigationProvider>
+    </QueryClientProvider>,
   );
 }
 
 describe("IssueMentionCard", () => {
+  it("opens a document outside the task list in Documents for plain and modifier clicks", async () => {
+    const push = vi.fn();
+    const openInNewTab = vi.fn();
+    renderCard(makeAdapter({ push, openInNewTab }), undefined, "doc-1");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("issue-chip").closest("a")).toHaveAttribute(
+        "href",
+        "/acme/documents/doc-1",
+      ),
+    );
+    fireEvent.click(screen.getByTestId("issue-chip"));
+    expect(push).toHaveBeenCalledWith("/acme/documents/doc-1");
+    fireEvent.click(screen.getByTestId("issue-chip"), { metaKey: true });
+    expect(openInNewTab).toHaveBeenCalledWith("/acme/documents/doc-1", "MUL-7");
+  });
+
   it("renders a real anchor with no target — a chip click navigates in place", () => {
     renderCard(makeAdapter());
     const anchor = screen.getByTestId("issue-chip").closest("a");

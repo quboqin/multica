@@ -46,7 +46,7 @@ import type {
   MoveIssueRequest,
   UpdateIssueRequest,
 } from "../types";
-import type { TimelineEntry, IssueSubscriber, Reaction } from "../types";
+import type { TimelineEntry, IssueSubscriber, Reaction, CommentAgentGrant } from "../types";
 import { sortTimelineEntriesAsc } from "./timeline-sort";
 import { applyCommentDeletion, removeCommentSubtree } from "./comment-deletion";
 import { configStore } from "../config";
@@ -833,15 +833,17 @@ export function useCreateComment(issueId: string) {
       attachmentIds,
       suppressAgentIds,
       steerTaskIds,
+      agentGrants,
     }: {
       content: string;
       type?: string;
       parentId?: string;
       attachmentIds?: string[];
       suppressAgentIds?: string[];
+      agentGrants?: CommentAgentGrant[];
       /** Running turns this comment goes into instead of a follow-up run. */
       steerTaskIds?: string[];
-    }) => api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steerTaskIds),
+    }) => api.createComment(issueId, content, type, parentId, attachmentIds, suppressAgentIds, steerTaskIds, agentGrants),
     onSuccess: (comment) => {
       if (comment.issue_revision) {
         onIssueAuxiliaryRevision(qc, wsId, issueId, comment.issue_revision);

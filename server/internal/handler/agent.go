@@ -2741,6 +2741,12 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 		last := tasks[len(tasks)-1]
 		nextCursor = transcriptCursor(last.CreatedAt.Time, last.ID)
 	}
+	tasks = visibleTaskHistory(tasks)
+	tasks, err = h.readableDocumentTasks(r, parseUUID(workspaceID), tasks)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read document run permissions")
+		return
+	}
 	resp := make([]AgentTaskResponse, len(tasks))
 	var taskIDs []pgtype.UUID
 	if includeUsage {
@@ -3037,6 +3043,12 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 	allowed, ok := h.accessibleAgentIDs(r.Context(), workspaceID, actorType, actorID, member.Role)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "failed to resolve agent access")
+		return
+	}
+
+	tasks, err = h.readableDocumentTasks(r, parseUUID(workspaceID), tasks)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read document run permissions")
 		return
 	}
 

@@ -240,6 +240,7 @@ describe("useIssueSurfaceController", () => {
         }),
         group: { kind: "status" },
       }),
+      expect.objectContaining({ workspaceId: "ws-1", signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -276,6 +277,7 @@ describe("useIssueSurfaceController", () => {
           }),
         }),
       }),
+      expect.objectContaining({ workspaceId: "ws-1", signal: expect.any(AbortSignal) }),
     );
   });
 
@@ -369,6 +371,7 @@ describe("useIssueSurfaceController", () => {
         group_key: "status:todo",
         page: { limit: 50, cursor: null },
       }),
+      expect.objectContaining({ workspaceId: "ws-1", signal: expect.any(AbortSignal) }),
     );
   });
 
