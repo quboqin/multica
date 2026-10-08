@@ -8,6 +8,63 @@ import test from "node:test";
 
 const script = fileURLToPath(new URL("./deploy-selfhost.sh", import.meta.url));
 const sha = "a".repeat(40);
+
+function setupTransfer(t) {
+  const workflow = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const step = workflow.split("      - name: Transfer tagged deployment files and upgrade\n")[1];
+  assert.ok(step, "deployment transfer step exists");
+  const body = step.split("        run: |\n")[1].replace(/^          /gm, "");
+  const root = mkdtempSync(join(tmpdir(), "multica-transfer-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const bin = join(root, "bin"); mkdirSync(bin);
+  const log = join(root, "calls");
+  for (const command of ["ssh", "scp"]) {
+    writeFileSync(join(bin, command), `#!/bin/bash
+printf '%s\\n' '${command}' "$@" 'END' >> "$TEST_SSH_LOG"
+if [[ "$*" == *'mktemp -d'* ]]; then echo /tmp/multica-release.TEST1234; fi
+exit 0
+`, { mode: 0o755 });
+  }
+  writeFileSync(join(bin, "git"), `#!/bin/bash\necho ${sha}\n`, { mode: 0o755 });
+  const run = (port) => spawnSync("bash", ["-c", body], {
+    encoding: "utf8",
+    env: {
+      ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_SSH_LOG: log,
+      RUNNER_TEMP: root, RELEASE_TAG: "v1.2.3", DEPLOY_HOST: "deploy.example.test",
+      DEPLOY_PORT: port, DEPLOY_USER: "deploy", DEPLOY_PATH: "/srv/multica",
+      DEPLOY_SSH_KEY: "test-only-key", DEPLOY_KNOWN_HOSTS: "test-only-host-key",
+    },
+  });
+  return { root, log, run };
+}
+
+for (const port of ["22", "23022"]) {
+  test(`deployment transfer uses port ${port} and strict host verification for every SSH/SCP call`, (t) => {
+    const { root, log, run } = setupTransfer(t);
+    const result = run(port);
+    assert.equal(result.status, 0, result.stderr);
+    const calls = readFileSync(log, "utf8").trim().split("\nEND\n");
+    assert.equal(calls.length, 4, "connect, copy, upgrade and cleanup");
+    assert.deepEqual(calls.map((call) => call.split("\n")[0]), ["ssh", "scp", "ssh", "ssh"]);
+    for (const call of calls) {
+      const args = call.split("\n");
+      assert.ok(args.includes(`Port=${port}`));
+      assert.ok(args.includes("StrictHostKeyChecking=yes"));
+      assert.ok(args.includes(`UserKnownHostsFile=${root}/deploy-ssh/known_hosts`));
+    }
+    assert.equal(existsSync(join(root, "deploy-ssh/key")), false, "temporary key is removed");
+  });
+}
+
+test("invalid deployment ports fail before any SSH connection or key write", (t) => {
+  const { root, log, run } = setupTransfer(t);
+  for (const port of ["", "0", "-1", "65536", "999999999999", "22; touch bad", "023022"]) {
+    assert.notEqual(run(port).status, 0, `reject ${JSON.stringify(port)}`);
+    assert.equal(existsSync(log), false);
+    assert.equal(existsSync(join(root, "deploy-ssh/key")), false);
+  }
+});
+
 function setup(t) {
   const root = mkdtempSync(join(tmpdir(), "multica-deploy-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

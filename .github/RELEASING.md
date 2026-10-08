@@ -93,11 +93,18 @@ Create the `production` GitHub Environment. Allow `v*` tags as deployment source
 
 | Kind | Name | Value |
 | --- | --- | --- |
-| Variable | `DEPLOY_HOST` | SSH host name or IPv4 address, SSH port 22 |
+| Variable | `DEPLOY_HOST` | SSH host name or IPv4 address, without a port |
+| Variable | `DEPLOY_PORT` | SSH port, 1–65535; defaults to 22. This deployment uses 23022. |
 | Variable | `DEPLOY_USER` | Account with Docker and deployment-directory access |
 | Variable | `DEPLOY_PATH` | Absolute path to an existing deployment; no spaces |
 | Secret | `DEPLOY_SSH_KEY` | Dedicated SSH private key |
 | Secret | `DEPLOY_KNOWN_HOSTS` | Independently verified SSH host public-key entry |
+
+For a non-default SSH port, the known-hosts entry must identify
+`[host]:port`, for example `[multica.magicefire.xyz]:23022`. Compare the host-key
+fingerprint with the server console or an existing trusted record before saving
+it; `ssh-keyscan` alone does not establish trust. Both SSH commands and SCP file
+transfers use `DEPLOY_PORT` with strict host-key verification.
 
 Install Docker Compose on that host. Its deployment directory must contain a
 production `.env`, with `postgres` and `backend` already running under the Compose
