@@ -54,7 +54,8 @@
       "builder-util-runtime": "9.7.0"
     },
     "patchedDependencies": {
-      "@expo/cli@55.0.30": "patches/@expo__cli@55.0.30.patch"
+      "@expo/cli@55.0.30": "patches/@expo__cli@55.0.30.patch",
+      "app-builder-lib@26.8.1": "patches/app-builder-lib@26.8.1.patch"
     }
   },
   "devDependencies": {
