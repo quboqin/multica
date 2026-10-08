@@ -21,6 +21,14 @@ three Desktop platforms. The vulnerability scan is fail-closed by default.
 GoReleaser is pinned to v2.8.2, which accepts the current `brews` configuration;
 run its `check` command and a snapshot build before changing that pin/schema.
 
+Desktop signing uses a pnpm patch for `app-builder-lib@26.8.1` to keep the
+temporary keychain password separate from the certificate import passwords.
+When upgrading electron-builder, run `apps/desktop/scripts/signing-keychain.test.mjs`
+and remove the patch only after confirming the upstream implementation passes.
+This regression test uses fake credentials; a signed and notarized macOS build
+is still required to validate the real signing setup. Web Docker dependency
+stages must copy `patches/`, even when a patched package belongs to an omitted app.
+
 ## One-time GitHub configuration
 
 1. Merge the intended product and pipeline changes into `qqb_main`. Make it the
