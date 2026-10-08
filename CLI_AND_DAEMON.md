@@ -1,5 +1,13 @@
 # CLI and Agent Daemon Guide
 
+> This fork publishes from `qqb_main`. Release channels and GitHub configuration
+> are documented in [.github/RELEASING.md](.github/RELEASING.md).
+> To connect to this fork's hosted service after installing the CLI:
+>
+> ```sh
+> multica setup self-host --server-url https://multica.magicefire.xyz:18444 --app-url https://multica.magicefire.xyz:18443
+> ```
+
 The `multica` CLI connects your local machine to Multica. It handles authentication, workspace management, issue tracking, and runs the agent daemon that executes AI tasks locally.
 
 ## Installation
@@ -7,13 +15,13 @@ The `multica` CLI connects your local machine to Multica. It handles authenticat
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew install multica-ai/tap/multica
+brew install quboqin/tap/multica
 ```
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/quboqin/multica.git
 cd multica
 make build
 cp server/bin/multica /usr/local/bin/multica
@@ -22,7 +30,7 @@ cp server/bin/multica /usr/local/bin/multica
 ### Update
 
 ```bash
-brew upgrade multica-ai/tap/multica
+brew upgrade quboqin/tap/multica
 ```
 
 For install script or manual installs, use:
@@ -44,8 +52,8 @@ export MULTICA_DAEMON_AUTO_UPDATE=true
 multica update
 ```
 
-The metadata mirror must serve `/repos/multica-ai/multica/releases/latest` and
-`/repos/multica-ai/multica/releases/tags/<tag>`. The artifact mirror must serve
+The metadata mirror must serve `/repos/quboqin/multica/releases/latest` and
+`/repos/quboqin/multica/releases/tags/<tag>`. The artifact mirror must serve
 `/<tag>/<asset-name>` and preserve the published `checksums.txt` contents.
 When these variables are unset, the GitHub defaults remain unchanged.
 

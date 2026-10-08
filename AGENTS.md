@@ -125,4 +125,4 @@ Workspace-scoped queries filter by `workspace_id`; membership gates access and `
 - Keep changes scoped; reuse existing patterns. Code comments are English.
 - Do not add internal compatibility shims, dual writes, fallback paths, or legacy adapters unless requested. This does not relax API response compatibility above.
 - New global pre-workspace routes use a single word or `/{noun}/{verb}`, not hyphenated root names. Update `server/internal/handler/reserved_slugs.json`, run `pnpm generate:reserved-slugs`, and commit `packages/core/paths/reserved-slugs.ts` when changing reserved slugs.
-- Use atomic conventional commits and the repository PR template. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.
+- Use atomic conventional commits and the repository PR template. Release this fork only from reviewed `qqb_main` commits using stable `vX.Y.Z` tags. For releases, follow [.github/RELEASING.md](.github/RELEASING.md); default to a patch bump unless specified otherwise.

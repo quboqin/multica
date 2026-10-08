@@ -6,9 +6,9 @@ description: |
 type: application
 version: 0.1.0
 appVersion: "latest"
-home: https://multica.ai
+home: https://github.com/quboqin/multica
 sources:
-  - https://github.com/multica-ai/multica
+  - https://github.com/quboqin/multica
 keywords:
   - multica
   - issue-tracker

@@ -1,0 +1,58 @@
+name: Deploy self-hosted production
+
+# Called only by Release after all publishers and completeness checks succeed.
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multica-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'quboqin/multica'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check deployment source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: bash scripts/check-release-origin.sh "$RELEASE_TAG"
+      - name: Transfer tagged deployment files and upgrade
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]]
+          [[ "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ && "$DEPLOY_PATH" != / ]]
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          umask 077
+          mkdir -p "$RUNNER_TEMP/deploy-ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy-ssh/key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/deploy-ssh/known_hosts"
+          opts=(-i "$RUNNER_TEMP/deploy-ssh/key" -o BatchMode=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$RUNNER_TEMP/deploy-ssh/known_hosts")
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          remote_dir=$(ssh "${opts[@]}" "$target" 'mktemp -d /tmp/multica-release.XXXXXXXX')
+          [[ "$remote_dir" =~ ^/tmp/multica-release\.[a-zA-Z0-9]+$ ]]
+          trap 'ssh "${opts[@]}" "$target" "rm -rf -- $remote_dir"; rm -f "$RUNNER_TEMP/deploy-ssh/key"' EXIT
+          scp "${opts[@]}" scripts/deploy-selfhost.sh docker-compose.selfhost.yml "$target:$remote_dir/"
+          printf -v command 'bash %q %q %q %q' "$remote_dir/deploy-selfhost.sh" "$RELEASE_TAG" "$(git rev-parse HEAD)" "$DEPLOY_PATH"
+          ssh "${opts[@]}" "$target" "$command"

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [qqb_main]
   pull_request:
-    branches: [main]
+    branches: [qqb_main]
   schedule:
     - cron: "23 3 * * *"
   workflow_dispatch:
@@ -31,6 +31,7 @@ jobs:
       installer: ${{ steps.decide.outputs.installer }}
       images: ${{ steps.decide.outputs.images }}
       full: ${{ steps.decide.outputs.full }}
+      image_check: ${{ steps.decide.outputs.image_check }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -817,7 +818,7 @@ jobs:
     # why. Pull requests only — a push to main has no description to read,
     # and the branch it came from was already checked.
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.images == 'true' }}
+    if: ${{ needs.changes.outputs.image_check == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -911,6 +912,9 @@ jobs:
       - name: Test backend entrypoint signals
         run: bash scripts/entrypoint.test.sh
 
+      - name: Test release and deployment contracts
+        run: node --test scripts/check-release*.test.mjs scripts/verify-release-assets.test.mjs scripts/deploy-selfhost.test.mjs
+
       - name: Test build output naming
         run: bash scripts/makefile-build.test.sh
 
@@ -930,3 +934,18 @@ jobs:
 
       - name: Check frontend quality
         uses: ./.github/actions/frontend-quality
+
+  ci-gate:
+    needs: [changes, frontend-build, frontend-test, frontend-views-test, frontend-quality, backend-tests, backend-agent-tests, sqlc-check, go-vulnerability-scan, macos-runtime, windows-execenv, script-checks, installer, image-budget]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Verify all selected checks
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          JOB_SCOPES: '{"frontend-build":"frontend","frontend-test":"frontend","frontend-views-test":"frontend","frontend-quality":"quality_only","backend-tests":"backend","backend-agent-tests":"backend","sqlc-check":"sqlc","go-vulnerability-scan":"backend","macos-runtime":"full","windows-execenv":"runtime","script-checks":"scripts","installer":"installer","image-budget":"image_check"}'
+        run: node scripts/ci-scope.mjs gate

@@ -1,5 +1,13 @@
 # Self-Hosting Guide
 
+> This fork publishes from `qqb_main`. Release channels and GitHub configuration
+> are documented in [.github/RELEASING.md](.github/RELEASING.md).
+> To connect to this fork's hosted service after installing the CLI:
+>
+> ```sh
+> multica setup self-host --server-url https://multica.magicefire.xyz:18444 --app-url https://multica.magicefire.xyz:18443
+> ```
+
 Deploy Multica on your own infrastructure in minutes.
 
 ## Architecture
@@ -33,7 +41,7 @@ Two commands to set up everything — server, CLI, and configuration.
 
 ```bash
 # 1. Install CLI + provision the self-host server
-curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server
+curl -fsSL https://raw.githubusercontent.com/quboqin/multica/qqb_main/scripts/install.sh | bash -s -- --with-server
 
 # 2. Configure CLI, authenticate, and start the daemon
 multica setup self-host
@@ -46,14 +54,14 @@ multica setup self-host
 
 ```powershell
 # 1. Install CLI + provision the self-host server
-$env:MULTICA_MODE="with-server"; irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+$env:MULTICA_MODE="with-server"; irm https://raw.githubusercontent.com/quboqin/multica/qqb_main/scripts/install.ps1 | iex
 
 # 2. Configure CLI, authenticate, and start the daemon
 multica setup self-host
 ```
 </details>
 
-This installs the `multica` CLI, checks out the latest self-host assets, pulls the official Multica images from GHCR, and configures everything for localhost.
+This installs the `multica` CLI, checks out the latest self-host assets, pulls the published fork images from GHCR, and configures everything for localhost.
 
 Open http://localhost:3000. To log in, configure `RESEND_API_KEY` in `.env` for email-based codes (recommended), or leave Resend unset and copy the generated code from the backend logs. See [Step 2 — Log In](#step-2--log-in) for details.
 
@@ -62,7 +70,7 @@ Open http://localhost:3000. To log in, configure `RESEND_API_KEY` in `.env` for 
 > **CLI only?** If the self-host server is already running and you only need the CLI on a macOS/Linux machine, install it with Homebrew:
 >
 > ```bash
-> brew install multica-ai/tap/multica
+> brew install quboqin/tap/multica
 > ```
 
 ---
@@ -76,7 +84,7 @@ If you prefer to run each step manually:
 **Prerequisites:** Docker and Docker Compose.
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/quboqin/multica.git
 cd multica
 make selfhost
 ```
@@ -115,7 +123,7 @@ Each team member who wants to run AI agents locally needs to:
 ### a) Install the CLI and an AI agent
 
 ```bash
-brew install multica-ai/tap/multica
+brew install quboqin/tap/multica
 ```
 
 You also need at least one AI agent CLI installed:
@@ -443,7 +451,7 @@ External cron / systemd timer / Kubernetes `CronJob` setups that call `SELECT ro
 If you installed via the install script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --stop
+curl -fsSL https://raw.githubusercontent.com/quboqin/multica/qqb_main/scripts/install.sh | bash -s -- --stop
 ```
 
 If you cloned the repo manually:
@@ -487,7 +495,7 @@ If the selected GHCR tag has not been published yet, fall back to `make selfhost
 If you prefer running Docker Compose steps manually instead of `make selfhost`:
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
+git clone https://github.com/quboqin/multica.git
 cd multica
 cp .env.example .env
 ```
