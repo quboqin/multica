@@ -220,11 +220,11 @@ it("keeps the document and the dialog when the server refuses the delete", async
   expect(push).not.toHaveBeenCalled();
 });
 
-it("lets the people who manage a table delete it from its row", async () => {
+it("lets the table owner delete it from its row", async () => {
   const user = userEvent.setup();
   mount(<CollectionNavigator activeCollectionId="c1" />);
   await screen.findByRole("link", { name: /Backlog/ });
-  // Assets belongs to someone else and this member is no admin.
+  // Assets belongs to someone else, so its archive action is unavailable.
   expect(screen.queryByRole("button", { name: "Actions for Assets" })).not.toBeInTheDocument();
 
   await user.click(screen.getByRole("button", { name: "Actions for Backlog" }));
@@ -243,10 +243,13 @@ it("lets the people who manage a table delete it from its row", async () => {
   );
 });
 
-it("lets workspace admins delete tables they did not create", async () => {
+it("does not let workspace admins archive tables they do not own", async () => {
   api.listMembers.mockResolvedValue([{ user_id: "user-1", role: "admin" }]);
   mount(<CollectionNavigator />);
-  expect(await screen.findByRole("button", { name: "Actions for Assets" })).toBeInTheDocument();
+  await screen.findByRole("link", { name: "Assets" });
+  expect(screen.queryByRole("button", { name: "Actions for Assets" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Actions for Backlog" })).toBeInTheDocument();
+  expect(api.updateCollection).not.toHaveBeenCalled();
 });
 
 it("creates a table in the supplied project with icon and description", async () => {

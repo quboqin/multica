@@ -619,7 +619,7 @@ export function DisplayPopover({
                 {titleName}
               </span>
               {toggles && (
-                <Check aria-hidden className="size-3.5 shrink-0 text-muted-foreground/40" />
+                <Check aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
               )}
             </span>
             {manage && (

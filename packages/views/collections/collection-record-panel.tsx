@@ -321,7 +321,7 @@ function RecordBacklinks({
               className="flex min-w-0 items-center gap-1.5 rounded-sm px-1.5 py-1 text-label hover:bg-accent/50"
             >
               <span className="shrink-0 text-muted-foreground">{link.collection_name}</span>
-              <span className="shrink-0 text-muted-foreground/60">›</span>
+              <span className="shrink-0 text-faint-foreground">›</span>
               <span className="truncate">
                 {link.record_title || t(($) => $.cortex_table.untitled)}
               </span>

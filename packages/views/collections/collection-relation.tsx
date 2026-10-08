@@ -63,7 +63,7 @@ export function RelationChips({
   const { t } = useT("issues");
   const statuses = useIssueStatuses(useWorkspaceId());
   if (!links.length)
-    return compact ? null : <span className="text-muted-foreground/60">—</span>;
+    return compact ? null : <span className="text-faint-foreground">—</span>;
   return (
     // A table cell keeps its row height: links past its width are clipped, and
     // the record panel lists them all. Cards have the room to wrap.
@@ -78,7 +78,7 @@ export function RelationChips({
           return (
             <span
               key={link.id}
-              className={cn(CHIP, "bg-muted text-muted-foreground line-through opacity-70")}
+              className={cn(CHIP, "bg-muted text-muted-foreground line-through")}
             >
               {t(($) => $.cortex_table.link_deleted)}
             </span>

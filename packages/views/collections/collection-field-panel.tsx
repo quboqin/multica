@@ -501,7 +501,7 @@ function FieldForm({
               key={option.id ?? `new-${index}`}
               className="flex items-center gap-2"
             >
-              <GripVertical className="size-4 shrink-0 text-muted-foreground/50" />
+              <GripVertical className="size-4 shrink-0 text-faint-foreground" />
               <ColorPicker
                 value={option.color}
                 onChange={(color) =>

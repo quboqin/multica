@@ -199,7 +199,7 @@ export function CollectionBulkTools({
           </Button>
           <select
             aria-label={t(($) => $.cortex_bulk.field)}
-            className="h-8 max-w-40 rounded border bg-background px-2"
+            className="h-8 max-w-40 rounded-sm border bg-background px-2"
             value={fieldId}
             onChange={(e) => {
               setFieldId(e.target.value);
@@ -216,7 +216,7 @@ export function CollectionBulkTools({
               ))}
           </select>
           {field && (
-            <div className="min-w-24 rounded border px-2">
+            <div className="min-w-24 rounded-sm border px-2">
               <CollectionFieldEditor
                 record={draft}
                 field={field}

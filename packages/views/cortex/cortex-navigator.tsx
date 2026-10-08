@@ -429,7 +429,7 @@ export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) 
               aria-label={t(($) =>
                 open ? $.cortex_docs.collapse : $.cortex_docs.expand,
               )}
-              className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+              className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
               onClick={() => toggleCollapsed(wsId, doc.id)}
             >
               <ChevronRight
@@ -778,7 +778,7 @@ export function NewTablePopover({
               className="h-8"
             />
           </label>
-          <label className="block text-caption">{t($=>$.cortex_bulk.project)}<select className="w-full rounded border bg-background p-1" value={projectId} onChange={e=>setProjectId(e.target.value)}><option value="">{t($=>$.cortex_bulk.workspace)}</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
+          <label className="block text-caption">{t($=>$.cortex_bulk.project)}<select className="w-full rounded-sm border bg-background p-1" value={projectId} onChange={e=>setProjectId(e.target.value)}><option value="">{t($=>$.cortex_bulk.workspace)}</option>{projects.map(p=><option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
           <label className="block text-caption">{t($=>$.cortex_bulk.icon)}<Input maxLength={32} value={icon} onChange={e=>setIcon(e.target.value)}/></label>
           <label className="block text-caption">{t($=>$.cortex_bulk.description)}<Input maxLength={4000} value={description} onChange={e=>setDescription(e.target.value)}/></label>
           {create.error && (

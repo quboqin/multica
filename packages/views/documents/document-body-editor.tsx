@@ -160,7 +160,7 @@ export function DocumentBodyEditor({
           <label className="block">
             {t(($) => $.cortex.your_draft)}
             <textarea
-              className="min-h-40 w-full rounded border bg-background p-2"
+              className="min-h-40 w-full rounded-sm border bg-background p-2"
               value={draft?.body ?? ""}
               onChange={(event) => {
                 if (draft)

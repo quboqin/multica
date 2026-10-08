@@ -424,7 +424,7 @@ function DocumentView({ documentId }: { documentId: string }) {
                           {lifecycleLabel}
                         </span>
                         <span aria-hidden>·</span>
-                        <span className="rounded bg-brand/10 px-1.5 py-0.5 font-mono text-micro text-brand">
+                        <span className="rounded-sm bg-brand/10 px-1.5 py-0.5 font-mono text-micro text-brand">
                           {t(($) => $.cortex_docs.kind_doc)}
                         </span>
                       </div>

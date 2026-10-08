@@ -21,7 +21,7 @@ import {
 } from "./collection-fields";
 import { RelationChips, RelationEditor } from "./collection-relation";
 
-const empty = <span className="text-muted-foreground/60">—</span>;
+const empty = <span className="text-faint-foreground">—</span>;
 
 /** Read-only rendering of one field value, shared by table, board and sheet. */
 export function CollectionValue({

@@ -345,7 +345,7 @@ export function InsertViewDialog({
                   <span>
                     <span className="flex items-center gap-2 text-body font-medium">
                       {t(($) => $.cortex_docs.mode_live)}
-                      <span className="rounded bg-success/10 px-1.5 py-0.5 text-micro font-medium text-success">
+                      <span className="rounded-sm bg-success/10 px-1.5 py-0.5 text-micro font-medium text-success">
                         {t(($) => $.cortex_docs.recommended)}
                       </span>
                     </span>

@@ -185,8 +185,8 @@ export function DataViewCalendar<Row>({
               >
                 <h3
                   className={cn(
-                    "text-caption tabular-nums text-muted-foreground",
-                    outside && "text-muted-foreground/60",
+                    "text-caption tabular-nums",
+                    outside ? "text-faint-foreground" : "text-muted-foreground",
                     day === today &&
                       "inline-flex size-5 items-center justify-center rounded-full bg-primary font-medium text-primary-foreground",
                   )}
