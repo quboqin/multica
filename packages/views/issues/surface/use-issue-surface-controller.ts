@@ -326,10 +326,9 @@ export function useIssueSurfaceController({
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
   const usesServerStatusSurface =
-    effectiveViewMode === "list" ||
-    (effectiveViewMode === "board" && effectiveGrouping === "status");
+    (["list", "board"].includes(effectiveViewMode) && effectiveGrouping === "status");
   const usesServerGroupSurface =
-    (effectiveViewMode === "board" && effectiveGrouping !== "status") ||
+    (["list", "board"].includes(effectiveViewMode) && effectiveGrouping !== "status") ||
     effectiveViewMode === "swimlane";
   const usesServerFacets =
     usesTable || usesServerStatusSurface || usesServerGroupSurface;
@@ -665,7 +664,7 @@ export function useIssueSurfaceController({
       effectiveViewMode === "swimlane" ? serverStatuses : undefined,
     observeEmptyBranches:
       effectiveViewMode === "swimlane" ||
-      (effectiveViewMode === "board" && activeGroupingProperty !== null),
+      (["list", "board"].includes(effectiveViewMode) && activeGroupingProperty !== null),
     enabled: usesServerGroupSurface && !statusFilterUnresolved,
   });
 
@@ -753,7 +752,7 @@ export function useIssueSurfaceController({
       // so grouping by project has to load it even when no card/column shows
       // the project itself.
       (usesTable && tableGrouping === "project") ||
-      (effectiveViewMode === "board" && effectiveGrouping === "project") ||
+      (["list", "board"].includes(effectiveViewMode) && effectiveGrouping === "project") ||
       (effectiveViewMode === "swimlane" && swimlaneGrouping === "project"),
   });
 

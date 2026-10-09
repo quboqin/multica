@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act, fireEvent } from "@testing-library/react";
+import { render, screen, act, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { issueStatusKeys } from "@multica/core/issue-statuses/queries";
 import type { Issue, IssueStatus, IssueStatusEntry } from "@multica/core/types";
+import type { IssueProperty } from "@multica/core/types";
+import type { IssueGrouping } from "@multica/core/issues/stores/view-store";
+import type { IssueGroupBranches } from "../surface/use-issue-group-branches";
+import { propertyGroupId } from "../utils/drag-utils";
 import { ListView } from "./list-view";
 import { IssueContextMenuProvider } from "../actions";
 import { ScrollRestorationProvider, type ScrollRestorationAdapter } from "../../platform";
@@ -64,9 +68,27 @@ vi.mock("@multica/core/auth", () => ({
   createAuthStore: vi.fn(),
 }));
 
+let mockProperties: IssueProperty[] = [];
+const mockSetProperty = vi.fn();
+const mockUnsetProperty = vi.fn();
+const getActorName = () => "Alex";
+vi.mock("@multica/core/properties", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/properties")>()),
+  propertyListOptions: () => ({ queryKey: ["properties"], queryFn: async () => mockProperties, initialData: mockProperties }),
+  useSetIssueProperty: () => ({ mutate: mockSetProperty }),
+  useUnsetIssueProperty: () => ({ mutate: mockUnsetProperty }),
+}));
+vi.mock("@multica/core/workspace/hooks", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/workspace/hooks")>()),
+  useActorName: () => ({ getActorName }),
+}));
+
 // View store. `listCollapsedStatuses` is mutable so `toggleListCollapsed`
 // models the real store: the accordion's expanded set is derived from it.
 const mockViewState: {
+  grouping: IssueGrouping;
+  listCollapsedGroups: string[];
+  toggleListGroupCollapsed: (key: string) => void;
   sortBy: string;
   sortDirection: string;
   cardProperties: Record<string, boolean>;
@@ -75,6 +97,13 @@ const mockViewState: {
   toggleListCollapsed: (status: IssueStatus) => void;
   showStatus: (status: IssueStatus) => void;
 } = {
+  grouping: "status",
+  listCollapsedGroups: [],
+  toggleListGroupCollapsed: vi.fn((key: string) => {
+    mockViewState.listCollapsedGroups = mockViewState.listCollapsedGroups.includes(key)
+      ? mockViewState.listCollapsedGroups.filter((id) => id !== key)
+      : [...mockViewState.listCollapsedGroups, key];
+  }),
   sortBy: "position",
   sortDirection: "asc",
   cardProperties: {},
@@ -156,11 +185,12 @@ vi.mock("@dnd-kit/utilities", () => ({
 // jsdom has no layout, so the real Virtuoso measures a 0-height viewport and
 // renders nothing. Render rows inline so the panel's contents are assertable.
 vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent, defaultItemHeight }: any) => (
+  Virtuoso: ({ data, itemContent, defaultItemHeight, components }: any) => (
     <div data-testid="virtuoso-mock" data-estimated-height={defaultItemHeight}>
       {(data ?? []).map((item: any, i: number) => (
         <div key={i}>{itemContent(i, item)}</div>
       ))}
+      {components?.Footer && <components.Footer />}
     </div>
   ),
 }));
@@ -212,6 +242,8 @@ function renderListView(
   onMoveIssue = vi.fn(),
   statuses: IssueStatusEntry[] = [],
   scrollAdapter: ScrollRestorationAdapter = { get: () => undefined },
+  groupBranches?: IssueGroupBranches,
+  onCreateIssue?: () => void,
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
@@ -227,6 +259,8 @@ function renderListView(
               visibleStatuses={visibleStatuses}
               hiddenStatuses={hiddenStatuses}
               statusPagination={PAGINATION}
+              groupBranches={groupBranches}
+              onCreateIssue={onCreateIssue}
               onMoveIssue={onMoveIssue}
             />
           </ScrollRestorationProvider>
@@ -235,6 +269,14 @@ function renderListView(
     </QueryClientProvider>,
   );
 }
+
+beforeEach(() => {
+  mockViewState.grouping = "status";
+  mockViewState.listCollapsedGroups = [];
+  mockProperties = [];
+  mockSetProperty.mockClear();
+  mockUnsetProperty.mockClear();
+});
 
 describe("ListView status header collapse", () => {
   beforeEach(() => {
@@ -384,4 +426,47 @@ describe("ListView custom statuses", () => {
 
     expect(screen.getByText("Waiting on the reporter")).toBeInTheDocument();
   });
+  it.each([
+    { type: "number", value: 0, label: "0" },
+    { type: "multi_select", value: ["beta", "alpha"], label: "Alpha, Beta" },
+  ])("renders $type groups, collapses independently and creates with the typed value", async ({ type, value, label }) => {
+    mockViewState.grouping = "property:field-1";
+    mockViewState.sortBy = "created_at";
+    mockProperties = [{ id: "field-1", name: "Field", type, config: { options: [
+      { id: "alpha", name: "Alpha" }, { id: "beta", name: "Beta" },
+    ] } } as IssueProperty];
+    const issue = { ...ISSUES[0]!, properties: { "field-1": value } };
+    const groupKey = propertyGroupId("field-1", value);
+    const noneKey = propertyGroupId("field-1", null);
+    const branches: IssueGroupBranches = {
+      enabled: true, issues: [issue], total: 1, isLoading: false, isRefreshing: false, isError: false,
+      hasMoreGroups: false, isLoadingMoreGroups: false, loadMoreGroups: vi.fn(), retryGroups: vi.fn(),
+      descriptors: [
+        { key: groupKey, count: 1, value: { kind: "property", property_id: "field-1", value_state: "value", value } },
+        { key: noneKey, count: 0, value: { kind: "property", property_id: "field-1", value_state: "unset" } },
+      ],
+      pagination: {
+        [groupKey]: { ...emptyPage, total: 1, loaded: 1 },
+        [noneKey]: { ...emptyPage, total: 0, loaded: 0 },
+      },
+    };
+    const create = vi.fn();
+    const move = vi.fn();
+    renderListView([], ["todo"], [], move, [], undefined, branches, create);
+    const heading = screen.getByRole("button", { name: `${label} 1` });
+    expect(screen.getByText(issue.title)).toBeVisible();
+    expect(screen.getByRole("button", { name: "No value 0" })).toBeVisible();
+    await userEvent.click(within(heading.parentElement!).getByRole("button", { name: "Add issue" }));
+    expect(create).toHaveBeenCalledWith({ properties: { "field-1": value } });
+    await userEvent.click(heading);
+    expect(mockViewState.listCollapsedGroups).toEqual([groupKey]);
+    expect(mockViewState.listCollapsedStatuses).toEqual([]);
+    act(() => {
+      lastOnDragStart({ active: { id: issue.id } });
+      lastOnDragEnd({ active: { id: issue.id }, over: { id: noneKey } });
+    });
+    expect(mockUnsetProperty).toHaveBeenCalledWith({ issueId: issue.id, propertyId: "field-1" }, expect.anything());
+    expect(move).toHaveBeenCalledWith(issue.id, expect.not.objectContaining({ status: expect.anything() }), expect.any(Function));
+  });
+
 });

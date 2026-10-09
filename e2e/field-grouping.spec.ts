@@ -17,7 +17,7 @@ test.describe("Field grouping", () => {
       });
   });
 
-  test("issue board groups by number beside Filter and retains the choice after reload", async ({
+  test("issue board and list group by number beside Filter and retain the choice after reload", async ({
     page,
   }, info) => {
     const result = await api.cortexRequest("/api/properties", "POST", {
@@ -63,6 +63,25 @@ test.describe("Field grouping", () => {
       page.getByText(issue.title, { exact: true }).first(),
     ).toBeVisible();
     await page.getByRole("button", { name: "Board", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "List", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Group: Estimate", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Group: Estimate", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Status", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Group: Status", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Group: Status", exact: true }).click();
+    await page.getByRole("menuitemradio", { name: "Estimate", exact: true }).click();
+    const zeroGroup = page.getByRole("button", { name: "0 1", exact: true });
+    await expect(zeroGroup).toBeVisible();
+    await expect(page.getByText(issue.title, { exact: true }).first()).toBeVisible();
+    await zeroGroup.click();
+    await expect(zeroGroup).toHaveAttribute("aria-expanded", "false");
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Group: Estimate", exact: true })).toBeVisible();
+    await expect(zeroGroup).toHaveAttribute("aria-expanded", "false");
+    await zeroGroup.click();
+    await expect(page.getByText(issue.title, { exact: true }).first()).toBeVisible();
+    await page.screenshot({ path: info.outputPath("issue-list-number-grouping.png") });
+    await page.getByRole("button", { name: "List", exact: true }).click();
     await page
       .getByRole("menuitemradio", { name: "Table", exact: true })
       .click();

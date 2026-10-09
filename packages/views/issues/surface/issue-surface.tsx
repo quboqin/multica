@@ -354,7 +354,8 @@ function IssueSurfaceContent({
                 projectId={controller.projectId}
                 onMoveIssue={controller.moveIssue}
                 onCreateIssue={openCreateIssue}
-                statusPagination={controller.statusPagination!}
+                statusPagination={controller.statusPagination}
+                groupBranches={controller.groupBranches}
               />
             )}
             {controller.viewMode === "table" && (

@@ -12,7 +12,7 @@ import { defaultStorage } from "../../platform/storage";
 export type ViewMode = "board" | "list" | "table" | "gantt" | "swimlane" | "calendar" | "gallery";
 export type GanttZoom = "day" | "week" | "month";
 /**
- * Board grouping. Besides the three built-ins, custom properties
+ * Board and list grouping. Besides the three built-ins, custom properties
  * group columns by their typed values via the `property:<definitionId>` form.
  * Persisted values may reference a since-archived definition — consumers must
  * fall back to "status" when the definition can't be resolved.
@@ -282,6 +282,8 @@ export interface IssueViewState {
   // Purely a display filter — it never touches the parent/child relationship.
   showSubIssues: boolean;
   listCollapsedStatuses: IssueStatus[];
+  /** Non-status list sections, keyed by the grouping descriptor id. */
+  listCollapsedGroups: string[];
   /**
    * Board / list columns the user hid, as concrete status keys.
    *
@@ -346,6 +348,7 @@ export interface IssueViewState {
   toggleCardPropertyId: (propertyId: string) => void;
   toggleShowSubIssues: () => void;
   toggleListCollapsed: (status: IssueStatus) => void;
+  toggleListGroupCollapsed: (key: string) => void;
   setSwimlaneGrouping: (grouping: SwimlaneGrouping) => void;
   /** Update the lane order for the currently active swimlane grouping. */
   setSwimlaneOrder: (order: string[]) => void;
@@ -383,6 +386,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   cardPropertyIds: [],
   showSubIssues: true,
   listCollapsedStatuses: [],
+  listCollapsedGroups: [],
   hiddenStatuses: [...DEFAULT_HIDDEN_STATUSES],
   ganttZoom: "week",
   ganttShowCompleted: false,
@@ -591,6 +595,12 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
         ? state.listCollapsedStatuses.filter((s) => s !== status)
         : [...state.listCollapsedStatuses, status],
     })),
+  toggleListGroupCollapsed: (key) =>
+    set((state) => ({
+      listCollapsedGroups: state.listCollapsedGroups.includes(key)
+        ? state.listCollapsedGroups.filter((id) => id !== key)
+        : [...state.listCollapsedGroups, key],
+    })),
   setSwimlaneGrouping: (grouping) => set({ swimlaneGrouping: grouping }),
   setSwimlaneOrder: (order) =>
     set((state) => ({
@@ -684,6 +694,7 @@ export const viewStorePersistOptions = (name: string) => ({
     cardPropertyIds: state.cardPropertyIds,
     showSubIssues: state.showSubIssues,
     listCollapsedStatuses: state.listCollapsedStatuses,
+    listCollapsedGroups: state.listCollapsedGroups,
     hiddenStatuses: state.hiddenStatuses,
     ganttZoom: state.ganttZoom,
     ganttShowCompleted: state.ganttShowCompleted,
@@ -764,6 +775,9 @@ export function mergeViewStatePersisted<T extends IssueViewState>(
     ...p,
     hiddenStatuses: statusesFromStorage(p.hiddenStatuses ?? legacy?.hiddenStatusCategories, current.hiddenStatuses, p.hiddenStatuses === undefined),
     listCollapsedStatuses: statusesFromStorage(p.listCollapsedStatuses, current.listCollapsedStatuses, p.hiddenStatuses === undefined),
+    listCollapsedGroups: Array.isArray(p.listCollapsedGroups)
+      ? p.listCollapsedGroups.filter((key): key is string => typeof key === "string")
+      : current.listCollapsedGroups,
     cardProperties: {
       ...current.cardProperties,
       ...(p.cardProperties ?? {}),

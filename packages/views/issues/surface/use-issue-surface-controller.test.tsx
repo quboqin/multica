@@ -826,7 +826,7 @@ describe("useIssueSurfaceController", () => {
     { grouping: "assignee" as const, expected: { kind: "assignee" } },
     { grouping: "project" as const, expected: { kind: "project" } },
   ])(
-    "asks the server for $grouping groups when the board is grouped that way",
+    "asks the server for $grouping groups in both board and list modes",
     async ({ grouping, expected }) => {
       // The board's columns ARE the server's group descriptors, so the group
       // spec it requests is the whole contract — a board that asks for the
@@ -847,7 +847,7 @@ describe("useIssueSurfaceController", () => {
         getChildIssueProgress: vi.fn(() => Promise.resolve([])),
       } as unknown as ApiClient);
 
-      renderHook(
+      const { result } = renderHook(
         () =>
           useIssueSurfaceController({
             scope: { type: "project", projectId: "p1" },
@@ -855,7 +855,9 @@ describe("useIssueSurfaceController", () => {
           }),
         { wrapper: makeWrapper(qc, "project:p1") },
       );
-
+      act(() => store.getState().setViewMode("list"));
+      await waitFor(() => expect(result.current.groupBranches?.enabled).toBe(true));
+      expect(result.current.statusPagination).toBeUndefined();
       await waitFor(() => expect(listIssueTableGroups).toHaveBeenCalled());
       expect(listIssueTableGroups.mock.calls[0]?.[0]).toEqual(
         expect.objectContaining({ group: expected }),
