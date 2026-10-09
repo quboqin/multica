@@ -1316,7 +1316,7 @@
     "add_to_group": "Ajouter à {{name}}",
     "board_needs_select": "Ajoutez un champ à choix unique pour utiliser le tableau Kanban.",
     "calendar_needs_date": "Ajoutez un champ date pour utiliser le calendrier.",
-    "group_needs_select": "Seuls les champs à choix unique peuvent grouper.",
+    "group_combinations": "Les champs à valeurs multiples sont regroupés par combinaison identique.",
     "no_filters": "Aucun filtre dans cette vue",
     "add_filter": "Ajouter un filtre",
     "clear_filters": "Tout effacer",

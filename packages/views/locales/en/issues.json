@@ -1316,7 +1316,7 @@
     "add_to_group": "Add to {{name}}",
     "board_needs_select": "Add a single-select field to use the board layout.",
     "calendar_needs_date": "Add a date field to use the calendar layout.",
-    "group_needs_select": "Only single-select fields can group records.",
+    "group_combinations": "Multi-value fields group by identical combinations.",
     "no_filters": "No filters in this view",
     "add_filter": "Add filter",
     "clear_filters": "Clear all",

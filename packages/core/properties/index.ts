@@ -5,3 +5,5 @@ export {
   useSetIssueProperty,
   useUnsetIssueProperty,
 } from "./mutations";
+
+export { groupValueKey, groupValuesEqual, propertyGroupLabel } from "./grouping";

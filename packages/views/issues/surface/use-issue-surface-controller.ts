@@ -1,4 +1,5 @@
 "use client";
+import { isFilterablePropertyType } from "@multica/core/types";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { hashKey, keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -313,7 +314,7 @@ export function useIssueSurfaceController({
   const activeGroupingProperty = groupingPropertyId
     ? workspaceProperties.find(
         (property) =>
-          property.id === groupingPropertyId && property.type === "select",
+          property.id === groupingPropertyId && isFilterablePropertyType(property.type),
       ) ?? null
     : null;
   const effectiveGrouping =

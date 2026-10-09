@@ -163,6 +163,16 @@ describe("property grouping", () => {
   const withValue = { id: "A", properties: { [propertyId]: "opt-staging" } } as unknown as Issue;
   const withoutValue = { id: "B", properties: {} } as unknown as Issue;
 
+  it("keeps typed scalar and combination columns distinct and matches reordered arrays", () => {
+    const values = [0, false, "null", "0", null, ["a", "b"]];
+    expect(new Set(values.map((value) => propertyGroupId(propertyId, value))).size).toBe(values.length);
+    const issue = { ...withValue, properties: { [propertyId]: ["b", "a"] } } as Issue;
+    const group = { id: propertyGroupId(propertyId, ["a", "b"]), title: "A, B", propertyId, propertyOptionId: ["a", "b"] };
+    expect(getIssueGroupId(issue, `property:${propertyId}`)).toBe(group.id);
+    expect(issueMatchesGroup(issue, group)).toBe(true);
+    expect(buildColumns([issue], [group], `property:${propertyId}`)[group.id]).toEqual([issue.id]);
+  });
+
   it("getIssueGroupId buckets by option id, no-value issues into the none column", () => {
     expect(getIssueGroupId(withValue, `property:${propertyId}`)).toBe(
       propertyGroupId(propertyId, "opt-staging"),

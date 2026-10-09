@@ -1,4 +1,6 @@
 "use client";
+import { isFilterablePropertyType } from "@multica/core/types";
+import { propertyGroupLabel } from "@multica/core/properties";
 
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { cn } from "@multica/ui/lib/utils";
@@ -165,6 +167,7 @@ function buildGroups(
         title: option.name,
         propertyId: groupingProperty.id,
         propertyOptionId: option.id,
+        createData: { properties: { [groupingProperty.id]: option.id } },
         propertyOptionColor: option.color,
       }),
     );
@@ -278,7 +281,7 @@ function BoardViewImpl({
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(boardWsId));
   const groupingPropertyId = propertyIdFromViewKey(storeGrouping);
   const groupingProperty = groupingPropertyId
-    ? workspaceProperties.find((p) => p.id === groupingPropertyId && p.type === "select") ?? null
+    ? workspaceProperties.find((p) => p.id === groupingPropertyId && isFilterablePropertyType(p.type)) ?? null
     : null;
   // A persisted `property:<id>` grouping whose definition is gone (archived,
   // deleted, other workspace) falls back to status columns.
@@ -286,7 +289,7 @@ function BoardViewImpl({
     groupingPropertyId && !groupingProperty ? "status" : storeGrouping;
   const groupingOptionIds = useMemo(
     () =>
-      groupingProperty
+      groupingProperty?.type === "select"
         ? new Set((groupingProperty.config.options ?? []).map((option) => option.id))
         : undefined,
     [groupingProperty],
@@ -405,8 +408,8 @@ function BoardViewImpl({
       if (descriptor.value.kind === "property") {
         const value = descriptor.value;
         id =
-          value.value_state === "value" && typeof value.value === "string"
-            ? propertyGroupId(value.property_id, value.value)
+          value.value_state === "value"
+            ? propertyGroupId(value.property_id, value.value ?? null)
             : propertyGroupId(value.property_id, null);
       }
       const pages = grouped.get(id) ?? [];
@@ -437,9 +440,28 @@ function BoardViewImpl({
       ]),
     ) as Record<string, IssueGroupPageState>;
   }, [groupBranches]);
+  const hydratedPropertyGroups = useMemo<BoardColumnGroup[] | undefined>(() => {
+    if (!groupingProperty || groupingProperty.type === "select" || !groupBranches?.enabled) return undefined;
+    return groupBranches.descriptors.flatMap((descriptor): BoardColumnGroup[] => {
+      const value = descriptor.value;
+      if (value.kind !== "property") return [];
+      const fieldValue = value.value_state === "value" ? value.value ?? null : null;
+      return [{
+        id: propertyGroupId(value.property_id, fieldValue),
+        title: fieldValue === null ? t(($) => $.table.no_value)
+          : typeof fieldValue === "boolean" ? (fieldValue ? t(($) => $.pickers.custom_property.true_label) : t(($) => $.pickers.custom_property.false_label))
+          : propertyGroupLabel(fieldValue, groupingProperty.config.options ?? [], getActorName, groupingProperty.type),
+        propertyId: value.property_id,
+        propertyOptionId: fieldValue,
+        createData: fieldValue === null ? undefined : { properties: { [value.property_id]: fieldValue } },
+        totalCount: descriptor.count,
+      }];
+    });
+  }, [groupingProperty, groupBranches, getActorName, t]);
   const groups = useMemo(
     () => {
       const built =
+        hydratedPropertyGroups ??
         hydratedAssigneeGroups ??
         hydratedProjectGroups ??
         buildGroups(issues, visibleStatuses, grouping, {
@@ -455,7 +477,7 @@ function BoardViewImpl({
         totalCount: groupPagination?.[group.id]?.total ?? group.totalCount,
       }));
     },
-    [hydratedAssigneeGroups, hydratedProjectGroups, issues, visibleStatuses, grouping, getActorName, groupingProperty, projectMap, projectColumnLabels, groupPagination, t],
+    [hydratedPropertyGroups, hydratedAssigneeGroups, hydratedProjectGroups, issues, visibleStatuses, grouping, getActorName, groupingProperty, projectMap, projectColumnLabels, groupPagination, t],
   );
   const groupIds = useMemo(
     () => new Set(groups.map((group) => group.id)),

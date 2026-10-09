@@ -381,16 +381,18 @@ export function FilterPopover({
 }
 
 export function GroupPopover({
+  allowNone = true,
   fields,
   groupBy,
   onChange,
 }: {
+  allowNone?: boolean;
   fields: CollectionField[];
   groupBy: string;
   onChange: (fieldId: string) => void;
 }) {
   const { t } = useT("issues");
-  const groupable = fields.filter((field) => field.type === "select");
+  const groupable = fields;
   const current = groupable.find((field) => field.id === groupBy);
   return (
     <Popover>
@@ -404,19 +406,19 @@ export function GroupPopover({
           />
         }
       />
-      <PopoverContent align="start" className="w-56 p-1">
-        <OptionRow selected={!current} onClick={() => onChange("")}>
+      <PopoverContent align="start" className="max-h-96 w-64 overflow-y-auto p-1">
+        {allowNone && <OptionRow selected={!current} onClick={() => onChange("")}>
           {t(($) => $.cortex.no_group)}
-        </OptionRow>
+        </OptionRow>}
         {groupable.map((field) => (
           <OptionRow key={field.id} selected={field.id === groupBy} onClick={() => onChange(field.id)}>
             <FieldTypeIcon type={field.type} />
             {field.name}
           </OptionRow>
         ))}
-        {groupable.length === 0 && (
+        {current && ["multi_select", "multi_actor", "relation"].includes(current.type) && (
           <p className="px-2 py-1.5 text-caption text-muted-foreground">
-            {t(($) => $.cortex_table.group_needs_select)}
+            {t(($) => $.cortex_table.group_combinations)}
           </p>
         )}
       </PopoverContent>

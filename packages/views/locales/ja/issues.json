@@ -1267,7 +1267,7 @@
     "add_to_group": "{{name}} に追加",
     "board_needs_select": "ボードを使うには単一選択フィールドを追加してください。",
     "calendar_needs_date": "カレンダーを使うには日付フィールドを追加してください。",
-    "group_needs_select": "グループ化できるのは単一選択フィールドだけです。",
+    "group_combinations": "複数値のフィールドは同じ値の組み合わせでグループ化します。",
     "no_filters": "このビューにフィルターはありません",
     "add_filter": "フィルターを追加",
     "clear_filters": "すべてクリア",

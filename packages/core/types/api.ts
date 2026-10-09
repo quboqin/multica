@@ -414,7 +414,7 @@ export type IssueTableGroupValue =
   | {
       kind: "property";
       property_id: string;
-      value?: string | boolean | null;
+      value?: string | number | boolean | string[] | null;
       value_state: "value" | "unavailable" | "unset";
     };
 

@@ -1,4 +1,5 @@
 "use client";
+import { isFilterablePropertyType } from "@multica/core/types";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -167,7 +168,7 @@ export function DraftDefinitionFields() {
 
   const { data: workspaceProperties = [] } = useQuery(propertyListOptions(wsId));
   const groupableProperties = useMemo(
-    () => workspaceProperties.filter((p) => p.type === "select"),
+    () => workspaceProperties.filter((p) => isFilterablePropertyType(p.type)),
     [workspaceProperties],
   );
   const sortableProperties = useMemo(

@@ -183,7 +183,7 @@ describe("field entry points", () => {
     expect(screen.getByRole("menuitem", { name: "Ascending" })).toBeInTheDocument();
   });
 
-  it("leaves sort, group and filter out of a relation column's menu", async () => {
+  it("allows grouping relations while keeping scalar query controls hidden", async () => {
     const user = userEvent.setup();
     const relation: CollectionField = {
       id: "tasks",
@@ -205,9 +205,10 @@ describe("field entry points", () => {
       />,
     );
     await user.click(await screen.findByRole("button", { name: "Implementation" }));
-    // Its cells are links in their own table; the record query cannot read them.
+    expect(await screen.findByRole("menuitem", { name: /Group by this field/ })).toBeVisible();
+    // Relation grouping resolves link targets; scalar sort/filter stay unavailable.
     expect(await screen.findByRole("menuitem", { name: /Edit field/ })).toHaveTextContent("Relation");
-    expect(screen.queryByRole("menuitem", { name: /Ascending|Descending|Filter|Group/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Ascending|Descending|Filter/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitem", { name: "Hide in this view" }));
     expect(tableActions.onHide).toHaveBeenCalledWith("tasks");
   });

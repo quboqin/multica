@@ -68,6 +68,7 @@ export function CollectionTable({
   actions,
   selectedRecordId,
   newRecordFields,
+  canCreate = true,
   showHeader = true,
 }: {
   collectionId: string;
@@ -80,6 +81,7 @@ export function CollectionTable({
   selectedRecordId: string | null;
   /** Values a row created in this table starts with, e.g. its group. */
   newRecordFields?: Record<string, unknown>;
+  canCreate?: boolean;
   showHeader?: boolean;
 }) {
   const wsId = useWorkspaceId();
@@ -226,9 +228,7 @@ export function CollectionTable({
                     : undefined
                 }
                 onGroup={
-                  field.type === "select"
-                    ? () => actions.onGroup(field.id)
-                    : undefined
+                  () => actions.onGroup(field.id)
                 }
                 onFilter={
                   fieldIsQueryable(field)
@@ -339,7 +339,7 @@ export function CollectionTable({
           })}
         </button>
       )}
-      {!actions.readOnly && <NewRecordRow
+      {!actions.readOnly && canCreate && <NewRecordRow
         pending={commands.createRecord.isPending}
         onCreate={(title) =>
           commands.createRecord.mutateAsync({ title, fields: newRecordFields })

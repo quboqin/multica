@@ -398,6 +398,12 @@ END, ''))`,
   WHEN jsonb_typeof(i.properties -> %s) = 'string' THEN 'unavailable:' || (i.properties ->> %s)
   ELSE 'unavailable:'
 END`, quotedKey, quotedKey, quotedKey, quotedKey, quotedKey, quotedKey)
+		case "text", "number", "date", "url", "actor", "multi_select", "multi_actor":
+			valueExpr := "i.properties -> " + quotedKey
+			if property.Type == "multi_select" || property.Type == "multi_actor" {
+				valueExpr = "(SELECT jsonb_agg(v ORDER BY v) FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(" + valueExpr + ") = 'array' THEN " + valueExpr + " ELSE '[]'::jsonb END) v)"
+			}
+			resolved.groupExpr = "CASE WHEN " + valueExpr + " IS NULL OR " + valueExpr + " IN ('null'::jsonb, '\"\"'::jsonb, '[]'::jsonb) THEN 'unset:' ELSE 'value:' || (" + valueExpr + ")::text END"
 		case "checkbox":
 			resolved.groupExpr = fmt.Sprintf(`CASE
   WHEN NOT (i.properties ? %s) THEN 'unset:'
@@ -699,6 +705,10 @@ func (group resolvedIssueTableGroup) descriptor(raw string, count int64, context
 					return descriptor, fmt.Errorf("unexpected checkbox group value %q", rawValue)
 				}
 				descriptor.Value.Value = value
+			} else if group.propertyType != "select" {
+				if err := json.Unmarshal([]byte(rawValue), &descriptor.Value.Value); err != nil {
+					return descriptor, err
+				}
 			} else {
 				descriptor.Value.Value = rawValue
 			}
@@ -854,6 +864,13 @@ func (group resolvedIssueTableGroup) predicate(w http.ResponseWriter, key string
 		}
 		value := string(decoded)
 		keySQL := "'" + group.propertyID + "'"
+		if group.propertyType != "select" && group.propertyType != "checkbox" {
+			if state != "value" && state != "unset" || state == "unset" && value != "" {
+				writeError(w, http.StatusBadRequest, "invalid group_key")
+				return "", false
+			}
+			return "(" + group.groupExpr + ") = " + addArg(state+":"+value) + "::text", true
+		}
 		switch state {
 		case "unset":
 			if value != "" {
@@ -966,7 +983,7 @@ func (h *Handler) ListIssueTableGroups(w http.ResponseWriter, r *http.Request) {
 		expectedValues := []string{"unset:"}
 		if group.propertyType == "select" {
 			expectedValues = append(append([]string(nil), group.activeOptionOrder...), "unset:")
-		} else {
+		} else if group.propertyType == "checkbox" {
 			expectedValues = []string{"value:false", "value:true", "unset:"}
 		}
 		expectedRef := addArg(expectedValues)
