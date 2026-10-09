@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, screen, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionField } from "@multica/core/collections";
@@ -141,17 +141,18 @@ afterEach(cleanup);
 // A table left in a layout without column headers used to offer no way to add
 // or edit a field: the board only said which field it was missing.
 describe("fields in layouts without column headers", () => {
-  it("offers the single-select field a board is missing", async () => {
+  it("groups a board by title without a single-select field and keeps field creation available", async () => {
     const user = userEvent.setup();
     mount({ layout: "board", fields: [field("notes", "Notes", "text")] });
     const main = await screen.findByRole("main");
-    expect(
-      await within(main).findByText("Add a single-select field to use the board layout."),
-    ).toBeInTheDocument();
-    await user.click(within(main).getByRole("button", { name: "New field" }));
+    expect(await within(main).findByRole("button", { name: /Group.*Name/ })).toBeInTheDocument();
+    await waitFor(() => expect(api.listCollectionRecords).toHaveBeenCalledWith(
+      "c-1", expect.objectContaining({ group_by: "title" }), null, expect.anything(), "ws-1",
+    ));
+    await user.click(within(main).getByRole("button", { name: /Display/ }));
+    await user.click(await screen.findByRole("button", { name: "New field" }));
     const panel = await screen.findByRole("dialog", { name: "New field" });
-    expect(within(panel).getByRole("combobox", { name: "Field type" })).toHaveTextContent("Select");
-    expect(within(panel).getByLabelText("Option 1")).toBeInTheDocument();
+    expect(within(panel).getByRole("combobox", { name: "Field type" })).toHaveTextContent("Text");
   });
 
   it("offers the date field a calendar is missing", async () => {
@@ -214,7 +215,7 @@ describe("fields in layouts without column headers", () => {
     const user = userEvent.setup();
     mount({ layout: "board", fields: [field("notes", "Notes", "text")], role: "member" });
     const main = await screen.findByRole("main");
-    await within(main).findByText("Add a single-select field to use the board layout.");
+    await within(main).findByRole("button", { name: /Group.*Name/ });
     expect(within(main).queryByRole("button", { name: "New field" })).not.toBeInTheDocument();
     expect(within(main).getByRole("button", { name: "New row" })).toBeDisabled();
     expect(within(main).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
