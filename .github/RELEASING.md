@@ -15,9 +15,11 @@ merge-ref result or a manual run is not sufficient. `ci-gate` verifies all
 selected CI jobs and only accepts skips for unselected scopes. Mobile Verify
 runs on every `qqb_main` push/PR to make this release check unambiguous.
 
-The release then checks publisher credentials, runs Go tests and `govulncheck`,
-and publishes CLI/Homebrew, multi-architecture container images, Helm, and all
-three Desktop platforms. The vulnerability scan is fail-closed by default.
+The release then checks Homebrew publisher credentials, runs Go tests and
+`govulncheck`, and publishes CLI/Homebrew, multi-architecture container images,
+Helm, and Windows/Linux Desktop. macOS Desktop publication is optional and runs
+alongside the required publishers; its Apple credentials are checked only in
+`desktop-mac`. The vulnerability scan is fail-closed by default.
 GoReleaser is pinned to v2.8.2, which accepts the current `brews` configuration;
 run its `check` command and a snapshot build before changing that pin/schema.
 
@@ -56,6 +58,38 @@ immutable releases disabled with this design: immutable releases cannot accept
 later assets or same-tag replacement. To adopt immutability, first change all
 publishers to stage a draft, finalize after all uploads, then update Homebrew.
 `release-complete` is a deployment gate, not an atomic public-release transaction.
+
+## Optional macOS Desktop publication
+
+`release-complete` does not depend on `desktop-mac`. It verifies all six CLI
+targets (including Darwin), Windows/Linux Desktop assets and updater feeds, and
+both container architectures after the required publishers finish. Apple
+credential, signing, notarization, upload, or macOS asset-validation failures do
+not block this gate or an enabled production deployment. `desktop-mac` uses
+job-level `continue-on-error`; failures remain visible in its steps, warning,
+and job summary, but do not make the workflow fail.
+
+macOS still requires Developer ID signing and Apple notarization. After both
+architectures upload, that job separately verifies the macOS installers,
+blockmaps, and updater references. A successful `release-complete` or overall
+workflow does **not** imply that macOS downloads or updates are available. Check
+`desktop-mac`'s packaging and asset-verification steps before announcing them.
+
+The asset verifier supports `--scope=required` for the main gate and
+`--scope=mac` for the macOS job. Omitting the option (or using `--scope=all`)
+still requires all platforms for an explicit full-release audit.
+
+Because macOS remains in the same workflow, the overall run stays in progress
+while Apple is processing, even after the required release/deployment completes.
+The workflow-wide `release-stable` concurrency lock also remains held, so a new
+tag's workflow waits for the older run to finish. This preserves ordering of
+shared updater feeds and Homebrew publication across versions. Making later
+releases independent of that wait requires separating macOS publication and
+designing its cross-version publication ordering.
+
+Workflow changes apply to new tags pointing at the reviewed change. Re-running
+an older tag uses that tag's workflow; do not move `v0.7.1` or another existing
+tag to apply this policy retroactively.
 
 ## Channels and connection defaults
 
@@ -162,9 +196,10 @@ overlapping upgrades; the production job is never cancelled by a newer release.
    git push origin v0.6.2
    ```
 
-3. Wait for `release-complete`: it requires CLI/Homebrew, Desktop, images and Helm
-   publishers; validates required asset names, nonempty uploads, checksum entries
-   and per-architecture updater references; and verifies both image architectures.
+3. Wait for `release-complete`: it requires CLI/Homebrew, Windows/Linux Desktop,
+   images and Helm publishers; validates required asset names, nonempty uploads,
+   checksum entries and per-architecture updater references; and verifies both
+   image architectures. Check macOS publication separately in `desktop-mac`.
    It does not download every installer or execute it. Installation and a real
    A-to-B update test remain necessary acceptance checks.
 4. If automatic deployment is enabled, inspect its result and backups. Otherwise

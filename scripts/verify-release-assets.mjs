@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 
-export function expectedAssets(tag) {
+export function expectedAssets(tag, scope = "all") {
   if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag)) throw new Error("Invalid stable release tag");
+  if (!["all", "required", "mac"].includes(scope)) throw new Error(`Invalid release verification scope: ${scope}`);
   const version = tag.slice(1);
   const cli = [];
-  for (const os of ["darwin", "linux", "windows"]) {
+  for (const os of scope === "mac" ? [] : ["darwin", "linux", "windows"]) {
     for (const arch of ["amd64", "arm64"]) {
       const ext = os === "windows" ? "zip" : "tar.gz";
       cli.push(`multica-cli-${version}-${os}-${arch}.${ext}`, `multica_${os}_${arch}.${ext}`);
@@ -13,30 +14,39 @@ export function expectedAssets(tag) {
   }
   const desktop = [];
   for (const arch of ["x64", "arm64"]) {
-    for (const ext of ["dmg", "zip"]) {
+    for (const ext of scope === "required" ? [] : ["dmg", "zip"]) {
       const name = `multica-desktop-${version}-mac-${arch}.${ext}`;
       desktop.push(name, `${name}.blockmap`);
     }
-    const win = `multica-desktop-${version}-windows-${arch}.exe`;
-    desktop.push(win, `${win}.blockmap`);
+    if (scope !== "mac") {
+      const win = `multica-desktop-${version}-windows-${arch}.exe`;
+      desktop.push(win, `${win}.blockmap`);
+    }
   }
-  for (const [ext, arches] of Object.entries({ AppImage: ["x86_64", "arm64"], deb: ["amd64", "arm64"], rpm: ["x86_64", "aarch64"] })) {
-    for (const arch of arches) desktop.push(`multica-desktop-${version}-linux-${arch}.${ext}`);
+  if (scope !== "mac") {
+    for (const [ext, arches] of Object.entries({ AppImage: ["x86_64", "arm64"], deb: ["amd64", "arm64"], rpm: ["x86_64", "aarch64"] })) {
+      for (const arch of arches) desktop.push(`multica-desktop-${version}-linux-${arch}.${ext}`);
+    }
   }
   const feeds = {
-    "latest.yml": `multica-desktop-${version}-windows-x64.exe`,
-    "latest-arm64.yml": `multica-desktop-${version}-windows-arm64.exe`,
-    "latest-mac.yml": `multica-desktop-${version}-mac-arm64.zip`,
-    "latest-x64-mac.yml": `multica-desktop-${version}-mac-x64.zip`,
-    "latest-linux.yml": `multica-desktop-${version}-linux-x86_64.AppImage`,
-    "latest-linux-arm64.yml": `multica-desktop-${version}-linux-arm64.AppImage`,
+    ...(scope !== "mac" ? {
+      "latest.yml": `multica-desktop-${version}-windows-x64.exe`,
+      "latest-arm64.yml": `multica-desktop-${version}-windows-arm64.exe`,
+      "latest-linux.yml": `multica-desktop-${version}-linux-x86_64.AppImage`,
+      "latest-linux-arm64.yml": `multica-desktop-${version}-linux-arm64.AppImage`,
+    } : {}),
+    ...(scope !== "required" ? {
+      "latest-mac.yml": `multica-desktop-${version}-mac-arm64.zip`,
+      "latest-x64-mac.yml": `multica-desktop-${version}-mac-x64.zip`,
+    } : {}),
   };
-  return { cli, feeds, all: [...cli, ...desktop, ...Object.keys(feeds), "checksums.txt"] };
+  const metadata = [...(cli.length ? ["checksums.txt"] : []), ...Object.keys(feeds)];
+  return { cli, feeds, metadata, all: [...cli, ...desktop, ...metadata] };
 }
 
-export function verifyReleaseAssets(release, tag, contents) {
+export function verifyReleaseAssets(release, tag, contents, scope = "all") {
   if (release.tag_name !== tag || release.draft || release.prerelease) throw new Error("Expected the published stable release");
-  const expected = expectedAssets(tag);
+  const expected = expectedAssets(tag, scope);
   const assets = new Map(release.assets.map((asset) => [asset.name, asset]));
   for (const name of expected.all) {
     const asset = assets.get(name);
@@ -45,7 +55,7 @@ export function verifyReleaseAssets(release, tag, contents) {
       throw new Error(`Unexpected download source: ${name}`);
     }
   }
-  const checksums = new Map((contents["checksums.txt"] ?? "").trim().split(/\r?\n/).map((line) => {
+  const checksums = new Map((expected.cli.length ? (contents["checksums.txt"] ?? "").trim().split(/\r?\n/) : []).map((line) => {
     const match = /^([a-f0-9]{64})\s+\*?(\S+)$/.exec(line);
     if (!match) throw new Error("Malformed checksums.txt");
     return [match[2], match[1]];
@@ -67,8 +77,12 @@ export function verifyReleaseAssets(release, tag, contents) {
 }
 
 async function main() {
-  const tag = process.argv[2];
-  const { feeds } = expectedAssets(tag);
+  const [tag, scopeArg, ...extra] = process.argv.slice(2);
+  if (extra.length || (scopeArg !== undefined && !scopeArg.startsWith("--scope="))) {
+    throw new Error("Usage: verify-release-assets.mjs vX.Y.Z [--scope=all|required|mac]");
+  }
+  const scope = scopeArg === undefined ? "all" : scopeArg.slice("--scope=".length);
+  const { metadata } = expectedAssets(tag, scope);
   const response = await fetch(`https://api.github.com/repos/quboqin/multica/releases/tags/${tag}`, {
     headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: "application/vnd.github+json" },
     signal: AbortSignal.timeout(30_000),
@@ -76,14 +90,14 @@ async function main() {
   if (!response.ok) throw new Error(`Release API: HTTP ${response.status}`);
   const release = await response.json();
   const contents = {};
-  for (const name of ["checksums.txt", ...Object.keys(feeds)]) {
+  for (const name of metadata) {
     // Public release URLs: never forward the Actions credential to redirects.
     const download = await fetch(`https://github.com/quboqin/multica/releases/download/${tag}/${name}`, { signal: AbortSignal.timeout(30_000) });
     if (!download.ok) throw new Error(`Cannot download ${name}: HTTP ${download.status}`);
     contents[name] = await download.text();
   }
-  verifyReleaseAssets(release, tag, contents);
-  console.log(`All CLI/Desktop assets and update references are present for ${tag}.`);
+  verifyReleaseAssets(release, tag, contents, scope);
+  console.log(`Release assets and update references verified for ${tag} (scope: ${scope}).`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
