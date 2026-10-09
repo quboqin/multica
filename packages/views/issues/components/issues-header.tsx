@@ -2088,7 +2088,7 @@ export function IssueDisplayControls({
           viewBaseline={viewBaseline}
         />
 
-        {(viewMode === "table" || viewMode === "board") && (
+        {(["table", "board", "list"].includes(viewMode)) && (
           <DropdownMenu
             open={tableGroupMenuOpen}
             onOpenChange={setTableGroupMenuOpen}
@@ -2096,17 +2096,17 @@ export function IssueDisplayControls({
             <DropdownMenuTrigger
               render={
                 <Button
-                  aria-label={viewMode === "board" ? t(($) => $.table.group_active, { group: groupingLabel }) : effectiveTableGrouping === "none" ? t(($) => $.table.group_label) : t(($) => $.table.group_active, { group: tableGroupingLabel })}
+                  aria-label={viewMode !== "table" ? t(($) => $.table.group_active, { group: groupingLabel }) : effectiveTableGrouping === "none" ? t(($) => $.table.group_label) : t(($) => $.table.group_active, { group: tableGroupingLabel })}
                   variant="outline"
                   size="sm"
                   className={controlButtonClass}
                 >
                   <Rows3 className="size-3.5" />
                   <span className="hidden md:inline">
-                    {viewMode !== "board" && effectiveTableGrouping === "none"
+                    {viewMode === "table" && effectiveTableGrouping === "none"
                       ? t(($) => $.table.group_label)
                       : t(($) => $.table.group_active, {
-                          group: viewMode === "board" ? groupingLabel : tableGroupingLabel,
+                          group: viewMode !== "table" ? groupingLabel : tableGroupingLabel,
                         })}
                   </span>
                   <ChevronDown className="size-3 text-muted-foreground" />
@@ -2115,9 +2115,9 @@ export function IssueDisplayControls({
             />
             <DropdownMenuContent align="end" className="max-h-96 w-64 overflow-y-auto">
               <DropdownMenuRadioGroup
-                value={viewMode === "board" ? grouping : effectiveTableGrouping}
+                value={viewMode !== "table" ? grouping : effectiveTableGrouping}
                 onValueChange={(value) => {
-                  if (viewMode === "board") act.setGrouping(value as IssueGrouping);
+                  if (viewMode !== "table") act.setGrouping(value as IssueGrouping);
                   else act.setTableGrouping(value as TableGrouping);
                   setTableGroupMenuOpen(false);
                 }}

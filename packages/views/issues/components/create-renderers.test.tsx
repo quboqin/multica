@@ -1,9 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render as renderComponent, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BUILT_IN_STATUS_ORDER } from "@multica/core/issues/config";
 import { BoardColumn } from "./board-column";
 import { ListView } from "./list-view";
 import type { IssueStatusPagination } from "../surface/use-issue-status-branches";
+
+function render(ui: React.ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return renderComponent(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
+
+vi.mock("@multica/core/properties", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@multica/core/properties")>()),
+  propertyListOptions: () => ({ queryKey: ["properties"], queryFn: async () => [], initialData: [] }),
+  useSetIssueProperty: () => ({ mutate: vi.fn() }),
+  useUnsetIssueProperty: () => ({ mutate: vi.fn() }),
+}));
 
 vi.mock("@multica/core/issue-statuses/hooks", async () => {
   const { buildIssueStatusCatalog } = await import("@multica/core/issue-statuses/queries");
@@ -51,6 +64,8 @@ vi.mock("@multica/core/issues/stores/view-store-context", () => ({
       sortBy: "position",
       listCollapsedStatuses: [],
       toggleListCollapsed: vi.fn(),
+      listCollapsedGroups: [],
+      toggleListGroupCollapsed: vi.fn(),
     };
     return selector ? selector(state) : state;
   },

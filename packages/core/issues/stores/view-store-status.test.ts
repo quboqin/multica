@@ -185,3 +185,21 @@ describe("saved view baseline", () => {
     expect([...baseline.status]).toEqual(["qa"]);
   });
 });
+
+
+describe("list field-group collapse preferences", () => {
+  it("keeps field groups separate from status collapse and restores valid keys", () => {
+    const store = createStore<IssueViewState>()((set) => viewStoreSlice(set));
+    store.getState().toggleListCollapsed("todo");
+    store.getState().toggleListGroupCollapsed("property:estimate:0");
+    store.getState().setGrouping("project");
+    expect(store.getState().listCollapsedGroups).toEqual(["property:estimate:0"]);
+    expect(store.getState().listCollapsedStatuses).toEqual(["todo"]);
+    const restored = mergeViewStatePersisted({
+      listCollapsedGroups: ["property:estimate:0", 5, null],
+    }, store.getState());
+    expect(restored.listCollapsedGroups).toEqual(["property:estimate:0"]);
+    store.getState().toggleListGroupCollapsed("property:estimate:0");
+    expect(store.getState().listCollapsedGroups).toEqual([]);
+  });
+});
