@@ -36,3 +36,54 @@ test("partial, foreign, draft and mismatched architecture releases fail closed",
     assert.throws(() => verifyReleaseAssets(f.release, f.tag, f.contents));
   }
 });
+
+function retainAssets(f, predicate) {
+  f.release.assets = f.release.assets.filter(({ name }) => predicate(name));
+  for (const name of Object.keys(f.contents)) {
+    if (!predicate(name)) delete f.contents[name];
+  }
+}
+
+const isMacDesktop = (name) => name.includes("-mac-") || /^latest(?:-x64)?-mac\.yml$/.test(name);
+
+test("required publication succeeds without macOS desktop but still requires every CLI target", () => {
+  const f = fixture();
+  retainAssets(f, (name) => !isMacDesktop(name));
+  verifyReleaseAssets(f.release, f.tag, f.contents, "required");
+  assert.throws(() => verifyReleaseAssets(f.release, f.tag, f.contents), /Missing or incomplete asset/);
+  assert.equal(expectedAssets(f.tag, "required").cli.length, 12);
+  assert.ok(!expectedAssets(f.tag, "required").all.some(isMacDesktop));
+  f.release.assets = f.release.assets.filter(({ name }) => name !== "multica-cli-1.2.3-darwin-arm64.tar.gz");
+  assert.throws(() => verifyReleaseAssets(f.release, f.tag, f.contents, "required"), /Missing or incomplete asset/);
+});
+
+test("required publication still rejects missing Windows/Linux assets and broken checksums or feeds", () => {
+  for (const mutate of [
+    (f) => { f.release.assets = f.release.assets.filter(({ name }) => name !== "multica-desktop-1.2.3-windows-x64.exe"); },
+    (f) => { f.release.assets = f.release.assets.filter(({ name }) => name !== "multica-desktop-1.2.3-linux-arm64.deb"); },
+    (f) => { delete f.contents["checksums.txt"]; },
+    (f) => { f.contents["latest-linux-arm64.yml"] = f.contents["latest-linux.yml"]; },
+  ]) {
+    const f = fixture();
+    retainAssets(f, (name) => !isMacDesktop(name));
+    mutate(f);
+    assert.throws(() => verifyReleaseAssets(f.release, f.tag, f.contents, "required"));
+  }
+});
+
+test("macOS publication independently requires both architectures and their updater references", () => {
+  const f = fixture();
+  retainAssets(f, isMacDesktop);
+  verifyReleaseAssets(f.release, f.tag, f.contents, "mac");
+  assert.equal(expectedAssets(f.tag, "mac").all.length, 10);
+  for (const name of ["multica-desktop-1.2.3-mac-x64.dmg", "multica-desktop-1.2.3-mac-arm64.zip.blockmap"]) {
+    const missing = { ...f.release, assets: f.release.assets.filter((asset) => asset.name !== name) };
+    assert.throws(() => verifyReleaseAssets(missing, f.tag, f.contents, "mac"), /Missing or incomplete asset/);
+  }
+  f.contents["latest-x64-mac.yml"] = f.contents["latest-mac.yml"];
+  assert.throws(() => verifyReleaseAssets(f.release, f.tag, f.contents, "mac"), /Wrong architecture/);
+});
+
+test("unknown verification scopes fail closed", () => {
+  assert.throws(() => expectedAssets("v1.2.3", "typo"), /scope/);
+});

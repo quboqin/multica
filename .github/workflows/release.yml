@@ -52,21 +52,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node scripts/check-release-ci.mjs
 
-      - name: Require publisher credentials before uploading any artifacts
+      - name: Require Homebrew publisher credentials
         env:
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
-          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          for key in HOMEBREW_TAP_GITHUB_TOKEN MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
-            if [ -z "${!key}" ]; then
-              echo "::error::Missing publisher secret: $key"
-              exit 1
-            fi
-          done
+          if [ -z "$HOMEBREW_TAP_GITHUB_TOKEN" ]; then
+            echo "::error::Missing publisher secret: HOMEBREW_TAP_GITHUB_TOKEN"
+            exit 1
+          fi
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -473,6 +466,9 @@ jobs:
   desktop-mac:
     needs: release
     runs-on: macos-latest
+    # Apple notarization must not block the required release or deployment.
+    # Keep signing/validation failures visible in this optional job's logs.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -506,20 +502,31 @@ jobs:
             fi
           done
           node scripts/package.mjs --mac --x64 --arm64 --publish always -c.forceCodeSigning=true
+      - name: Verify macOS downloads and updater references
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/verify-release-assets.mjs "$RELEASE_TAG" --scope=mac
+      - name: Report optional macOS publication failure
+        if: failure()
+        run: |
+          echo "::warning::Optional macOS publication failed. Inspect desktop-mac before advertising macOS downloads or updates."
+          echo "### macOS publication incomplete" >> "$GITHUB_STEP_SUMMARY"
+          echo "The required release and deployment do not depend on macOS. Inspect this job before advertising macOS downloads or updates." >> "$GITHUB_STEP_SUMMARY"
 
   release-complete:
-    needs: [verify, release, desktop, desktop-mac, docker-backend-merge, docker-web-merge, helm-chart]
+    needs: [verify, release, desktop, docker-backend-merge, docker-web-merge, helm-chart]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Verify downloads and updater references
+      - name: Verify required downloads and updater references
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.verify.outputs.tag_name }}
-        run: node scripts/verify-release-assets.mjs "$RELEASE_TAG"
+        run: node scripts/verify-release-assets.mjs "$RELEASE_TAG" --scope=required
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
