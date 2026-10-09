@@ -1,4 +1,6 @@
 "use client";
+import { isFilterablePropertyType } from "@multica/core/types";
+import { propertyGroupLabel } from "@multica/core/properties";
 
 import {
   DataViewTable,
@@ -1132,7 +1134,7 @@ export function TableView({
     () =>
       new Set(
         properties
-          .filter((property) => ["select", "checkbox"].includes(property.type))
+          .filter((property) => isFilterablePropertyType(property.type))
           .map((property) => property.id),
       ),
     [properties],
@@ -1636,8 +1638,7 @@ export function TableView({
           : t(($) => $.pickers.custom_property.false_label);
       }
       return (
-        property?.config.options?.find((option) => option.id === value.value)
-          ?.name ?? String(value.value ?? "")
+        propertyGroupLabel(value.value, property?.config.options ?? [], getActorName, property?.type)
       );
     },
     [getActorName, groupProjectMap, propertyById, resolveStatusLabel, t],

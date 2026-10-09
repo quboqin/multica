@@ -1,4 +1,5 @@
 "use client";
+import { groupValuesEqual } from "@multica/core/properties";
 
 import {
   useCallback,
@@ -121,10 +122,10 @@ function issueMatchesDescriptor(
       return issue.parent_issue_id === owner.parent_id;
     case "property": {
       const propertyValue = issue.properties?.[owner.property_id];
-      if (owner.value_state === "unset") return propertyValue === undefined;
-      if (owner.value_state === "value") return propertyValue === owner.value;
+      if (owner.value_state === "unset") return groupValuesEqual(propertyValue, null);
+      if (owner.value_state === "value") return groupValuesEqual(propertyValue, owner.value);
       return owner.value !== undefined
-        ? propertyValue === owner.value
+        ? groupValuesEqual(propertyValue, owner.value)
         : propertyValue !== undefined;
     }
     case "status":

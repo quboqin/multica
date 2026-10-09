@@ -12,8 +12,8 @@ import { defaultStorage } from "../../platform/storage";
 export type ViewMode = "board" | "list" | "table" | "gantt" | "swimlane" | "calendar" | "gallery";
 export type GanttZoom = "day" | "week" | "month";
 /**
- * Board grouping. Besides the three built-ins, a select-type custom property
- * groups columns by its options via the `property:<definitionId>` form.
+ * Board grouping. Besides the three built-ins, custom properties
+ * group columns by their typed values via the `property:<definitionId>` form.
  * Persisted values may reference a since-archived definition — consumers must
  * fall back to "status" when the definition can't be resolved.
  */

@@ -418,19 +418,6 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 		column := "r.fields->>" + add(uuidToString(fieldID))
 		where = append(where, column+">="+add(start)+" AND "+column+"<="+add(end))
 	}
-	groupExpr := "''::text"
-	if group := r.URL.Query().Get("group_by"); group != "" {
-		id, ok := parseUUIDOrBadRequest(w, group, "group_by")
-		if !ok {
-			return
-		}
-		def, err := h.Queries.GetCollectionField(r.Context(), db.GetCollectionFieldParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
-		if err != nil || def.Type != "select" {
-			writeError(w, 400, "group_by must name a select field")
-			return
-		}
-		groupExpr = "COALESCE(r.fields->>'" + uuidToString(id) + "','__none__')"
-	}
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "failed to read records")
@@ -440,6 +427,13 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	if _, err = tx.Exec(r.Context(), "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"); err != nil {
 		writeError(w, 500, "failed to read snapshot")
 		return
+	}
+	groupExpr, groupValues, ok := h.collectionGroupExpression(w, r, tx, collection, where, &args)
+	if !ok {
+		return
+	}
+	if r.URL.Query().Get("group_by") != "" {
+		where = append(where, "("+groupExpr+") IS NOT NULL")
 	}
 	groupRows, err := tx.Query(r.Context(), "SELECT "+groupExpr+",count(*) FROM record r WHERE "+strings.Join(where, " AND ")+" GROUP BY 1 ORDER BY 1", args...)
 	if err != nil {
@@ -456,7 +450,11 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 			writeError(w, 500, "failed to read groups")
 			return
 		}
-		groups = append(groups, map[string]any{"key": key, "count": count})
+		item := map[string]any{"key": key, "count": count}
+		if value, exists := groupValues[key]; exists {
+			item["value"] = value
+		}
+		groups = append(groups, item)
 		total += count
 	}
 	err = groupRows.Err()

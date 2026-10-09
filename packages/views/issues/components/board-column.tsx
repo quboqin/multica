@@ -87,10 +87,10 @@ export interface BoardColumnGroup {
   /** Display-only, for the column's leading icon. Null on the "No project"
    *  column and on a project the projects query cannot resolve. */
   project?: Pick<Project, "icon"> | null;
-  /** Set when the board is grouped by a select-type custom property. */
+  /** Set when the board is grouped by a custom property. */
   propertyId?: string;
-  /** Option id for this column; null = the "No value" column. */
-  propertyOptionId?: string | null;
+  /** Typed value for this column; null = the "No value" column. */
+  propertyOptionId?: import("@multica/core/types").IssuePropertyValue | null;
   propertyOptionColor?: string;
   totalCount?: number;
   createData?: IssueCreateDefaults;

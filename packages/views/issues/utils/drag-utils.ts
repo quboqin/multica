@@ -1,3 +1,4 @@
+import { groupValueKey, groupValuesEqual } from "@multica/core/properties";
 import {
   pointerWithin,
   closestCenter,
@@ -36,8 +37,8 @@ export function statusGroupId(status: IssueStatus): string {
   return `status:${status}`;
 }
 
-export function propertyGroupId(propertyId: string, optionId: string | null): string {
-  return `property:${propertyId}:${optionId ?? "none"}`;
+export function propertyGroupId(propertyId: string, optionId: import("@multica/core/types").IssuePropertyValue | null): string {
+  return `property:${propertyId}:${groupValueKey(optionId)}`;
 }
 
 export function assigneeGroupId(
@@ -64,12 +65,12 @@ export function getIssueGroupId(
   const propertyId = propertyIdFromViewKey(grouping);
   if (propertyId) {
     const value = issue.properties?.[propertyId];
-    let optionId = typeof value === "string" ? value : null;
+    let optionId: import("@multica/core/types").IssuePropertyValue | null = value ?? null;
     // A value referencing an option no longer in the definition (removed
     // before the in-use guard existed, or by a newer server) must bucket
     // into the No-value column — an unmatched column id would silently drop
     // the issue from the board.
-    if (optionId !== null && knownOptionIds && !knownOptionIds.has(optionId)) {
+    if (optionId !== null && knownOptionIds && !knownOptionIds.has(String(optionId))) {
       optionId = null;
     }
     return propertyGroupId(propertyId, optionId);
@@ -150,8 +151,7 @@ export function issueMatchesGroup(issue: Issue, group: BoardColumnGroup): boolea
   if (group.status) return issue.status === group.status;
   if (group.propertyId !== undefined) {
     const value = issue.properties?.[group.propertyId];
-    const optionId = typeof value === "string" ? value : null;
-    return optionId === (group.propertyOptionId ?? null);
+    return groupValuesEqual(value, group.propertyOptionId);
   }
   if (group.projectId !== undefined) {
     return (issue.project_id ?? null) === group.projectId;

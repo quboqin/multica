@@ -1544,7 +1544,7 @@ const IssueTableGroupValueSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("property"),
     property_id: z.string(),
-    value: z.union([z.string(), z.boolean(), z.null()]).optional(),
+    value: z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()]).optional(),
     value_state: z.enum(["value", "unavailable", "unset"]),
   }).loose(),
 ]);

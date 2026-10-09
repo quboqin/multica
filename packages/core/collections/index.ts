@@ -118,7 +118,7 @@ export const CollectionDetailSchema = z.object({
 export const CollectionPageSchema = z.object({
   records: z.array(CollectionRecordSchema),
   total: z.number().nonnegative(),
-  groups: z.array(z.object({ key: z.string(), count: z.number() })),
+  groups: z.array(z.object({ key: z.string(), count: z.number(), value: z.unknown().optional() })),
   next_cursor: z.string().nullable(),
 });
 export type Collection = z.infer<typeof CollectionSchema>;

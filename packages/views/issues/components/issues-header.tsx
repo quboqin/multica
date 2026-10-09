@@ -1952,14 +1952,10 @@ export function IssueDisplayControls({
     () => workspaceProperties.filter((p) => p.type === "number" || p.type === "date"),
     [workspaceProperties],
   );
-  const groupableProperties = useMemo(
-    () => workspaceProperties.filter((p) => p.type === "select"),
-    [workspaceProperties],
-  );
   const tableGroupableProperties = useMemo(
     () =>
       workspaceProperties.filter((p) =>
-        ["select", "checkbox"].includes(p.type),
+        isFilterablePropertyType(p.type),
       ),
     [workspaceProperties],
   );
@@ -2092,7 +2088,7 @@ export function IssueDisplayControls({
           viewBaseline={viewBaseline}
         />
 
-        {viewMode === "table" && (
+        {(viewMode === "table" || viewMode === "board") && (
           <DropdownMenu
             open={tableGroupMenuOpen}
             onOpenChange={setTableGroupMenuOpen}
@@ -2100,33 +2096,35 @@ export function IssueDisplayControls({
             <DropdownMenuTrigger
               render={
                 <Button
+                  aria-label={viewMode === "board" ? t(($) => $.table.group_active, { group: groupingLabel }) : effectiveTableGrouping === "none" ? t(($) => $.table.group_label) : t(($) => $.table.group_active, { group: tableGroupingLabel })}
                   variant="outline"
                   size="sm"
                   className={controlButtonClass}
                 >
                   <Rows3 className="size-3.5" />
                   <span className="hidden md:inline">
-                    {effectiveTableGrouping === "none"
+                    {viewMode !== "board" && effectiveTableGrouping === "none"
                       ? t(($) => $.table.group_label)
                       : t(($) => $.table.group_active, {
-                          group: tableGroupingLabel,
+                          group: viewMode === "board" ? groupingLabel : tableGroupingLabel,
                         })}
                   </span>
                   <ChevronDown className="size-3 text-muted-foreground" />
                 </Button>
               }
             />
-            <DropdownMenuContent align="end" className="w-auto min-w-48">
+            <DropdownMenuContent align="end" className="max-h-96 w-64 overflow-y-auto">
               <DropdownMenuRadioGroup
-                value={effectiveTableGrouping}
+                value={viewMode === "board" ? grouping : effectiveTableGrouping}
                 onValueChange={(value) => {
-                  act.setTableGrouping(value as TableGrouping);
+                  if (viewMode === "board") act.setGrouping(value as IssueGrouping);
+                  else act.setTableGrouping(value as TableGrouping);
                   setTableGroupMenuOpen(false);
                 }}
               >
-                <DropdownMenuRadioItem value="none">
+                {viewMode === "table" && <DropdownMenuRadioItem value="none">
                   {t(($) => $.table.group_none)}
-                </DropdownMenuRadioItem>
+                </DropdownMenuRadioItem>}
                 <DropdownMenuRadioItem value="status">
                   {t(($) => $.table.columns.status)}
                 </DropdownMenuRadioItem>
@@ -2149,6 +2147,9 @@ export function IssueDisplayControls({
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
+              <p className="px-2 py-1.5 text-caption text-muted-foreground">
+                {t(($) => $.cortex_table.group_combinations)}
+              </p>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -2194,47 +2195,6 @@ export function IssueDisplayControls({
               {/* Caption label left, control right; multi-control sections
                   (Ordering, Card properties) stack the label on top. Spacing
                   separates sections — no dividers (see UI rules). */}
-              {viewMode === "board" && (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-caption font-medium text-muted-foreground">
-                    {t(($) => $.display.grouping_section)}
-                  </span>
-                  <Select
-                    items={[
-                      ...GROUPING_OPTIONS.map((opt) => ({
-                        value: opt.value as string,
-                        label: t(($) => $.display[GROUPING_LABEL_KEY[opt.value]]),
-                      })),
-                      ...groupableProperties.map((p) => ({
-                        value: `property:${p.id}`,
-                        label: p.name,
-                      })),
-                    ]}
-                    value={grouping}
-                    onValueChange={(v) => {
-                      if (v) act.setGrouping(v as IssueGrouping);
-                    }}
-                  >
-                    <SelectTrigger size="sm" className="w-32" aria-label={t(($) => $.display.grouping_section)}>
-                      <SelectValue>{groupingLabel}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent align="end">
-                      <SelectGroup>
-                      {GROUPING_OPTIONS.map((opt) => (
-                        <SelectItem key={opt.value} value={opt.value}>
-                          {t(($) => $.display[GROUPING_LABEL_KEY[opt.value]])}
-                        </SelectItem>
-                      ))}
-                      {groupableProperties.map((property) => (
-                        <SelectItem key={property.id} value={`property:${property.id}`}>
-                          {property.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
               {viewMode === "swimlane" && (
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-caption font-medium text-muted-foreground">

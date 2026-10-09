@@ -11,6 +11,8 @@ import {
 } from "@multica/core/collections";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
+import { useCollectionGroupLabel, collectionGroups, collectionGroupValue } from "./collection-grouping";
+import { groupValuesEqual } from "@multica/core/properties";
 import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { RecordValue, hasRecordValue } from "./collection-cell";
@@ -20,8 +22,8 @@ const NONE = "__none__";
 const DRAG_TYPE = "application/x-collection-record";
 
 /**
- * Board layout for a select field. Every option keeps a column, even when the
- * current filter leaves it empty, so a card always has somewhere to go.
+ * Server-derived columns cover the complete filtered result. Select options
+ * also keep empty columns so a card always has somewhere to go.
  */
 export function CollectionBoard({
   readOnly=false,
@@ -41,14 +43,11 @@ export function CollectionBoard({
   onOpenRecord: (recordId: string) => void;
 }) {
   const [dragging, setDragging] = useState<CollectionRecord | null>(null);
-  const columns = [
-    ...groupField.config.options.map((option) => ({
-      key: option.id,
-      name: option.name,
-      color: option.color,
-    })),
-    { key: NONE, name: "", color: undefined },
-  ];
+  const wsId = useWorkspaceId();
+  const { t } = useT("issues");
+  const summary = useInfiniteQuery(collectionRecordsOptions(wsId, collectionId, { ...query, group_by: groupField.id }));
+  const columns = collectionGroups(groupField, summary.data?.pages[0]?.groups ?? []);
+  if (summary.isError) return <Button variant="outline" onClick={() => void summary.refetch()}>{t(($) => $.table.load_failed_retry)}</Button>;
   return (
     <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto p-4">
       {columns.map((column) => (
@@ -84,7 +83,7 @@ function BoardColumn({
 }: {
   readOnly?: boolean;
   collectionId: string;
-  column: { key: string; name: string; color?: string };
+  column: { key: string; count: number; value?: unknown };
   groupField: CollectionField;
   cardFields: CollectionField[];
   query: CollectionQuery;
@@ -105,11 +104,12 @@ function BoardColumn({
   const count =
     pages.data?.pages[0]?.groups.find((group) => group.key === column.key)
       ?.count ?? 0;
-  const value = column.key === NONE ? null : column.key;
+  const value = collectionGroupValue(groupField, column.key);
+  const writable = !readOnly && !["formula", "relation"].includes(groupField.type);
   const empty = !pages.isLoading && count === 0;
-  const label = column.key === NONE ? t(($) => $.cortex_table.no_value) : column.name;
+  const label = useCollectionGroupLabel(groupField, column);
   const canDrop =
-    !readOnly && !!dragging && (dragging.fields[groupField.id] ?? null) !== value;
+    !readOnly && writable && !!dragging && !groupValuesEqual(groupField.id === "title" ? dragging.title : dragging.fields[groupField.id], value);
   return (
     <section
       aria-label={label}
@@ -128,7 +128,7 @@ function BoardColumn({
         event.preventDefault();
         setOver(false);
         if (dragging && canDrop)
-          void commands.setField(dragging, groupField.id, value);
+          void (groupField.id === "title" ? commands.setTitle(dragging, String(value ?? "")) : commands.setField(dragging, groupField.id, value));
         onDragChange(null);
       }}
     >
@@ -138,7 +138,7 @@ function BoardColumn({
             "size-2.5 shrink-0 rounded-full",
             column.key === NONE && "border border-muted-foreground",
           )}
-          style={column.color ? { backgroundColor: column.color } : undefined}
+          style={{ backgroundColor: groupField.config.options.find((option) => option.id === column.key)?.color }}
         />
         <h3 className="min-w-0 truncate text-label font-medium">{label}</h3>
         <span className="text-caption text-muted-foreground tabular-nums">
@@ -148,9 +148,12 @@ function BoardColumn({
           variant="ghost"
           size="icon-xs"
           className="ml-auto"
-          disabled={readOnly}
+          disabled={!writable}
           aria-label={t(($) => $.cortex_table.add_to_group, { name: label })}
-          onClick={() => setAdding(true)}
+          onClick={() => {
+            if (groupField.id === "title") setTitle(String(value ?? ""));
+            setAdding(true);
+          }}
         >
           <Plus />
         </Button>
@@ -164,7 +167,7 @@ function BoardColumn({
               void commands.createRecord
                 .mutateAsync({
                   title: title.trim(),
-                  fields: value ? { [groupField.id]: value } : undefined,
+                  fields: groupField.id !== "title" && value !== null ? { [groupField.id]: value } : undefined,
                 })
                 .then(() => setTitle(""));
             }}
@@ -188,7 +191,7 @@ function BoardColumn({
         {records.map((record) => (
           <article
             key={record.id}
-            draggable={!readOnly}
+            draggable={writable}
             onDragStart={(event) => {
               event.dataTransfer.setData(DRAG_TYPE, record.id);
               event.dataTransfer.effectAllowed = "move";

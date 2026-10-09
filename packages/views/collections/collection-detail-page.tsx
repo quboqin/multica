@@ -48,6 +48,7 @@ import { CollectionNavigator } from "../cortex";
 import { DataViewCalendar, DataViewGallery } from "../data-view";
 import { AppLink, useNavigation } from "../navigation";
 import { useLocale, useT } from "../i18n";
+import { CollectionGroupLabel, collectionGroups, collectionGroupValue } from "./collection-grouping";
 import { CollectionBoard } from "./collection-board";
 import {
   CollectionFieldPanel,
@@ -229,10 +230,9 @@ export function CollectionDetailPage({
   const storedTitleName = data?.collection.title_name ?? "";
   const titleName = storedTitleName || defaultTitleName;
   const tableFields = allFields.filter((field) => !prefs.hiddenFields.includes(field.id));
-  const groupField = allFields.find(
-    (field) => field.id === prefs.groupBy && field.type === "select",
-  );
-  const boardGroup = groupField ?? allFields.find((field) => field.type === "select");
+  const groupingFields: CollectionField[] = [{ id: "title", name: titleName, type: "text", position: -1, config: { options: [] } }, ...allFields];
+  const groupField = groupingFields.find((field) => field.id === prefs.groupBy);
+  const boardGroup = groupField ?? allFields.find((field) => field.type === "select") ?? groupingFields[0]!;
   const dateField =
     allFields.find((field) => field.id === prefs.dateField && field.type === "date") ??
     allFields.find((field) => field.type === "date");
@@ -269,7 +269,7 @@ export function CollectionDetailPage({
       !!wsId && (prefs.layout === "gallery" || (prefs.layout === "calendar" && !!dateField)),
   });
   const summary = useInfiniteQuery({
-    ...collectionRecordsOptions(wsId, id, query),
+    ...collectionRecordsOptions(wsId, id, { ...query, ...(groupField ? { group_by: groupField.id } : {}) }),
     enabled: !!wsId && prefs.layout === "table",
   });
   const visualRows = visual.data?.pages.flatMap((page) => page.records) ?? [];
@@ -427,14 +427,6 @@ export function CollectionDetailPage({
   const content = (() => {
     if (!data) return null;
     if (prefs.layout === "board") {
-      if (!boardGroup)
-        return (
-          <EmptyHint
-            action={canManage ? newFieldButton("select") : undefined}
-          >
-            {t(($) => $.cortex_table.board_needs_select)}
-          </EmptyHint>
-        );
       return (
         <CollectionBoard
           readOnly={!canEdit}
@@ -514,21 +506,24 @@ export function CollectionDetailPage({
           }}
         />
       );
+    if (groupField && summary.isError)
+      return <Button variant="outline" onClick={() => void summary.refetch()}>{t(($) => $.table.load_failed_retry)}</Button>;
     if (groupField)
       return (
         <div className="min-h-0 flex-1 overflow-auto">
-          {[...groupField.config.options.map((option) => option.id), "__none__"].map((key) => {
+          {collectionGroups(groupField, summary.data?.pages[0]?.groups ?? []).map((group) => {
+            const key = group.key;
             const option = groupField.config.options.find((item) => item.id === key);
             return (
-              <section key={key} aria-label={option?.name ?? t(($) => $.cortex_table.no_value)}>
+              <section key={key}>
                 <h2 className="sticky left-0 flex items-center gap-2 px-4 pb-1 pt-4 text-label font-medium">
                   <span
                     className={cn("size-2.5 rounded-full", !option && "border border-muted-foreground")}
                     style={option?.color ? { backgroundColor: option.color } : undefined}
                   />
-                  {option?.name ?? t(($) => $.cortex_table.no_value)}
+                  <CollectionGroupLabel field={groupField} group={group} />
                   <span className="text-caption font-normal text-muted-foreground tabular-nums">
-                    {summary.data?.pages[0]?.groups.find((group) => group.key === key)?.count ?? 0}
+                    {group.count}
                   </span>
                 </h2>
                 <CollectionTable
@@ -539,7 +534,8 @@ export function CollectionDetailPage({
                   commands={commands}
                   actions={tableActions}
                   selectedRecordId={selectedRecord}
-                  newRecordFields={option ? { [groupField.id]: option.id } : undefined}
+                  canCreate={!["formula", "relation"].includes(groupField.type)}
+                  newRecordFields={!["formula", "relation"].includes(groupField.type) && groupField.id !== "title" && key !== "__none__" ? { [groupField.id]: collectionGroupValue(groupField, key) } : undefined}
                 />
               </section>
             );
@@ -588,7 +584,8 @@ export function CollectionDetailPage({
       />
       {(prefs.layout === "table" || prefs.layout === "board") && (
         <GroupPopover
-          fields={allFields}
+          allowNone={prefs.layout !== "board"}
+          fields={groupingFields}
           groupBy={prefs.layout === "board" ? (boardGroup?.id ?? "") : prefs.groupBy}
           onChange={(groupBy) => update({ groupBy })}
         />

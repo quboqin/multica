@@ -1267,7 +1267,7 @@
     "add_to_group": "{{name}}에 추가",
     "board_needs_select": "보드를 사용하려면 단일 선택 필드를 추가하세요.",
     "calendar_needs_date": "캘린더를 사용하려면 날짜 필드를 추가하세요.",
-    "group_needs_select": "단일 선택 필드만 그룹화할 수 있습니다.",
+    "group_combinations": "여러 값이 있는 필드는 같은 값 조합으로 그룹화합니다.",
     "no_filters": "이 보기에 필터가 없습니다",
     "add_filter": "필터 추가",
     "clear_filters": "모두 지우기",
