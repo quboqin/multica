@@ -35,7 +35,7 @@ test.describe("Office previews and compact navigation", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toBeHidden();
     await page.screenshot({ animations: "disabled", path: info.outputPath("navigation-expanded.png") });
-    await page.getByRole("button", { name: "Collapse list", exact: true }).click();
+    await page.getByRole("button", { name: "Collapse panel", exact: true }).click();
     await page.getByRole("button", { name: "Collapse navigation", exact: true }).click();
     const rail = page.locator('[data-collapsible="icon"]');
     await expect(rail).toBeVisible();
@@ -45,12 +45,12 @@ test.describe("Office previews and compact navigation", () => {
     await page.evaluate(() => Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined))));
     await page.screenshot({ animations: "disabled", path: info.outputPath("navigation-collapsed.png") });
     await page.reload();
-    await expect(page.getByRole("button", { name: "Expand list", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Expand panel", exact: true })).toBeVisible();
     await page.goto(`/${slug}/collections/${collection.id}`);
-    await page.getByRole("button", { name: "Collapse list", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Expand list", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Collapse panel", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Expand panel", exact: true })).toBeVisible();
     await page.reload();
-    await expect(page.getByRole("button", { name: "Expand list", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Expand panel", exact: true })).toBeVisible();
   });
 
   test("Word and PowerPoint attachments open as authenticated PDF previews", async ({ page }, info) => {

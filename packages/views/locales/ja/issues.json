@@ -1058,8 +1058,8 @@
     "search_records": "レコードを検索"
   },
   "cortex_docs": {
-    "collapse_list": "一覧を折りたたむ",
-    "expand_list": "一覧を展開",
+    "collapse_list": "パネルを折りたたむ",
+    "expand_list": "パネルを展開",
     "parent_documents": "親ドキュメントを表示",
     "can_read": "閲覧可能",
     "can_edit": "編集可能",

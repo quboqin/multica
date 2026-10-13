@@ -266,13 +266,31 @@ it("creates a table in the supplied project with icon and description", async ()
 it("collapses document and table lists independently and restores the saved state", async () => {
   const view = mount(<><DocumentNavigator activeDocumentId="child" /><CollectionNavigator activeCollectionId="c1" /></>);
   await screen.findByText("Product");
-  const buttons = screen.getAllByRole("button", { name: "Collapse list" });
+  const buttons = screen.getAllByRole("button", { name: "Collapse panel" });
   fireEvent.click(buttons[0]!);
   expect(useDocumentPreferences.getState().navigator["ws-1"]?.documentsHidden).toBe(true);
   expect(useDocumentPreferences.getState().navigator["ws-1"]?.collectionsHidden).not.toBe(true);
-  expect(screen.getByRole("button", { name: "Expand list" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByRole("button", { name: "Expand panel" })).toHaveAttribute("aria-expanded", "false");
   view.unmount();
   mount(<DocumentNavigator activeDocumentId="child" />);
-  fireEvent.click(screen.getByRole("button", { name: "Expand list" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expand panel" }));
   expect(useDocumentPreferences.getState().navigator["ws-1"]?.documentsHidden).toBe(false);
+});
+
+it("keeps search state while collapsed and removes hidden panel controls from navigation", async () => {
+  mount(<DocumentNavigator activeDocumentId="child" />);
+  const search = screen.getByRole("textbox", { name: "Search" });
+  fireEvent.change(search, { target: { value: "Spec" } });
+  await screen.findByRole("link", { name: "Spec" });
+  const button = screen.getByRole("button", { name: "Collapse panel" });
+  expect(button.parentElement).toContainElement(screen.getByRole("heading", { name: "Documents" }));
+  fireEvent.click(button);
+  const content = document.getElementById(button.getAttribute("aria-controls")!)!;
+  expect(content).toHaveAttribute("inert");
+  expect(content).toHaveAttribute("aria-hidden", "true");
+  expect(search).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Search" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Expand panel" }));
+  expect(screen.getByRole("textbox", { name: "Search" })).toHaveValue("Spec");
+  expect(content).not.toHaveAttribute("inert");
 });
