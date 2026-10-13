@@ -52,9 +52,35 @@ services:
       timeout: 5s
       retries: 5
 
+  office-preview:
+    image: gotenberg/gotenberg:8.37.0
+    command:
+      - gotenberg
+      - --api-timeout=60s
+      - --api-body-limit=22MB
+      - --api-disable-download-from=true
+      - --webhook-disable=true
+      - --chromium-disable-routes=true
+      - --libreoffice-deny-list=.*
+      - --libreoffice-max-queue-size=4
+    networks:
+      - office-preview
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    restart: unless-stopped
+
   backend:
     image: ${MULTICA_BACKEND_IMAGE:-ghcr.io/quboqin/multica-backend}:${MULTICA_IMAGE_TAG:-latest}
+    networks:
+      - default
+      - office-preview
     depends_on:
+      office-preview:
+        condition: service_started
       postgres:
         condition: service_healthy
     ports:
@@ -94,6 +120,7 @@ services:
       S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      OFFICE_PREVIEW_URL: http://office-preview:3000
       ATTACHMENT_DOWNLOAD_MODE: ${ATTACHMENT_DOWNLOAD_MODE:-auto}
       ATTACHMENT_DOWNLOAD_URL_TTL: ${ATTACHMENT_DOWNLOAD_URL_TTL:-30m}
       CLOUDFRONT_DOMAIN: ${CLOUDFRONT_DOMAIN:-}
@@ -235,3 +262,7 @@ services:
 volumes:
   pgdata:
   backend_uploads:
+
+networks:
+  office-preview:
+    internal: true

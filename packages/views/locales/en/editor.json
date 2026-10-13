@@ -53,6 +53,9 @@
     "zoom_actual": "Actual size"
   },
   "attachment": {
+    "office_too_large": "Word and PowerPoint previews support files up to 20 MB. Download this file to view it.",
+    "office_unavailable": "Office preview is busy or unavailable. Try again later or download the file.",
+    "office_retry": "Retry",
     "download_failed": "Couldn't fetch a download link. Try again in a moment.",
     "preview": "Preview",
     "preview_loading": "Loading preview…",

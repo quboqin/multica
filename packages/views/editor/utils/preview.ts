@@ -17,6 +17,7 @@ import { isImageAttachment } from "@multica/core/attachments/image-sequence";
 export type PreviewKind =
   | "image"
   | "pdf"
+  | "office"
   | "video"
   | "audio"
   | "markdown"
@@ -211,6 +212,13 @@ export function getPreviewKind(
   const ct = normalizeContentType(contentType);
 
   const ext = extOf(filename);
+
+  if (["doc", "docx", "ppt", "pptx"].includes(ext) || [
+    "application/msword",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ].includes(ct)) return "office";
 
   if (ct === "application/pdf" || ext === "pdf") return "pdf";
   if (ct.startsWith("video/") || (ext && VIDEO_EXTS.has(ext))) return "video";

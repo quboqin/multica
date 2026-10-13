@@ -47,7 +47,7 @@ dc config --quiet
   echo 'Automatic upgrades require running postgres and backend containers.' >&2
   exit 1
 }
-dc pull backend frontend
+dc pull backend frontend office-preview
 
 # Quiesce writers before taking a matching database/uploads snapshot. Failure
 # after this point deliberately leaves the deployment for operator recovery.

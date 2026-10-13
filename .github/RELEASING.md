@@ -234,3 +234,19 @@ unresolved reachable vulnerability.
 
 Every Go binary retains its compiler version in the standard Go build metadata;
 use `go version -m <binary>` when auditing a downloaded release artifact.
+
+## Office preview service
+
+Self-host Compose includes a private `office-preview` Gotenberg container for
+`.doc`, `.docx`, `.ppt`, and `.pptx` attachments. Deployment pulls it before
+stopping application writers and starts it with the backend. It has no published
+port, uses an internal network, receives no database/storage credentials or
+volumes, and denies external resources, download-from URLs, and webhooks.
+Reserve up to 1 GiB for this service. Standalone backend installations must set
+`OFFICE_PREVIEW_URL` to an equivalently isolated internal Gotenberg instance.
+
+After upgrading, open one Word and one PowerPoint attachment with a permitted
+account and verify the PDF preview. Conversion accepts inputs up to 20 MiB,
+limits output to 50 MiB, and times out after 65 seconds. Password-protected or
+invalid files may require download; animations, embedded media, and exact font
+fidelity are outside PDF preview support. Original downloads are unchanged.

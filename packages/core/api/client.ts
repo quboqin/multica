@@ -4424,6 +4424,28 @@ export class ApiClient {
   // 401 → handleUnauthorized recovery, request-id logging, and ApiError
   // shape. 413 / 415 are translated to typed `Preview*Error` instances so
   // the modal can render specific fallbacks instead of generic failure.
+  async getAttachmentOfficePreview(id: string, options: { workspaceId: string; signal?: AbortSignal }): Promise<Blob> {
+    let res: Response;
+    try {
+      res = await this.fetchRaw(`/api/attachments/${id}/preview`, {
+        headers: { "X-Workspace-ID": options.workspaceId },
+        signal: options.signal,
+      });
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 413) throw new PreviewTooLargeError();
+        if (err.status === 415) throw new PreviewUnsupportedError();
+      }
+      throw err;
+    }
+    if (res.headers.get("Content-Type")?.split(";")[0]?.trim() !== "application/pdf") {
+      throw new Error("Invalid office preview response");
+    }
+    const blob = await res.blob();
+    if (await blob.slice(0, 5).text() !== "%PDF-") throw new Error("Invalid office preview PDF");
+    return blob;
+  }
+
   async getAttachmentTextContent(
     id: string,
   ): Promise<{ text: string; originalContentType: string }> {

@@ -239,6 +239,19 @@ export class TestApiClient {
     const collection=await response.json();this.createdCollectionIds.push(collection.id);return collection;
   }
 
+  async uploadOfficeAttachment(issueId: string, filename: string, bytes: Uint8Array) {
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(bytes)]), filename);
+    form.append("issue_id", issueId);
+    const response = await fetch(`${API_BASE}/api/upload-file`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.token}`, "X-Workspace-ID": this.workspaceId! },
+      body: form,
+    });
+    if (!response.ok) throw new Error(`Upload failed: ${response.status} ${await response.text()}`);
+    return response.json();
+  }
+
   async cortexRequest(path:string,method="GET",body?:unknown) {
     const response=await this.authedFetch(path,{method,body:body===undefined?undefined:JSON.stringify(body)});
     return {status:response.status,body:response.status===204?null:await response.json()};
