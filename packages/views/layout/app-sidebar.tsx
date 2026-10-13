@@ -26,6 +26,8 @@ import { Layers,
   Plus,
   Check,
   SquarePen,
+  PanelLeftClose,
+  PanelLeftOpen,
   X,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
@@ -466,7 +468,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   // pinned items, the workspace switcher's programmatic push, and anything
   // added later. `setOpenMobile` is a no-op on desktop, where the sheet is not
   // the sidebar's rendering at all.
-  const { setOpenMobile } = useSidebar();
+  const { setOpenMobile, state, isCompact, toggleSidebar, hasExternalTrigger } = useSidebar();
+  const iconOnly = state === "collapsed" && !isCompact;
   useEffect(() => {
     setOpenMobile(false);
   }, [pathname, setOpenMobile]);
@@ -625,8 +628,20 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const createIssueShortcut = useShortcut("createIssue");
 
   return (
-      <Sidebar variant="inset">
+      <Sidebar variant="inset" collapsible="icon">
         {topSlot}
+        {!hasExternalTrigger && (
+          <div className="hidden px-2 pt-2 lg:flex lg:justify-end">
+            <SidebarMenuButton
+              className="w-auto"
+              aria-label={iconOnly ? t(($) => $.sidebar.expand_navigation) : t(($) => $.sidebar.collapse_navigation)}
+              tooltip={iconOnly ? t(($) => $.sidebar.expand_navigation) : t(($) => $.sidebar.collapse_navigation)}
+              onClick={toggleSidebar}
+            >
+              {iconOnly ? <PanelLeftOpen /> : <PanelLeftClose />}
+            </SidebarMenuButton>
+          </div>
+        )}
         {/* Workspace Switcher */}
         <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
           <SidebarMenu>
@@ -634,7 +649,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
-                    <SidebarMenuButton>
+                    <SidebarMenuButton aria-label={workspace?.name ?? "Multica"} tooltip={workspace?.name ?? "Multica"}>
                       <span className="relative">
                         <WorkspaceAvatar name={workspace?.name ?? "M"} avatarUrl={workspace?.avatar_url} size="sm" />
                         {/* Shared brand dot: a pending invitation OR another
@@ -645,10 +660,10 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                           <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-brand ring-1 ring-sidebar" />
                         )}
                       </span>
-                      <span className="flex-1 truncate font-medium">
+                      <span className={cn("flex-1 truncate font-medium", iconOnly && "sr-only")}>
                         {workspace?.name ?? "Multica"}
                       </span>
-                      <ChevronDown className="size-3 text-muted-foreground" />
+                      {!iconOnly && <ChevronDown className="size-3 text-muted-foreground" />}
                     </SidebarMenuButton>
                   }
                 />
@@ -768,14 +783,16 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarMenuItem>
               <SidebarMenuButton
                 className="text-muted-foreground"
+                aria-label={t(($) => $.sidebar.new_issue)}
+                tooltip={t(($) => $.sidebar.new_issue)}
                 onClick={() => openCreateIssueWithPreference()}
               >
                 <span className="relative">
                   <SquarePen />
                   <DraftDot />
                 </span>
-                <span>{t(($) => $.sidebar.new_issue)}</span>
-                {createIssueShortcut ? (
+                <span className={cn(iconOnly && "sr-only")}>{t(($) => $.sidebar.new_issue)}</span>
+                {createIssueShortcut && !iconOnly ? (
                   <ShortcutKeycaps shortcut={createIssueShortcut} decorative className="pointer-events-none ml-auto" />
                 ) : null}
               </SidebarMenuButton>
@@ -784,7 +801,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         </SidebarHeader>
 
         {/* Navigation */}
-        <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle}>
+        <SidebarContent ref={sidebarScrollRef} style={sidebarFadeStyle} className="group-data-[collapsible=icon]:overflow-y-auto">
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
@@ -795,20 +812,25 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
+                        aria-label={t(($) => $.nav[item.labelKey])}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         isActive={isActive}
                         render={<AppLink href={href} />}
                         className={NAV_ITEM_CLASS_NAME}
                       >
                         <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
-                        {item.key === "inbox" && unreadCount > 0 && (
+                        <span className={cn(iconOnly && "sr-only")}>{t(($) => $.nav[item.labelKey])}</span>
+                        {iconOnly && ((item.key === "inbox" && unreadCount > 0) || (item.key === "chat" && chatUnreadCount > 0)) && (
+                          <span aria-hidden className="absolute right-1 top-1 size-1.5 rounded-full bg-brand" />
+                        )}
+                        {!iconOnly && item.key === "inbox" && unreadCount > 0 && (
                           <CappedNumberFlow
                             value={unreadCount}
                             animated={false}
                             className="ml-auto text-caption"
                           />
                         )}
-                        {item.key === "chat" && chatUnreadCount > 0 && (
+                        {!iconOnly && item.key === "chat" && chatUnreadCount > 0 && (
                           <CappedNumberFlow
                             value={chatUnreadCount}
                             animated={false}
@@ -823,7 +845,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             </SidebarGroupContent>
           </SidebarGroup>
 
-          {visiblePinned.length > 0 && (
+          {!iconOnly && visiblePinned.length > 0 && (
             <Collapsible defaultOpen>
               <SidebarGroup className="group/pinned">
                 <SidebarGroupLabel
@@ -879,16 +901,18 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 {workNav.map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
-                  const isActive = !isActivePinnedRoute && isNavActive(pathname, href);
+                  const isActive = (iconOnly || !isActivePinnedRoute) && isNavActive(pathname, href);
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
+                        aria-label={t(($) => $.nav[item.labelKey])}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         isActive={isActive}
                         render={<AppLink href={href} />}
                         className={NAV_ITEM_CLASS_NAME}
                       >
                         <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
+                        <span className={cn(iconOnly && "sr-only")}>{t(($) => $.nav[item.labelKey])}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
@@ -908,12 +932,14 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
+                        aria-label={t(($) => $.nav[item.labelKey])}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         isActive={isActive}
                         render={<AppLink href={href} />}
                         className={NAV_ITEM_CLASS_NAME}
                       >
                         <Icon />
-                        <span>{t(($) => $.nav[item.labelKey])}</span>
+                        <span className={cn(iconOnly && "sr-only")}>{t(($) => $.nav[item.labelKey])}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );
@@ -931,12 +957,14 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               return (
                 <SidebarMenuItem key={item.key}>
                   <SidebarMenuButton
+                    aria-label={t(($) => $.nav[item.labelKey])}
+                    tooltip={t(($) => $.nav[item.labelKey])}
                     isActive={isNavActive(pathname, href)}
                     render={<AppLink href={href} />}
                     className={NAV_ITEM_CLASS_NAME}
                   >
                     <Icon />
-                    <span>{t(($) => $.nav[item.labelKey])}</span>
+                    <span className={cn(iconOnly && "sr-only")}>{t(($) => $.nav[item.labelKey])}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               );
@@ -945,7 +973,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
           {/* Discord fills the strip while visible; once dismissed, help
               aligns with the navigation icons above. */}
           <div className="flex items-center gap-1">
-            <JoinDiscordCard />
+            {!iconOnly && <JoinDiscordCard />}
             <HelpLauncher />
           </div>
         </SidebarFooter>

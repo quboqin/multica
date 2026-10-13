@@ -28,6 +28,7 @@ import {
 } from "@multica/core/issues/queries";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { useActorName } from "@multica/core/workspace/hooks";
+import { DocumentBreadcrumb } from "./document-breadcrumb";
 import { DocumentSharing } from "./document-sharing";
 import { DocumentVersionPreview, useDocumentHistory } from "./document-history";
 import type { Issue } from "@multica/core/types";
@@ -226,44 +227,7 @@ function DocumentView({ documentId }: { documentId: string }) {
     <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
-          <nav
-            aria-label={t(($) => $.cortex_docs.breadcrumb)}
-            className="flex min-w-0 flex-1 items-center gap-1.5 text-label text-muted-foreground"
-          >
-            <AppLink
-              href={paths.documents()}
-              className="shrink-0 hover:text-foreground"
-            >
-              {t(($) => $.cortex_docs.documents)}
-            </AppLink>
-            {trail.map((doc, index) => {
-              const last = index === trail.length - 1;
-              return (
-                <span
-                  key={doc.id}
-                  className={cn(
-                    "flex items-center gap-1.5",
-                    last ? "min-w-0" : "shrink-0",
-                  )}
-                >
-                  <span aria-hidden className="text-faint-foreground">
-                    /
-                  </span>
-                  <AppLink
-                    href={paths.documentDetail(doc.id)}
-                    aria-current={last ? "page" : undefined}
-                    className={cn(
-                      "truncate hover:text-foreground",
-                      !last && "max-w-32",
-                      last && "font-medium text-foreground",
-                    )}
-                  >
-                    {doc.title || t(($) => $.cortex_docs.untitled)}
-                  </AppLink>
-                </span>
-              );
-            })}
-          </nav>
+          <DocumentBreadcrumb trail={trail} />
           {issue && (
             <span
               className={cn(

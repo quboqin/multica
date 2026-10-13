@@ -47,6 +47,8 @@ export interface DocumentNavigatorPreferences {
   filter: DocumentTreeFilter;
   projectId: string;
   collapsed: string[];
+  documentsHidden?: boolean;
+  collectionsHidden?: boolean;
 }
 export const defaultNavigatorPreferences: DocumentNavigatorPreferences = {
   filter: "all",

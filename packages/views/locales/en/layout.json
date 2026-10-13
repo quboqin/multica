@@ -43,6 +43,8 @@
     "loading_named_prefix": "Loading"
   },
   "sidebar": {
+    "collapse_navigation": "Collapse navigation",
+    "expand_navigation": "Expand navigation",
     "unpin_tooltip": "Unpin",
     "workspaces_label": "Workspaces",
     "create_workspace": "Create workspace",

@@ -43,6 +43,8 @@
     "loading_named_prefix": "正在加载"
   },
   "sidebar": {
+    "collapse_navigation": "收起主导航",
+    "expand_navigation": "展开主导航",
     "unpin_tooltip": "取消固定",
     "workspaces_label": "工作区",
     "create_workspace": "创建工作区",

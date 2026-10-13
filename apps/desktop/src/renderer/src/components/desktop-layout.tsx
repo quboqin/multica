@@ -71,10 +71,13 @@ function useNativeNavigationGestures() {
 // resize previews disable it through data-sidebar-resize-consumer.
 function MainTopBar({ sidebarMounted }: { sidebarMounted: boolean }) {
   const { state, isCompact } = useSidebar();
-  const sidebarHidden = !sidebarMounted || state === "collapsed" || isCompact;
+  const sidebarHidden = !sidebarMounted || isCompact;
+  const sidebarWidth = state === "collapsed"
+    ? "(var(--sidebar-width-icon) + 1rem)"
+    : "var(--sidebar-live-width, var(--sidebar-width))";
   const toolbarClearance: React.CSSProperties["paddingLeft"] = sidebarHidden
     ? WINDOW_TOOLBAR_CLEARANCE
-    : `max(0px, calc(${WINDOW_TOOLBAR_CLEARANCE}px - var(--sidebar-live-width, var(--sidebar-width))))`;
+    : `max(0px, calc(${WINDOW_TOOLBAR_CLEARANCE}px - ${sidebarWidth}))`;
 
   return (
     <header

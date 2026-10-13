@@ -1058,6 +1058,9 @@
     "search_records": "搜索记录"
   },
   "cortex_docs": {
+    "collapse_list": "收起列表",
+    "expand_list": "展开列表",
+    "parent_documents": "查看上级文档",
     "can_read": "可阅读",
     "can_edit": "可编辑",
     "permission": "授权",
