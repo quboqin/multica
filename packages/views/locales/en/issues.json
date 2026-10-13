@@ -1097,8 +1097,8 @@
     "search_records": "Search records"
   },
   "cortex_docs": {
-    "collapse_list": "Collapse list",
-    "expand_list": "Expand list",
+    "collapse_list": "Collapse panel",
+    "expand_list": "Expand panel",
     "parent_documents": "Show parent documents",
     "can_read": "Can read",
     "can_edit": "Can edit",

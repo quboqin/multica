@@ -68,6 +68,12 @@ import {
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
 import { cn } from "@multica/ui/lib/utils";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@multica/ui/components/ui/tooltip";
 import { CollapsedNavTrigger } from "../layout/page-header";
 import { AppLink, useNavigation } from "../navigation";
 import { useT } from "../i18n";
@@ -98,40 +104,80 @@ const ROW_ACTION =
 function NavigatorShell({
   labelledBy,
   hasSelection,
+  actions,
   children,
 }: {
   labelledBy: string;
   hasSelection: boolean;
+  actions: ReactNode;
   children: ReactNode;
 }) {
   const { t } = useT("issues");
+  const isMobile = useIsMobile();
   const wsId = useCurrentWorkspace()?.id ?? "";
-  const preference = labelledBy === DOCUMENTS_HEADING_ID ? "documentsHidden" : "collectionsHidden";
-  const hidden = useDocumentPreferences((state) => state.navigator[wsId]?.[preference] === true);
+  const preference =
+    labelledBy === DOCUMENTS_HEADING_ID ? "documentsHidden" : "collectionsHidden";
+  const hidden = useDocumentPreferences(
+    (state) => state.navigator[wsId]?.[preference] === true,
+  );
   const setNavigator = useDocumentPreferences((state) => state.setNavigator);
-  const label = hidden ? t(($) => $.cortex_docs.expand_list) : t(($) => $.cortex_docs.collapse_list);
+  const collapsed = hidden && !isMobile;
+  const title = labelledBy === DOCUMENTS_HEADING_ID
+    ? t(($) => $.cortex_docs.documents)
+    : t(($) => $.cortex_docs.tables);
+  const label = collapsed
+    ? t(($) => $.cortex_docs.expand_list)
+    : t(($) => $.cortex_docs.collapse_list);
   return (
     <aside
-      aria-label={labelledBy === DOCUMENTS_HEADING_ID ? t(($) => $.cortex_docs.documents) : t(($) => $.cortex_docs.tables)}
+      aria-label={title}
+      data-state={collapsed ? "collapsed" : "expanded"}
       className={cn(
-        "shrink-0 flex-col overflow-y-auto border-r bg-sidebar px-2 py-3 text-sidebar-foreground md:flex",
+        "shrink-0 flex-col overflow-hidden border-r bg-sidebar px-2 py-3 text-sidebar-foreground md:flex md:transition-[width] md:duration-250 md:ease-in-out md:motion-reduce:transition-none",
         hidden ? "md:w-12" : "md:w-60",
         hasSelection ? "hidden" : "flex w-full",
       )}
     >
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="mb-2 hidden self-end md:inline-flex"
-        aria-label={label}
-        title={label}
-        aria-expanded={!hidden}
-        aria-controls={`${labelledBy}-content`}
-        onClick={() => setNavigator(wsId, { [preference]: !hidden })}
+      <div className="mb-3 flex h-8 shrink-0 items-center gap-2 md:w-56">
+        <Tooltip>
+          <TooltipTrigger render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="hidden shrink-0 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:inline-flex"
+              aria-label={label}
+              aria-expanded={!collapsed}
+              aria-controls={`${labelledBy}-content`}
+              onClick={() => setNavigator(wsId, { [preference]: !hidden })}
+            >
+              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+            </Button>
+          } />
+          <TooltipContent side={collapsed ? "right" : "bottom"}>{label}</TooltipContent>
+        </Tooltip>
+        <div
+          inert={collapsed}
+          aria-hidden={collapsed || undefined}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1 transition-opacity duration-200 motion-reduce:transition-none",
+            collapsed && "opacity-0",
+          )}
+        >
+          <h2 id={labelledBy} className="min-w-0 flex-1 truncate text-body font-semibold">{title}</h2>
+          {actions}
+        </div>
+      </div>
+      {/* Keep the list mounted and at full width while the outer panel clips it.
+          This preserves search/scroll state and avoids text reflow during motion. */}
+      <div
+        id={`${labelledBy}-content`}
+        inert={collapsed}
+        aria-hidden={collapsed || undefined}
+        className={cn(
+          "min-h-0 flex-1 overflow-x-hidden overflow-y-auto transition-[opacity,translate] duration-200 motion-reduce:transition-none md:w-56",
+          collapsed && "-translate-x-2 opacity-0",
+        )}
       >
-        {hidden ? <PanelLeftOpen /> : <PanelLeftClose />}
-      </Button>
-      <div id={`${labelledBy}-content`} className={cn(hidden && "md:hidden")}>
         {children}
       </div>
     </aside>
@@ -163,28 +209,6 @@ function SearchField({
           className="h-7 bg-background pl-7 text-label"
         />
       </div>
-    </div>
-  );
-}
-
-function SectionHeader({
-  id,
-  title,
-  children,
-}: {
-  id: string;
-  title: string;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex h-7 items-center gap-0.5 px-2">
-      <h2
-        id={id}
-        className="flex-1 truncate text-caption font-medium text-muted-foreground"
-      >
-        {title}
-      </h2>
-      {children}
     </div>
   );
 }
@@ -515,75 +539,74 @@ export function DocumentNavigator({ activeDocumentId }: DocumentNavigatorProps) 
     <NavigatorShell
       labelledBy={DOCUMENTS_HEADING_ID}
       hasSelection={!!activeDocumentId}
+      actions={
+        <>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant={filtered ? "brandSubtle" : "ghost"}
+                  size="icon-xs"
+                  aria-label={t(($) => $.cortex_docs.filter)}
+                  className={cn(!filtered && "text-muted-foreground")}
+                >
+                  <ListFilter />
+                </Button>
+              }
+            />
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{t(($) => $.cortex_docs.show)}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={filter}
+                  onValueChange={(value) =>
+                    setNavigator(wsId, { filter: value as DocumentTreeFilter })
+                  }
+                >
+                  {FILTERS.map((value) => (
+                    <DropdownMenuRadioItem key={value} value={value}>
+                      {t(($) => $.cortex_docs[`filter_${value}`])}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{t(($) => $.cortex_docs.scope)}</DropdownMenuLabel>
+                <DropdownMenuRadioGroup
+                  value={projectId}
+                  onValueChange={(value) =>
+                    setNavigator(wsId, { projectId: String(value) })
+                  }
+                >
+                  <DropdownMenuRadioItem value="">
+                    {t(($) => $.cortex_docs.workspace)}
+                  </DropdownMenuRadioItem>
+                  {projects.map((item) => (
+                    <DropdownMenuRadioItem key={item.id} value={item.id}>
+                      <span className="truncate">{item.title}</span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="text-muted-foreground"
+            aria-label={t(($) => $.cortex_docs.new_document)}
+            disabled={creator.isPending || !wsId}
+            onClick={() =>
+              void creator.create({ projectId }).catch(() => undefined)
+            }
+          >
+            <Plus />
+          </Button>
+        </>
+      }
     >
       <SearchField value={search} onChange={setSearch} />
-      <SectionHeader
-        id={DOCUMENTS_HEADING_ID}
-        title={t(($) => $.cortex_docs.documents)}
-      >
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant={filtered ? "brandSubtle" : "ghost"}
-                size="icon-xs"
-                aria-label={t(($) => $.cortex_docs.filter)}
-                className={cn(!filtered && "text-muted-foreground")}
-              >
-                <ListFilter />
-              </Button>
-            }
-          />
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{t(($) => $.cortex_docs.show)}</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={filter}
-                onValueChange={(value) =>
-                  setNavigator(wsId, { filter: value as DocumentTreeFilter })
-                }
-              >
-                {FILTERS.map((value) => (
-                  <DropdownMenuRadioItem key={value} value={value}>
-                    {t(($) => $.cortex_docs[`filter_${value}`])}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{t(($) => $.cortex_docs.scope)}</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={projectId}
-                onValueChange={(value) =>
-                  setNavigator(wsId, { projectId: String(value) })
-                }
-              >
-                <DropdownMenuRadioItem value="">
-                  {t(($) => $.cortex_docs.workspace)}
-                </DropdownMenuRadioItem>
-                {projects.map((item) => (
-                  <DropdownMenuRadioItem key={item.id} value={item.id}>
-                    <span className="truncate">{item.title}</span>
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="text-muted-foreground"
-          aria-label={t(($) => $.cortex_docs.new_document)}
-          disabled={creator.isPending || !wsId}
-          onClick={() =>
-            void creator.create({ projectId }).catch(() => undefined)
-          }
-        >
-          <Plus />
-        </Button>
-      </SectionHeader>
       {filtered && (
         <div className="mb-1 flex flex-wrap gap-1 px-2">
           {filter !== "all" && (
@@ -877,26 +900,25 @@ export function CollectionNavigator({
     <NavigatorShell
       labelledBy={TABLES_HEADING_ID}
       hasSelection={!!activeCollectionId}
+      actions={
+        <>
+          <NewTablePopover
+            trigger={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-muted-foreground"
+                aria-label={t(($) => $.cortex_docs.new_table)}
+                disabled={!wsId}
+              >
+                <Plus />
+              </Button>
+            }
+          />
+        </>
+      }
     >
       <SearchField value={search} onChange={setSearch} />
-      <SectionHeader
-        id={TABLES_HEADING_ID}
-        title={t(($) => $.cortex_docs.tables)}
-      >
-        <NewTablePopover
-          trigger={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="text-muted-foreground"
-              aria-label={t(($) => $.cortex_docs.new_table)}
-              disabled={!wsId}
-            >
-              <Plus />
-            </Button>
-          }
-        />
-      </SectionHeader>
       <div className="px-2 py-2"><CollectionImportDialog /></div>
       <label className="flex items-center gap-2 px-2 py-2 text-caption"><input type="checkbox" checked={archived} onChange={e=>setArchived(e.target.checked)}/>{t($=>$.cortex_bulk.archived_tables)}</label>
       {restore.error && <p role="alert">{restore.error.message}</p>}

@@ -1058,8 +1058,8 @@
     "search_records": "레코드 검색"
   },
   "cortex_docs": {
-    "collapse_list": "목록 접기",
-    "expand_list": "목록 펼치기",
+    "collapse_list": "패널 접기",
+    "expand_list": "패널 펼치기",
     "parent_documents": "상위 문서 보기",
     "can_read": "읽기 가능",
     "can_edit": "편집 가능",
