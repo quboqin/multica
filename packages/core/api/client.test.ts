@@ -1719,6 +1719,21 @@ describe("ApiClient", () => {
     });
   });
 
+  describe("getAttachmentOfficePreview", () => {
+    it("fetches a PDF with explicit workspace scope and rejects malformed responses", async () => {
+      const fetcher = vi.fn().mockResolvedValue(new Response("%PDF-1.7\npreview", { headers: { "Content-Type": "application/pdf" } }));
+      vi.stubGlobal("fetch", fetcher);
+      const client = new ApiClient("https://api.example.test");
+      const blob = await client.getAttachmentOfficePreview("att-1", { workspaceId: "ws-1" });
+      expect(await blob.text()).toContain("%PDF-");
+      expect(fetcher).toHaveBeenCalledWith("https://api.example.test/api/attachments/att-1/preview", expect.objectContaining({ headers: expect.objectContaining({ "X-Workspace-ID": "ws-1" }) }));
+      fetcher.mockResolvedValue(new Response("<html>login</html>", { headers: { "Content-Type": "application/pdf" } }));
+      await expect(client.getAttachmentOfficePreview("att-1", { workspaceId: "ws-1" })).rejects.toThrow("Invalid office preview PDF");
+      fetcher.mockResolvedValue(new Response("%PDF-1.7", { headers: { "Content-Type": "text/plain" } }));
+      await expect(client.getAttachmentOfficePreview("att-1", { workspaceId: "ws-1" })).rejects.toThrow("Invalid office preview response");
+    });
+  });
+
   describe("getAttachmentTextContent", () => {
     it("returns body text and the original content type from the X-* header", async () => {
       vi.stubGlobal(

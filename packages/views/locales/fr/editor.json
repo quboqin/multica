@@ -53,6 +53,9 @@
     "zoom_actual": "Taille réelle"
   },
   "attachment": {
+    "office_too_large": "Les aperçus Word et PowerPoint sont limités à 20 Mo. Téléchargez ce fichier.",
+    "office_unavailable": "L’aperçu Office est occupé ou indisponible. Réessayez plus tard ou téléchargez le fichier.",
+    "office_retry": "Réessayer",
     "download_failed": "Impossible d'obtenir un lien de téléchargement. Réessayez dans un instant.",
     "preview": "Aperçu",
     "preview_loading": "Chargement de l'aperçu…",

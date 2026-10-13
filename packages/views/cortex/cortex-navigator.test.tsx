@@ -262,3 +262,17 @@ it("creates a table in the supplied project with icon and description", async ()
   fireEvent.click(screen.getByRole("button",{name:"Create"}));
   await waitFor(()=>expect(api.createCollection).toHaveBeenCalledWith("Project table","p1",{icon:"📋",description:"Working materials"}));
 });
+
+it("collapses document and table lists independently and restores the saved state", async () => {
+  const view = mount(<><DocumentNavigator activeDocumentId="child" /><CollectionNavigator activeCollectionId="c1" /></>);
+  await screen.findByText("Product");
+  const buttons = screen.getAllByRole("button", { name: "Collapse list" });
+  fireEvent.click(buttons[0]!);
+  expect(useDocumentPreferences.getState().navigator["ws-1"]?.documentsHidden).toBe(true);
+  expect(useDocumentPreferences.getState().navigator["ws-1"]?.collectionsHidden).not.toBe(true);
+  expect(screen.getByRole("button", { name: "Expand list" })).toHaveAttribute("aria-expanded", "false");
+  view.unmount();
+  mount(<DocumentNavigator activeDocumentId="child" />);
+  fireEvent.click(screen.getByRole("button", { name: "Expand list" }));
+  expect(useDocumentPreferences.getState().navigator["ws-1"]?.documentsHidden).toBe(false);
+});

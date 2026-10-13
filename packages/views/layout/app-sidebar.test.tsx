@@ -11,7 +11,7 @@ import { AppSidebar } from "./app-sidebar";
 
 const { appForeground, chatSessions, chatStore, detail, deletePin, invitationApi, navigation, pins, sidebarState, summary, workspaces } = vi.hoisted(() => ({
   appForeground: { current: true },
-  sidebarState: { setOpenMobile: vi.fn() },
+  sidebarState: { setOpenMobile: vi.fn(), state: "expanded", isCompact: false, toggleSidebar: vi.fn(), hasExternalTrigger: false },
   chatSessions: { current: [] as { id?: string; unread_count?: number }[] },
   chatStore: { current: { activeSessionId: null as string | null, isOpen: false } },
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
@@ -82,7 +82,7 @@ vi.mock("@multica/ui/components/ui/sidebar", () => ({
   ),
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarRail: () => null,
-  useSidebar: () => ({ setOpenMobile: sidebarState.setOpenMobile }),
+  useSidebar: () => sidebarState,
 }));
 vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -540,4 +540,18 @@ describe("Pending invitation self-heal", () => {
     expect(invitationApi.accept).toHaveBeenCalledTimes(1);
     expect(invitationApi.decline).toHaveBeenCalledTimes(1);
   });
+});
+
+
+it("keeps labelled destinations and an expand control in the icon rail", () => {
+  sidebarState.state = "collapsed";
+  try {
+    renderWithI18n(<AppSidebar />);
+    expect(screen.getByRole("button", { name: "Documents" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collections" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand navigation" }));
+    expect(sidebarState.toggleSidebar).toHaveBeenCalled();
+  } finally {
+    sidebarState.state = "expanded";
+  }
 });

@@ -1097,6 +1097,9 @@
     "search_records": "Rechercher des enregistrements"
   },
   "cortex_docs": {
+    "collapse_list": "Réduire la liste",
+    "expand_list": "Développer la liste",
+    "parent_documents": "Afficher les documents parents",
     "can_read": "Lecture",
     "can_edit": "Modification",
     "permission": "Autorisation",

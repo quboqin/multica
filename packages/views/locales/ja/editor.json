@@ -53,6 +53,9 @@
     "zoom_actual": "実際のサイズ"
   },
   "attachment": {
+    "office_too_large": "Word・PowerPoint のプレビューは 20 MB までです。ファイルをダウンロードしてください。",
+    "office_unavailable": "Office プレビューを利用できません。後で再試行するか、ダウンロードしてください。",
+    "office_retry": "再試行",
     "download_failed": "ダウンロードリンクを取得できませんでした。しばらくしてからもう一度お試しください。",
     "preview": "プレビュー",
     "preview_loading": "プレビューを読み込み中…",

@@ -161,7 +161,7 @@ describe("DesktopShell sidebar trigger", () => {
     fireEvent.click(
       container.querySelector('[data-slot="sidebar-trigger"]')!,
     );
-    expect(mainTopBar).toHaveStyle({ paddingLeft: "200px" });
+    expect(mainTopBar).toHaveStyle({ paddingLeft: "max(0px, calc(200px - (var(--sidebar-width-icon) + 1rem)))" });
     expect(queryByRole("status", { name: /loading workspace/i })).toBeNull();
   });
 

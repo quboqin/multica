@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
+  canOpenPreview,
   extensionToLanguage,
   getPreviewKind,
   isPreviewable,
@@ -57,7 +58,12 @@ describe("getPreviewKind", () => {
     ["application/octet-stream", "rules.makefile", "text"],
 
     // Out of scope
-    ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx", null],
+    ["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx", "office"],
+    ["application/octet-stream", "slides.PPTX", "office"],
+    ["application/msword", "legacy", "office"],
+    ["application/vnd.ms-powerpoint", "legacy", "office"],
+    ["application/octet-stream", "document.doc", "office"],
+    ["application/octet-stream", "slides.ppt", "office"],
     ["application/octet-stream", "blob.bin", null],
     ["application/zip", "archive.zip", null],
   ];
@@ -195,4 +201,10 @@ describe("text preview whitelist (mirrors the server)", () => {
       expect(kind !== null && TEXT_BACKED.has(kind)).toBe(want);
     });
   }
+});
+
+
+it("requires an attachment record for authenticated Office previews", () => {
+  expect(canOpenPreview("office", false)).toBe(false);
+  expect(canOpenPreview("office", true)).toBe(true);
 });

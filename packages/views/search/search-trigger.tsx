@@ -15,12 +15,14 @@ export function SearchTrigger() {
   return (
     <SidebarMenuButton
       className="text-muted-foreground"
+      aria-label={t(($) => $.trigger.label)}
+      tooltip={t(($) => $.trigger.label)}
       onClick={() => useSearchStore.getState().setOpen(true)}
     >
       <Search />
-      <span>{t(($) => $.trigger.label)}</span>
+      <span className="group-data-[collapsible=icon]:sr-only">{t(($) => $.trigger.label)}</span>
       {shortcut ? (
-        <ShortcutKeycaps shortcut={shortcut} decorative className="pointer-events-none ml-auto" />
+        <ShortcutKeycaps shortcut={shortcut} decorative className="pointer-events-none ml-auto group-data-[collapsible=icon]:hidden" />
       ) : null}
     </SidebarMenuButton>
   );

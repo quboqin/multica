@@ -114,6 +114,7 @@ type Config struct {
 	// of attempting to dial a hard-coded private service.
 	CloudURL                 string
 	CloudTimeout             time.Duration
+	OfficePreviewURL         string
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
 	// AttachmentFrameAncestors are trusted browser origins allowed to embed

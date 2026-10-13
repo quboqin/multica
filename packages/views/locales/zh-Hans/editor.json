@@ -53,6 +53,9 @@
     "zoom_actual": "实际大小"
   },
   "attachment": {
+    "office_too_large": "Word 和 PPT 预览支持 20 MB 以内的文件，请下载此文件查看。",
+    "office_unavailable": "Office 预览服务繁忙或不可用，请稍后重试或下载文件。",
+    "office_retry": "重试",
     "download_failed": "下载链接获取失败，请稍后重试。",
     "preview": "预览",
     "preview_loading": "加载预览中…",

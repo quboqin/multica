@@ -12,6 +12,8 @@ import {
   FileText,
   ListFilter,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Search,
   Star,
@@ -102,15 +104,36 @@ function NavigatorShell({
   hasSelection: boolean;
   children: ReactNode;
 }) {
+  const { t } = useT("issues");
+  const wsId = useCurrentWorkspace()?.id ?? "";
+  const preference = labelledBy === DOCUMENTS_HEADING_ID ? "documentsHidden" : "collectionsHidden";
+  const hidden = useDocumentPreferences((state) => state.navigator[wsId]?.[preference] === true);
+  const setNavigator = useDocumentPreferences((state) => state.setNavigator);
+  const label = hidden ? t(($) => $.cortex_docs.expand_list) : t(($) => $.cortex_docs.collapse_list);
   return (
     <aside
-      aria-labelledby={labelledBy}
+      aria-label={labelledBy === DOCUMENTS_HEADING_ID ? t(($) => $.cortex_docs.documents) : t(($) => $.cortex_docs.tables)}
       className={cn(
-        "shrink-0 flex-col overflow-y-auto border-r bg-sidebar px-2 py-3 text-sidebar-foreground md:flex md:w-60",
+        "shrink-0 flex-col overflow-y-auto border-r bg-sidebar px-2 py-3 text-sidebar-foreground md:flex",
+        hidden ? "md:w-12" : "md:w-60",
         hasSelection ? "hidden" : "flex w-full",
       )}
     >
-      {children}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="mb-2 hidden self-end md:inline-flex"
+        aria-label={label}
+        title={label}
+        aria-expanded={!hidden}
+        aria-controls={`${labelledBy}-content`}
+        onClick={() => setNavigator(wsId, { [preference]: !hidden })}
+      >
+        {hidden ? <PanelLeftOpen /> : <PanelLeftClose />}
+      </Button>
+      <div id={`${labelledBy}-content`} className={cn(hidden && "md:hidden")}>
+        {children}
+      </div>
     </aside>
   );
 }
