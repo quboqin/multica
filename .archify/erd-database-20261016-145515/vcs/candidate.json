@@ -1,0 +1,354 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 通用 VCS",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/vcs/vcs.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "vcs_connection",
+      "label": "vcs_connection",
+      "tag": "通用 VCS",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "instance_url",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "account_login",
+          "type": "text"
+        },
+        {
+          "name": "access_token_encrypted",
+          "type": "text"
+        },
+        {
+          "name": "webhook_secret_encrypted",
+          "type": "text"
+        },
+        {
+          "name": "connected_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/216_vcs_integration.up.sql",
+          "line": 23,
+          "end_line": 36
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1746,
+          "end_line": 1757
+        }
+      ]
+    },
+    {
+      "id": "vcs_pull_request",
+      "label": "vcs_pull_request",
+      "tag": "通用 VCS",
+      "row": 0,
+      "col": 1,
+      "width": 311,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "connection_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "repo_owner",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "repo_name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "pr_number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "html_url",
+          "type": "text"
+        },
+        {
+          "name": "branch",
+          "type": "text"
+        },
+        {
+          "name": "head_sha",
+          "type": "text"
+        },
+        {
+          "name": "author_login",
+          "type": "text"
+        },
+        {
+          "name": "author_avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "merged_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "closed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pr_created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pr_updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "additions",
+          "type": "integer"
+        },
+        {
+          "name": "deletions",
+          "type": "integer"
+        },
+        {
+          "name": "changed_files",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/216_vcs_integration.up.sql",
+          "line": 38,
+          "end_line": 65
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1759,
+          "end_line": 1783
+        }
+      ]
+    },
+    {
+      "id": "vcs_commit_status",
+      "label": "vcs_commit_status",
+      "tag": "通用 VCS",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "connection_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "sha",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "context",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "target_url",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/216_vcs_integration.up.sql",
+          "line": 83,
+          "end_line": 92
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1736,
+          "end_line": 1744
+        }
+      ]
+    },
+    {
+      "id": "issue_vcs_pull_request",
+      "label": "issue_vcs_pull_request",
+      "tag": "通用 VCS",
+      "row": 1,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "pull_request_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "close_intent",
+          "type": "boolean"
+        },
+        {
+          "name": "linked_by_type",
+          "type": "text"
+        },
+        {
+          "name": "linked_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "linked_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/216_vcs_integration.up.sql",
+          "line": 67,
+          "end_line": 81
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1071,
+          "end_line": 1078
+        },
+        {
+          "path": "server/pkg/db/queries/vcs.sql",
+          "line": 119,
+          "end_line": 119
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "logical_issue_vcs_pull_request_pull_request_id_vcs_pull_request",
+      "from": "issue_vcs_pull_request",
+      "to": "vcs_pull_request",
+      "label": "pull_request_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 4 张表、46 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX vcs_connection_workspace_id_instance_url_key ON public.vcs_connection USING btree (workspace_id, instance_url)",
+        "CREATE UNIQUE INDEX vcs_pull_request_connection_id_repo_owner_repo_name_pr_numb_key ON public.vcs_pull_request USING btree (connection_id, repo_owner, repo_name, pr_number)",
+        "CREATE UNIQUE INDEX vcs_commit_status_pkey ON public.vcs_commit_status USING btree (connection_id, sha, context)",
+        "CREATE UNIQUE INDEX issue_vcs_pull_request_pkey ON public.issue_vcs_pull_request USING btree (issue_id, pull_request_id)"
+      ]
+    }
+  ]
+}

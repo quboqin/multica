@@ -1,0 +1,751 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Multica 权限管理机制",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/workflow-permissions-20261016-143956/permissions.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "request",
+      "label": "认证与工作区边界"
+    },
+    {
+      "id": "content",
+      "label": "文档与 Collections"
+    },
+    {
+      "id": "invoke",
+      "label": "智能体调用与管理"
+    },
+    {
+      "id": "run",
+      "label": "智能体的资源权限"
+    },
+    {
+      "id": "daemon",
+      "label": "守护进程与运行交付"
+    },
+    {
+      "id": "plugin",
+      "label": "插件 Action 与 MCP"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "auth",
+      "lane": "request",
+      "col": 0,
+      "type": "security",
+      "label": "验证身份",
+      "sublabel": "JWT / mul_ / mat_ / mcn_",
+      "sources": [
+        {
+          "path": "server/internal/middleware/auth.go",
+          "line": 59,
+          "end_line": 138
+        },
+        {
+          "path": "server/internal/middleware/auth.go",
+          "line": 140,
+          "end_line": 280
+        }
+      ],
+      "tag": "清除伪造身份头"
+    },
+    {
+      "id": "workspace",
+      "lane": "request",
+      "col": 1,
+      "type": "security",
+      "label": "确定工作区",
+      "sublabel": "成员资格 + 令牌绑定",
+      "sources": [
+        {
+          "path": "server/internal/middleware/workspace.go",
+          "line": 195,
+          "end_line": 245
+        }
+      ],
+      "tag": "mat_ 不可跨工作区"
+    },
+    {
+      "id": "role",
+      "lane": "request",
+      "col": 2,
+      "type": "security",
+      "label": "端点级门禁",
+      "sublabel": "成员 / admin / owner",
+      "sources": [
+        {
+          "path": "server/cmd/server/router.go",
+          "line": 1733,
+          "end_line": 1788
+        },
+        {
+          "path": "server/internal/handler/actor_guards.go",
+          "line": 96,
+          "end_line": 119
+        },
+        {
+          "path": "server/cmd/server/router.go",
+          "line": 1948,
+          "end_line": 1982
+        }
+      ],
+      "tag": "部分端点仅限人工"
+    },
+    {
+      "id": "loader",
+      "lane": "request",
+      "col": 3,
+      "type": "security",
+      "label": "限定资源范围",
+      "sublabel": "ID 与 workspace_id 一起查",
+      "sources": [
+        {
+          "path": "server/internal/handler/handler.go",
+          "line": 1047,
+          "end_line": 1085
+        }
+      ],
+      "tag": "文档再检查 ACL"
+    },
+    {
+      "id": "result",
+      "lane": "request",
+      "col": 4,
+      "type": "backend",
+      "label": "服务端决定可用操作",
+      "sublabel": "前端消费 can_edit / can_manage",
+      "sources": [
+        {
+          "path": "server/internal/handler/document_access.go",
+          "line": 105,
+          "end_line": 124
+        },
+        {
+          "path": "server/internal/handler/collection_access.go",
+          "line": 92,
+          "end_line": 123
+        },
+        {
+          "path": "packages/views/documents/documents-page.tsx",
+          "line": 419,
+          "end_line": 424
+        }
+      ]
+    },
+    {
+      "id": "reader",
+      "lane": "content",
+      "col": 0,
+      "type": "security",
+      "label": "当前工作区成员",
+      "sublabel": "文档 / Collections 独立授权",
+      "sources": [
+        {
+          "path": "server/migrations/581_document_sharing_versions.up.sql",
+          "line": 48,
+          "end_line": 57
+        },
+        {
+          "path": "server/migrations/586_collection_sharing.up.sql",
+          "line": 21,
+          "end_line": 29
+        }
+      ]
+    },
+    {
+      "id": "acl",
+      "lane": "content",
+      "col": 1,
+      "type": "security",
+      "label": "计算资源 ACL",
+      "sublabel": "所有者 · 分享范围 · 协作者",
+      "sources": [
+        {
+          "path": "server/pkg/db/queries/document_access.sql",
+          "line": 7,
+          "end_line": 13
+        },
+        {
+          "path": "server/pkg/db/queries/collection_access.sql",
+          "line": 7,
+          "end_line": 13
+        }
+      ],
+      "tag": "private / project / workspace"
+    },
+    {
+      "id": "operation",
+      "lane": "content",
+      "col": 2,
+      "type": "security",
+      "label": "按权限允许读写",
+      "sublabel": "view 只读 · edit 可写",
+      "sources": [
+        {
+          "path": "server/internal/handler/document_access.go",
+          "line": 49,
+          "end_line": 76
+        },
+        {
+          "path": "server/internal/handler/collection_access.go",
+          "line": 44,
+          "end_line": 67
+        }
+      ],
+      "tag": "无权限 404 · 越权写 403"
+    },
+    {
+      "id": "sharing",
+      "lane": "content",
+      "col": 3,
+      "type": "security",
+      "label": "分享设置另行检查",
+      "sublabel": "仅人工 owner 可变更",
+      "sources": [
+        {
+          "path": "server/internal/handler/document_access.go",
+          "line": 128,
+          "end_line": 159
+        },
+        {
+          "path": "server/internal/handler/collection_access.go",
+          "line": 106,
+          "end_line": 140
+        }
+      ],
+      "tag": "管理员无私有内容特权"
+    },
+    {
+      "id": "aclwrite",
+      "lane": "content",
+      "col": 4,
+      "type": "database",
+      "label": "文档分享写入",
+      "sublabel": "事务 + revision 冲突检查",
+      "sources": [
+        {
+          "path": "server/internal/handler/document_access.go",
+          "line": 191,
+          "end_line": 271
+        }
+      ],
+      "tag": "协作者必须是工作区成员"
+    },
+    {
+      "id": "caller",
+      "lane": "invoke",
+      "col": 0,
+      "type": "security",
+      "label": "确定调用责任人",
+      "sublabel": "成员本人 / 智能体链发起人",
+      "sources": [
+        {
+          "path": "server/internal/handler/agent_access.go",
+          "line": 73,
+          "end_line": 89
+        }
+      ],
+      "tag": "A2A 追溯人工发起人"
+    },
+    {
+      "id": "invoke",
+      "lane": "invoke",
+      "col": 1,
+      "type": "security",
+      "label": "检查调用策略",
+      "sublabel": "所有者或 public_to 命中",
+      "sources": [
+        {
+          "path": "server/internal/handler/agent_access.go",
+          "line": 73,
+          "end_line": 132
+        }
+      ],
+      "tag": "private 仅所有者"
+    },
+    {
+      "id": "invokecheck",
+      "lane": "invoke",
+      "col": 2,
+      "type": "security",
+      "label": "触发入口执行门禁",
+      "sublabel": "评论回复 / 队长触发",
+      "sources": [
+        {
+          "path": "server/internal/handler/agent_access.go",
+          "line": 404,
+          "end_line": 415
+        },
+        {
+          "path": "server/internal/handler/comment.go",
+          "line": 2835,
+          "end_line": 2870
+        }
+      ],
+      "tag": "admin 不自动获得调用权"
+    },
+    {
+      "id": "manage",
+      "lane": "invoke",
+      "col": 4,
+      "type": "security",
+      "label": "管理权限是另一套规则",
+      "sublabel": "智能体所有者或工作区管理员",
+      "sources": [
+        {
+          "path": "server/internal/handler/agent.go",
+          "line": 1864,
+          "end_line": 1889
+        },
+        {
+          "path": "server/internal/handler/agent_access.go",
+          "line": 135,
+          "end_line": 166
+        }
+      ],
+      "tag": "可管理不代表可调用"
+    },
+    {
+      "id": "tasktoken",
+      "lane": "run",
+      "col": 0,
+      "type": "security",
+      "label": "运行请求使用 mat_",
+      "sublabel": "绑定用户 / 智能体 / 运行 / 工作区",
+      "sources": [
+        {
+          "path": "server/internal/middleware/auth.go",
+          "line": 100,
+          "end_line": 138
+        },
+        {
+          "path": "server/pkg/db/queries/task_token.sql",
+          "line": 1,
+          "end_line": 14
+        }
+      ],
+      "tag": "哈希查验 + 到期失效"
+    },
+    {
+      "id": "intersection",
+      "lane": "run",
+      "col": 1,
+      "type": "security",
+      "label": "取双方资源权限交集",
+      "sublabel": "R：运行时所有者 · A：发起人",
+      "sources": [
+        {
+          "path": "server/internal/handler/task_resource_access.go",
+          "line": 63,
+          "end_line": 85
+        },
+        {
+          "path": "server/internal/handler/task_resource_access.go",
+          "line": 118,
+          "end_line": 152
+        }
+      ],
+      "tag": "基础权限 = min(R, A)"
+    },
+    {
+      "id": "grant",
+      "lane": "run",
+      "col": 2,
+      "type": "security",
+      "label": "评估可选文档授权",
+      "sublabel": "限本次运行的触发文档与智能体",
+      "sources": [
+        {
+          "path": "server/internal/handler/task_resource_access.go",
+          "line": 129,
+          "end_line": 134
+        },
+        {
+          "path": "server/internal/handler/task_resource_access.go",
+          "line": 203,
+          "end_line": 247
+        }
+      ],
+      "tag": "最高 edit，受 A 当前权限限制"
+    },
+    {
+      "id": "effective",
+      "lane": "run",
+      "col": 3,
+      "type": "security",
+      "label": "计算最终资源权限",
+      "sublabel": "Collections 无评论授权提升",
+      "sources": [
+        {
+          "path": "server/internal/handler/task_resource_access.go",
+          "line": 118,
+          "end_line": 152
+        }
+      ],
+      "tag": "无人工发起人时使用 R"
+    },
+    {
+      "id": "machine",
+      "lane": "run",
+      "col": 4,
+      "type": "security",
+      "label": "继续执行资源门禁",
+      "sublabel": "机器身份不能修改分享设置",
+      "sources": [
+        {
+          "path": "server/internal/handler/document_access.go",
+          "line": 128,
+          "end_line": 143
+        },
+        {
+          "path": "server/internal/handler/collection_access.go",
+          "line": 106,
+          "end_line": 123
+        },
+        {
+          "path": "server/internal/handler/actor_guards.go",
+          "line": 96,
+          "end_line": 119
+        }
+      ],
+      "tag": "敏感端点另有人工门禁"
+    },
+    {
+      "id": "dauth",
+      "lane": "daemon",
+      "col": 0,
+      "type": "security",
+      "label": "守护进程凭据 mdt_",
+      "sublabel": "哈希验证 + 绑定工作区",
+      "sources": [
+        {
+          "path": "server/internal/middleware/daemon_auth.go",
+          "line": 79,
+          "end_line": 154
+        }
+      ],
+      "tag": "专用认证入口"
+    },
+    {
+      "id": "dscope",
+      "lane": "daemon",
+      "col": 1,
+      "type": "security",
+      "label": "检查目标所属工作区",
+      "sublabel": "运行时与运行均先解析归属",
+      "sources": [
+        {
+          "path": "server/internal/handler/daemon.go",
+          "line": 53,
+          "end_line": 110
+        },
+        {
+          "path": "server/internal/handler/daemon.go",
+          "line": 126,
+          "end_line": 165
+        }
+      ]
+    },
+    {
+      "id": "claim",
+      "lane": "daemon",
+      "col": 2,
+      "type": "security",
+      "label": "领取运行时再次授权",
+      "sublabel": "事务内锁定运行时并重读智能体",
+      "sources": [
+        {
+          "path": "server/internal/handler/daemon.go",
+          "line": 1985,
+          "end_line": 2037
+        }
+      ],
+      "tag": "私有运行时要求同一所有者"
+    },
+    {
+      "id": "mint",
+      "lane": "daemon",
+      "col": 3,
+      "type": "backend",
+      "label": "签发本次运行令牌",
+      "sublabel": "mat_ 使用当前运行时所有者身份",
+      "sources": [
+        {
+          "path": "server/internal/handler/daemon.go",
+          "line": 2040,
+          "end_line": 2085
+        }
+      ],
+      "tag": "授权失败不交付运行"
+    },
+    {
+      "id": "pauth",
+      "lane": "plugin",
+      "col": 0,
+      "type": "security",
+      "label": "识别插件调用方",
+      "sublabel": "mpi_ / mpc_ 或登录会话桥接",
+      "sources": [
+        {
+          "path": "server/internal/middleware/plugin_auth.go",
+          "line": 10,
+          "end_line": 46
+        },
+        {
+          "path": "server/internal/handler/plugin_action.go",
+          "line": 112,
+          "end_line": 150
+        },
+        {
+          "path": "server/internal/handler/plugin_action.go",
+          "line": 159,
+          "end_line": 211
+        }
+      ],
+      "tag": "专用令牌与用户会话分流"
+    },
+    {
+      "id": "pscope",
+      "lane": "plugin",
+      "col": 1,
+      "type": "security",
+      "label": "安装状态与 scope",
+      "sublabel": "已启用 + 已授予所需 scope",
+      "sources": [
+        {
+          "path": "server/internal/service/plugin_action.go",
+          "line": 46,
+          "end_line": 80
+        }
+      ],
+      "tag": "工作区来自安装记录"
+    },
+    {
+      "id": "presource",
+      "lane": "plugin",
+      "col": 2,
+      "type": "security",
+      "label": "检查资源与回调范围",
+      "sublabel": "资源限定安装工作区",
+      "sources": [
+        {
+          "path": "server/internal/handler/plugin_action.go",
+          "line": 220,
+          "end_line": 243
+        },
+        {
+          "path": "server/internal/handler/plugin_action.go",
+          "line": 159,
+          "end_line": 211
+        }
+      ],
+      "tag": "mpc_ 可限定单个任务"
+    },
+    {
+      "id": "mcp",
+      "lane": "plugin",
+      "col": 4,
+      "type": "security",
+      "label": "MCP 工具单独审批",
+      "sublabel": "管理员批准工具并锁定 schema",
+      "sources": [
+        {
+          "path": "server/cmd/server/router.go",
+          "line": 1773,
+          "end_line": 1777
+        },
+        {
+          "path": "server/internal/service/plugin_mcp_transport.go",
+          "line": 139,
+          "end_line": 205
+        }
+      ],
+      "tag": "安装不等于批准工具"
+    }
+  ],
+  "edges": [
+    {
+      "id": "auth-workspace",
+      "from": "auth",
+      "to": "workspace",
+      "variant": "security"
+    },
+    {
+      "id": "workspace-role",
+      "from": "workspace",
+      "to": "role",
+      "variant": "security"
+    },
+    {
+      "id": "role-loader",
+      "from": "role",
+      "to": "loader",
+      "variant": "security"
+    },
+    {
+      "id": "loader-result",
+      "from": "loader",
+      "to": "result",
+      "variant": "security"
+    },
+    {
+      "id": "reader-acl",
+      "from": "reader",
+      "to": "acl",
+      "variant": "security"
+    },
+    {
+      "id": "acl-operation",
+      "from": "acl",
+      "to": "operation",
+      "variant": "security"
+    },
+    {
+      "id": "operation-sharing",
+      "from": "operation",
+      "to": "sharing",
+      "variant": "security",
+      "label": "修改分享时",
+      "role": "branch"
+    },
+    {
+      "id": "sharing-aclwrite",
+      "from": "sharing",
+      "to": "aclwrite",
+      "variant": "security"
+    },
+    {
+      "id": "caller-invoke",
+      "from": "caller",
+      "to": "invoke",
+      "variant": "security"
+    },
+    {
+      "id": "invoke-invokecheck",
+      "from": "invoke",
+      "to": "invokecheck",
+      "variant": "security"
+    },
+    {
+      "id": "tasktoken-intersection",
+      "from": "tasktoken",
+      "to": "intersection",
+      "variant": "security"
+    },
+    {
+      "id": "intersection-grant",
+      "from": "intersection",
+      "to": "grant",
+      "variant": "security"
+    },
+    {
+      "id": "grant-effective",
+      "from": "grant",
+      "to": "effective",
+      "variant": "security"
+    },
+    {
+      "id": "effective-machine",
+      "from": "effective",
+      "to": "machine",
+      "variant": "security"
+    },
+    {
+      "id": "dauth-dscope",
+      "from": "dauth",
+      "to": "dscope",
+      "variant": "security"
+    },
+    {
+      "id": "dscope-claim",
+      "from": "dscope",
+      "to": "claim",
+      "variant": "security"
+    },
+    {
+      "id": "claim-mint",
+      "from": "claim",
+      "to": "mint",
+      "variant": "security"
+    },
+    {
+      "id": "pauth-pscope",
+      "from": "pauth",
+      "to": "pscope",
+      "variant": "security"
+    },
+    {
+      "id": "pscope-presource",
+      "from": "pscope",
+      "to": "presource",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "如何阅读：按端点组合检查",
+      "items": [
+        "各行展开不同请求路径；不是每个请求依次经过全部节点。智能体管理与 MCP 审批是各自行内的独立规则。",
+        "认证证明身份，工作区检查限制租户范围，角色与资源 ACL 再决定能做什么。前端隐藏按钮不能替代服务端授权。",
+        "这里展示主要鉴权机制；未逐一展开公开分享链接、OAuth 回调和每个 API 的特例。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "工作区角色不是全局超级权限",
+      "items": [
+        "工作区设置、成员邀请、插件安装与审批等要求 owner / admin；删除工作区要求 owner。",
+        "部分计费与订阅端点使用 RequireHumanActor，拒绝 task_token / cloud_pat；JWT 与 mul_ 被视为人工身份。",
+        "缺少或无效凭据通常为 401；角色或操作越权为 403；不可见资源通常用 404 隐藏存在性。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "内容 ACL：资源 owner ≠ 工作区 owner",
+      "items": [
+        "文档与 Collections 具有 owner / edit / view 权限；工作区管理员不会自动绕过私有内容 ACL。",
+        "可见性由资源所有者、private / project / workspace 分享范围、显式协作者共同决定，并要求当前工作区成员资格。",
+        "当前 project 范围检查项目存在且属于同一工作区，没有额外的项目成员名单门禁。分享修改只允许人工资源 owner。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "运行权限的交集与临时授权",
+      "items": [
+        "令 R 为运行时所有者当前权限，A 为人工发起人当前权限，G 为评论授权；权限顺序为无权限 < view < edit < owner。",
+        "基础权限 B = min(R, A)。触发文档存在匹配的评论授权时，最终权限为 max(B, min(G, A, edit))；其他文档及 Collections 不提升。",
+        "未解析到有效人工发起人时，使用 R 的基础权限。评论授权只能由人工授予，不能超过授权人的当前权限，也不能提升为 owner。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "智能体：能管理、能调用、能执行各有边界",
+      "items": [
+        "调用 private 智能体只允许其所有者；public_to 匹配工作区或成员白名单，team 目标当前不产生授权。",
+        "管理员可查看和管理私有智能体，但没有调用特权。智能体间调用沿用顶层人工发起人；工作区白名单也可接纳工作区内部机器调用。",
+        "领取运行时还会校验绑定关系与私有运行时所有权；最终 mat_ 绑定事务中确认的运行时所有者。"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "插件：安装授权与工具审批分离",
+      "items": [
+        "用户会话桥接、安装令牌 mpi_、回调令牌 mpc_ 走不同认证路径；不能把安装令牌一概等同于某个人的权限。",
+        "Action 要求安装启用且 scope 匹配；成员型调用重查成员资格，回调还可能限定单个任务。资源在安装记录的工作区内解析。",
+        "MCP transport 要求 agent 触发能力与已批准工具集合；工具 schema 被锁定，安装本身不会自动开启工具调用。"
+      ]
+    }
+  ]
+}

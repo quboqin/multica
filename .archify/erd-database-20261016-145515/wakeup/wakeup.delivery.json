@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "28f3ee13-2999-41a2-9b4b-8ebd92ab1e49",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/wakeup/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/wakeup/wakeup.html",
+  "specification": {
+    "sha256": "8a05650076bbc8e35ce5b55bab05a27028cbaa1f71e792e8da33cd4d8c046495",
+    "bytes": 8875
+  },
+  "artifact": {
+    "sha256": "75e8fb09563b84f723d0ba3bca03929081c65d217f94e40df3ca4810cfb758e4",
+    "bytes": 839371
+  }
+}

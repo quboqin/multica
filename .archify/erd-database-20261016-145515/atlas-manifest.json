@@ -1,0 +1,330 @@
+{
+  "groups": [
+    {
+      "slug": "accounts",
+      "title": "账号与凭据",
+      "tables": [
+        "user",
+        "personal_access_token",
+        "verification_code"
+      ]
+    },
+    {
+      "slug": "workspaces",
+      "title": "工作区与成员",
+      "tables": [
+        "workspace",
+        "member",
+        "workspace_invitation",
+        "workspace_share_link",
+        "seat_capacity_outbox"
+      ]
+    },
+    {
+      "slug": "projects",
+      "title": "项目",
+      "tables": [
+        "project",
+        "project_resource"
+      ]
+    },
+    {
+      "slug": "issues",
+      "title": "任务与标签",
+      "tables": [
+        "issue",
+        "issue_label",
+        "issue_to_label",
+        "issue_dependency"
+      ]
+    },
+    {
+      "slug": "issue-config",
+      "title": "任务配置与视图",
+      "tables": [
+        "issue_status",
+        "issue_property",
+        "quick_action",
+        "issue_view",
+        "issue_view_preference"
+      ]
+    },
+    {
+      "slug": "comments",
+      "title": "评论与订阅",
+      "tables": [
+        "comment",
+        "comment_reaction",
+        "issue_reaction",
+        "issue_subscriber"
+      ]
+    },
+    {
+      "slug": "documents",
+      "title": "文档与权限",
+      "tables": [
+        "document_access",
+        "document_collaborator",
+        "document_version",
+        "document_publication",
+        "comment_agent_grant"
+      ]
+    },
+    {
+      "slug": "collections",
+      "title": "Collections",
+      "tables": [
+        "collection",
+        "collection_field",
+        "record",
+        "record_link",
+        "collection_access",
+        "collection_collaborator"
+      ]
+    },
+    {
+      "slug": "agents",
+      "title": "智能体配置",
+      "tables": [
+        "agent",
+        "agent_invocation_target",
+        "agent_builder_draft",
+        "agent_to_label",
+        "agent_mcp_server",
+        "workspace_mcp_server"
+      ]
+    },
+    {
+      "slug": "skills",
+      "title": "技能与团队",
+      "tables": [
+        "skill",
+        "skill_file",
+        "agent_skill",
+        "skill_to_label",
+        "squad",
+        "squad_member"
+      ]
+    },
+    {
+      "slug": "runtime",
+      "title": "运行时与守护进程",
+      "tables": [
+        "agent_runtime",
+        "runtime_profile",
+        "daemon_connection",
+        "daemon_token"
+      ]
+    },
+    {
+      "slug": "runs",
+      "title": "运行队列与消息",
+      "tables": [
+        "agent_task_queue",
+        "task_message",
+        "task_token"
+      ]
+    },
+    {
+      "slug": "supplements",
+      "title": "运行补充与来源",
+      "tables": [
+        "task_supplement",
+        "task_supplement_capability",
+        "issue_source_context",
+        "issue_source_context_object_intent"
+      ]
+    },
+    {
+      "slug": "wakeup",
+      "title": "任务唤醒与子事件",
+      "tables": [
+        "issue_wakeup",
+        "issue_wakeup_receipt",
+        "issue_child_event"
+      ]
+    },
+    {
+      "slug": "usage",
+      "title": "运行用量统计",
+      "tables": [
+        "task_usage",
+        "task_usage_hourly",
+        "task_usage_hourly_dirty",
+        "task_usage_hourly_rollup_state"
+      ]
+    },
+    {
+      "slug": "chat",
+      "title": "对话",
+      "tables": [
+        "chat_session",
+        "chat_message",
+        "chat_pinned_agent",
+        "chat_draft_restore"
+      ]
+    },
+    {
+      "slug": "autopilot",
+      "title": "自动化规则与运行",
+      "tables": [
+        "autopilot",
+        "autopilot_trigger",
+        "autopilot_run",
+        "autopilot_rule_version"
+      ]
+    },
+    {
+      "slug": "autopilot-access",
+      "title": "自动化权限与配额",
+      "tables": [
+        "autopilot_collaborator",
+        "autopilot_subscriber",
+        "autopilot_quota_period",
+        "autopilot_quota_reservation"
+      ]
+    },
+    {
+      "slug": "plugin-packages",
+      "title": "插件包与安装",
+      "tables": [
+        "plugin_package",
+        "plugin_package_version",
+        "plugin_package_file",
+        "plugin_installation"
+      ]
+    },
+    {
+      "slug": "plugin-runtime",
+      "title": "插件执行与存储",
+      "tables": [
+        "plugin_invocation",
+        "plugin_hook_schedule",
+        "plugin_storage",
+        "plugin_secret"
+      ]
+    },
+    {
+      "slug": "channels",
+      "title": "渠道接入与会话",
+      "tables": [
+        "channel_installation",
+        "channel_user_binding",
+        "channel_binding_token",
+        "channel_chat_session_binding",
+        "channel_chat_context_generation"
+      ]
+    },
+    {
+      "slug": "channel-delivery",
+      "title": "渠道消息交付",
+      "tables": [
+        "channel_reply_delivery",
+        "channel_task_delivery",
+        "channel_outbound_message",
+        "channel_outbound_card_message",
+        "channel_media_pending_object"
+      ]
+    },
+    {
+      "slug": "channel-audit",
+      "title": "渠道审计与钉钉",
+      "tables": [
+        "channel_inbound_audit",
+        "channel_inbound_message_dedup",
+        "dingtalk_bot_identity",
+        "dingtalk_group_presence",
+        "dingtalk_group_route"
+      ]
+    },
+    {
+      "slug": "lark",
+      "title": "Lark 专用接入",
+      "tables": [
+        "lark_installation",
+        "lark_user_binding",
+        "lark_binding_token",
+        "lark_chat_session_binding"
+      ]
+    },
+    {
+      "slug": "lark-messages",
+      "title": "Lark 消息与审计",
+      "tables": [
+        "lark_inbound_audit",
+        "lark_inbound_message_dedup",
+        "lark_outbound_card_message"
+      ]
+    },
+    {
+      "slug": "github",
+      "title": "GitHub 接入与 PR",
+      "tables": [
+        "github_installation",
+        "github_pending_installation",
+        "github_pull_request",
+        "issue_pull_request",
+        "issue_pull_request_exclusion",
+        "issue_pr_automation"
+      ]
+    },
+    {
+      "slug": "github-checks",
+      "title": "GitHub 检查与 Webhook",
+      "tables": [
+        "github_pull_request_check_suite",
+        "github_pull_request_check_run",
+        "github_pending_check_suite",
+        "webhook_delivery"
+      ]
+    },
+    {
+      "slug": "vcs",
+      "title": "通用 VCS",
+      "tables": [
+        "vcs_connection",
+        "vcs_pull_request",
+        "vcs_commit_status",
+        "issue_vcs_pull_request"
+      ]
+    },
+    {
+      "slug": "personal",
+      "title": "个人状态与通知",
+      "tables": [
+        "inbox_item",
+        "pinned_item",
+        "notification_preference",
+        "feedback",
+        "client_usage_daily",
+        "contact_sales_inquiry"
+      ]
+    },
+    {
+      "slug": "operations",
+      "title": "运维与索引",
+      "tables": [
+        "activity_log",
+        "maintenance_job",
+        "sys_cron_executions",
+        "search_index_change",
+        "search_index_prune_mark",
+        "schema_migrations",
+        "instance_telemetry_state"
+      ]
+    },
+    {
+      "slug": "assets",
+      "title": "附件与外部账号",
+      "tables": [
+        "attachment",
+        "user_composio_connection"
+      ]
+    }
+  ],
+  "tables": 135,
+  "columns": 1441,
+  "physical_foreign_keys": 109,
+  "explicit_query_associations": 50,
+  "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e"
+}

@@ -1,0 +1,719 @@
+[
+  {
+    "group": "accounts",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/accounts/accounts.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/accounts/accounts.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/accounts/accounts.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "issue-config",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/issue-config/issue-config.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/issue-config/issue-config.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/issue-config/issue-config.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "collections",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/collections/review-2/collections.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/collections/review-2/collections.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/collections/review-2/collections.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": {
+      "action": "inspect-route-readability",
+      "signals": {
+        "routesOverSuggestedBends": 1
+      },
+      "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+      "affectedRoutes": {
+        "crossings": [],
+        "detours": [
+          {
+            "relationship": {
+              "id": "logical_record_collection_id_collection",
+              "from": "record",
+              "to": "collection",
+              "label": "collection_id · 应用关联",
+              "collectionIndex": 0,
+              "artifactIndex": 1
+            },
+            "bends": 4,
+            "stretch": 1.341
+          }
+        ],
+        "truncated": false
+      },
+      "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+    }
+  },
+  {
+    "group": "wakeup",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/wakeup/wakeup.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/wakeup/wakeup.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/wakeup/wakeup.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "autopilot-access",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot-access/autopilot-access.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot-access/autopilot-access.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot-access/autopilot-access.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "plugin-packages",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/plugin-packages/plugin-packages.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/plugin-packages/plugin-packages.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/plugin-packages/plugin-packages.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "plugin-runtime",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/plugin-runtime/plugin-runtime.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/plugin-runtime/plugin-runtime.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/plugin-runtime/plugin-runtime.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "channel-audit",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channel-audit/channel-audit.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channel-audit/channel-audit.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channel-audit/channel-audit.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "vcs",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/vcs/vcs.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/vcs/vcs.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/vcs/vcs.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "workspaces",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/workspaces/workspaces.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/workspaces/workspaces.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/workspaces/workspaces.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "projects",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/projects/projects.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/projects/projects.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/projects/projects.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "issues",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/issues/issues.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/issues/issues.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/issues/issues.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": {
+      "action": "inspect-route-readability",
+      "signals": {
+        "routesOverSuggestedBends": 3
+      },
+      "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+      "affectedRoutes": {
+        "crossings": [],
+        "detours": [
+          {
+            "relationship": {
+              "id": "issue_to_label_issue_id_fkey",
+              "from": "issue_to_label",
+              "to": "issue",
+              "label": "issue_id",
+              "collectionIndex": 0,
+              "artifactIndex": 1
+            },
+            "bends": 3,
+            "stretch": 1.081,
+            "directCorridorBlockers": [
+              {
+                "id": "issue_label",
+                "label": "issue_label",
+                "box": [
+                  55,
+                  771,
+                  310,
+                  196
+                ]
+              }
+            ]
+          },
+          {
+            "relationship": {
+              "id": "issue_dependency_issue_id_fkey",
+              "from": "issue_dependency",
+              "to": "issue",
+              "label": "issue_id",
+              "collectionIndex": 2,
+              "artifactIndex": 3
+            },
+            "bends": 3,
+            "stretch": 1.064,
+            "directCorridorBlockers": [
+              {
+                "id": "issue_label",
+                "label": "issue_label",
+                "box": [
+                  55,
+                  771,
+                  310,
+                  196
+                ]
+              },
+              {
+                "id": "issue_to_label",
+                "label": "issue_to_label",
+                "box": [
+                  60,
+                  1122,
+                  300,
+                  76
+                ]
+              }
+            ]
+          },
+          {
+            "relationship": {
+              "id": "issue_dependency_depends_on_issue_id_fkey",
+              "from": "issue_dependency",
+              "to": "issue",
+              "label": "depends_on_issue_id",
+              "collectionIndex": 3,
+              "artifactIndex": 4
+            },
+            "bends": 3,
+            "stretch": 1.064,
+            "directCorridorBlockers": [
+              {
+                "id": "issue_label",
+                "label": "issue_label",
+                "box": [
+                  55,
+                  771,
+                  310,
+                  196
+                ]
+              },
+              {
+                "id": "issue_to_label",
+                "label": "issue_to_label",
+                "box": [
+                  60,
+                  1122,
+                  300,
+                  76
+                ]
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      },
+      "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+    }
+  },
+  {
+    "group": "comments",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/comments/comments.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/comments/comments.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/comments/comments.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "documents",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/documents/documents.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/documents/documents.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/documents/documents.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "agents",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": {
+      "action": "inspect-route-readability",
+      "signals": {
+        "routesOverSuggestedBends": 1
+      },
+      "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+      "affectedRoutes": {
+        "crossings": [],
+        "detours": [
+          {
+            "relationship": {
+              "id": "logical_agent_mcp_server_agent_id_agent",
+              "from": "agent_mcp_server",
+              "to": "agent",
+              "label": "agent_id · 应用关联",
+              "collectionIndex": 1,
+              "artifactIndex": 2
+            },
+            "bends": 3,
+            "stretch": 1.039,
+            "directCorridorBlockers": [
+              {
+                "id": "agent_invocation_target",
+                "label": "agent_invocation_target",
+                "box": [
+                  40,
+                  711,
+                  300,
+                  156
+                ]
+              },
+              {
+                "id": "agent_builder_draft",
+                "label": "agent_builder_draft",
+                "box": [
+                  40,
+                  1082,
+                  300,
+                  116
+                ]
+              },
+              {
+                "id": "agent_to_label",
+                "label": "agent_to_label",
+                "box": [
+                  40,
+                  1513,
+                  300,
+                  96
+                ]
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      },
+      "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+    }
+  },
+  {
+    "group": "skills",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/skills/skills.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/skills/skills.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/skills/skills.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "runtime",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "supplements",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/supplements/supplements.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/supplements/supplements.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/supplements/supplements.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "usage",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/usage/usage.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/usage/usage.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/usage/usage.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "chat",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/chat/chat.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/chat/chat.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/chat/chat.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "autopilot",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": {
+      "action": "inspect-route-readability",
+      "signals": {
+        "routesOverSuggestedBends": 1,
+        "routesOverSuggestedStretch": 1
+      },
+      "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+      "affectedRoutes": {
+        "crossings": [],
+        "detours": [
+          {
+            "relationship": {
+              "id": "autopilot_run_autopilot_id_fkey",
+              "from": "autopilot_run",
+              "to": "autopilot",
+              "label": "autopilot_id",
+              "collectionIndex": 1,
+              "artifactIndex": 2
+            },
+            "bends": 4,
+            "stretch": 1.37,
+            "directCorridorBlockers": [
+              {
+                "id": "autopilot_trigger",
+                "label": "autopilot_trigger",
+                "box": [
+                  32,
+                  771,
+                  311,
+                  416
+                ]
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      },
+      "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+    }
+  },
+  {
+    "group": "channels",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/review-2/channels.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/review-2/channels.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/review-2/channels.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "channel-delivery",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channel-delivery/review-2/channel-delivery.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channel-delivery/review-2/channel-delivery.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channel-delivery/review-2/channel-delivery.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "lark",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": {
+      "action": "inspect-route-readability",
+      "signals": {
+        "routesOverSuggestedBends": 2
+      },
+      "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+      "affectedRoutes": {
+        "crossings": [],
+        "detours": [
+          {
+            "relationship": {
+              "id": "lark_binding_token_installation_id_fkey",
+              "from": "lark_binding_token",
+              "to": "lark_installation",
+              "label": "installation_id",
+              "collectionIndex": 1,
+              "artifactIndex": 2
+            },
+            "bends": 3,
+            "stretch": 1.088,
+            "directCorridorBlockers": [
+              {
+                "id": "lark_user_binding",
+                "label": "lark_user_binding",
+                "box": [
+                  66.5,
+                  471,
+                  300,
+                  176
+                ]
+              }
+            ]
+          },
+          {
+            "relationship": {
+              "id": "lark_chat_session_binding_installation_id_fkey",
+              "from": "lark_chat_session_binding",
+              "to": "lark_installation",
+              "label": "installation_id",
+              "collectionIndex": 2,
+              "artifactIndex": 3
+            },
+            "bends": 3,
+            "stretch": 1.053,
+            "directCorridorBlockers": [
+              {
+                "id": "lark_user_binding",
+                "label": "lark_user_binding",
+                "box": [
+                  66.5,
+                  471,
+                  300,
+                  176
+                ]
+              },
+              {
+                "id": "lark_binding_token",
+                "label": "lark_binding_token",
+                "box": [
+                  66.5,
+                  702,
+                  300,
+                  176
+                ]
+              }
+            ]
+          }
+        ],
+        "truncated": false
+      },
+      "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+    }
+  },
+  {
+    "group": "lark-messages",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark-messages/lark-messages.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark-messages/lark-messages.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark-messages/lark-messages.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "github",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github/github.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github/github.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github/github.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "github-checks",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "personal",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/personal/personal.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/personal/personal.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/personal/personal.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "operations",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/operations/operations.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/operations/operations.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/operations/operations.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "assets",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/assets/assets.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/assets/assets.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/assets/assets.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": null
+  },
+  {
+    "group": "runs",
+    "ok": true,
+    "status": "pass",
+    "receipt": {
+      "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runs/runs.finalize.json",
+      "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runs/runs.finalize-summary.json",
+      "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runs/runs.browser-check.json"
+    },
+    "diagnostics": [],
+    "visualReviewRecommendation": {
+      "action": "inspect-route-readability",
+      "signals": {
+        "routesOverSuggestedBends": 2
+      },
+      "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+      "affectedRoutes": {
+        "crossings": [],
+        "detours": [
+          {
+            "relationship": {
+              "id": "task_token_task_id_fkey",
+              "from": "task_token",
+              "to": "agent_task_queue",
+              "label": "task_id",
+              "collectionIndex": 1,
+              "artifactIndex": 2
+            },
+            "bends": 3,
+            "stretch": 1.065,
+            "directCorridorBlockers": [
+              {
+                "id": "task_message",
+                "label": "task_message",
+                "box": [
+                  77,
+                  1311,
+                  300,
+                  256
+                ]
+              }
+            ]
+          },
+          {
+            "relationship": {
+              "id": "agent_task_queue_trigger_comment_id_fkey",
+              "from": "agent_task_queue",
+              "to": "comment",
+              "label": "trigger_comment_id",
+              "collectionIndex": 5,
+              "artifactIndex": 6
+            },
+            "bends": 4,
+            "stretch": 1.182
+          }
+        ],
+        "truncated": false
+      },
+      "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+    }
+  }
+]

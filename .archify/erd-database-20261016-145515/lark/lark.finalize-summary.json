@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/candidate.json",
+    "sha256": "d34c8eab0c4a40d8552b4e2e77fc9aa5301657dc05b6897728aa80f8cd1b09ba",
+    "bytes": 23388
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+    "sha256": "f2228d7e3bc4c222e6202bd2c2fd7ae81ffccf710252cde0a2cc900b27db42b5",
+    "bytes": 906654
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2554,
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 2
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "lark_binding_token_installation_id_fkey",
+            "from": "lark_binding_token",
+            "to": "lark_installation",
+            "label": "installation_id",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 3,
+          "stretch": 1.088,
+          "directCorridorBlockers": [
+            {
+              "id": "lark_user_binding",
+              "label": "lark_user_binding",
+              "box": [
+                66.5,
+                471,
+                300,
+                176
+              ]
+            }
+          ]
+        },
+        {
+          "relationship": {
+            "id": "lark_chat_session_binding_installation_id_fkey",
+            "from": "lark_chat_session_binding",
+            "to": "lark_installation",
+            "label": "installation_id",
+            "collectionIndex": 2,
+            "artifactIndex": 3
+          },
+          "bends": 3,
+          "stretch": 1.053,
+          "directCorridorBlockers": [
+            {
+              "id": "lark_user_binding",
+              "label": "lark_user_binding",
+              "box": [
+                66.5,
+                471,
+                300,
+                176
+              ]
+            },
+            {
+              "id": "lark_binding_token",
+              "label": "lark_binding_token",
+              "box": [
+                66.5,
+                702,
+                300,
+                176
+              ]
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

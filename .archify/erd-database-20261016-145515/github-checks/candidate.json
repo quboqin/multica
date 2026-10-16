@@ -1,0 +1,2083 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · GitHub 检查与 Webhook",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/github-checks/github-checks.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "github_pull_request_check_suite",
+      "label": "github_pull_request_check_suite",
+      "tag": "GitHub 检查与 Webhook",
+      "row": 0,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "pr_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "github_pull_request.id"
+        },
+        {
+          "name": "suite_id",
+          "type": "bigint",
+          "key": "pk"
+        },
+        {
+          "name": "head_sha",
+          "type": "text"
+        },
+        {
+          "name": "app_id",
+          "type": "bigint"
+        },
+        {
+          "name": "conclusion",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/091_pr_ci_conflict.up.sql",
+          "line": 10,
+          "end_line": 19
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 855,
+          "end_line": 863
+        }
+      ]
+    },
+    {
+      "id": "github_pull_request_check_run",
+      "label": "github_pull_request_check_run",
+      "tag": "GitHub 检查与 Webhook",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "pr_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "head_sha",
+          "type": "text"
+        },
+        {
+          "name": "ordinal",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "conclusion",
+          "type": "text"
+        },
+        {
+          "name": "details_url",
+          "type": "text"
+        },
+        {
+          "name": "is_status_context",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/222_github_pr_api_snapshot.up.sql",
+          "line": 43,
+          "end_line": 51
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 844,
+          "end_line": 853
+        }
+      ]
+    },
+    {
+      "id": "github_pending_check_suite",
+      "label": "github_pending_check_suite",
+      "tag": "GitHub 检查与 Webhook",
+      "row": 2,
+      "col": 0,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "installation_id",
+          "type": "bigint"
+        },
+        {
+          "name": "repo_owner",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "repo_name",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "pr_number",
+          "type": "integer",
+          "key": "pk"
+        },
+        {
+          "name": "suite_id",
+          "type": "bigint",
+          "key": "pk"
+        },
+        {
+          "name": "head_sha",
+          "type": "text"
+        },
+        {
+          "name": "app_id",
+          "type": "bigint"
+        },
+        {
+          "name": "conclusion",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "suite_updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/096_pending_check_suite.up.sql",
+          "line": 11,
+          "end_line": 25
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 789,
+          "end_line": 802
+        }
+      ]
+    },
+    {
+      "id": "webhook_delivery",
+      "label": "webhook_delivery",
+      "tag": "GitHub 检查与 Webhook",
+      "row": 3,
+      "col": 0,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "autopilot_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot.id"
+        },
+        {
+          "name": "trigger_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot_trigger.id"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "event",
+          "type": "text"
+        },
+        {
+          "name": "dedupe_key",
+          "type": "text"
+        },
+        {
+          "name": "dedupe_source",
+          "type": "text"
+        },
+        {
+          "name": "signature_status",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer"
+        },
+        {
+          "name": "selected_headers",
+          "type": "jsonb"
+        },
+        {
+          "name": "content_type",
+          "type": "text"
+        },
+        {
+          "name": "raw_body",
+          "type": "bytea"
+        },
+        {
+          "name": "response_status",
+          "type": "integer"
+        },
+        {
+          "name": "response_body",
+          "type": "text"
+        },
+        {
+          "name": "autopilot_run_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot_run.id"
+        },
+        {
+          "name": "replayed_from_delivery_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "webhook_delivery.id"
+        },
+        {
+          "name": "error",
+          "type": "text"
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_attempt_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "available_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "lease_token",
+          "type": "uuid"
+        },
+        {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "dispatch_attempts",
+          "type": "integer"
+        },
+        {
+          "name": "reason_code",
+          "type": "text"
+        },
+        {
+          "name": "replay_idempotency_key",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/093_webhook_deliveries.up.sql",
+          "line": 26,
+          "end_line": 37
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1795,
+          "end_line": 1824
+        }
+      ]
+    },
+    {
+      "id": "github_pull_request",
+      "label": "github_pull_request",
+      "tag": "引用 · GitHub 接入与 PR",
+      "row": 0,
+      "col": 1,
+      "width": 369,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "installation_id",
+          "type": "bigint"
+        },
+        {
+          "name": "repo_owner",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "repo_name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "pr_number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "html_url",
+          "type": "text"
+        },
+        {
+          "name": "branch",
+          "type": "text"
+        },
+        {
+          "name": "author_login",
+          "type": "text"
+        },
+        {
+          "name": "author_avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "merged_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "closed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pr_created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pr_updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "head_sha",
+          "type": "text"
+        },
+        {
+          "name": "mergeable_state",
+          "type": "text"
+        },
+        {
+          "name": "additions",
+          "type": "integer"
+        },
+        {
+          "name": "deletions",
+          "type": "integer"
+        },
+        {
+          "name": "changed_files",
+          "type": "integer"
+        },
+        {
+          "name": "api_mergeable",
+          "type": "text"
+        },
+        {
+          "name": "api_merge_state_status",
+          "type": "text"
+        },
+        {
+          "name": "checks_rollup_state",
+          "type": "text"
+        },
+        {
+          "name": "snapshot_head_sha",
+          "type": "text"
+        },
+        {
+          "name": "snapshot_fetched_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/079_github_integration.up.sql",
+          "line": 20,
+          "end_line": 41
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 813,
+          "end_line": 842
+        }
+      ]
+    },
+    {
+      "id": "issue",
+      "label": "issue",
+      "tag": "引用 · 任务与标签",
+      "row": 1,
+      "col": 1,
+      "width": 356,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "assignee_type",
+          "type": "text"
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid"
+        },
+        {
+          "name": "creator_type",
+          "type": "text"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid"
+        },
+        {
+          "name": "parent_issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "acceptance_criteria",
+          "type": "jsonb"
+        },
+        {
+          "name": "context_refs",
+          "type": "jsonb"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "project.id"
+        },
+        {
+          "name": "origin_type",
+          "type": "text"
+        },
+        {
+          "name": "origin_id",
+          "type": "uuid"
+        },
+        {
+          "name": "first_executed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "stage",
+          "type": "integer"
+        },
+        {
+          "name": "properties",
+          "type": "jsonb"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "last_activity_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "triage_state",
+          "type": "text"
+        },
+        {
+          "name": "duplicate_of_issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "document_revision",
+          "type": "bigint"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 52,
+          "end_line": 72
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 894,
+          "end_line": 927
+        }
+      ]
+    },
+    {
+      "id": "chat_session",
+      "label": "chat_session",
+      "tag": "引用 · 对话",
+      "row": 2,
+      "col": 1,
+      "width": 364,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent.id"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "session_id",
+          "type": "text"
+        },
+        {
+          "name": "work_dir",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "unread_since",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "runtime_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_runtime.id"
+        },
+        {
+          "name": "last_read_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "is_agent_intro",
+          "type": "boolean"
+        },
+        {
+          "name": "pinned_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid"
+        },
+        {
+          "name": "explicitly_created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/033_chat.up.sql",
+          "line": 4,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 527,
+          "end_line": 545
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "引用 · 工作区与成员",
+      "row": 3,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "squad",
+      "label": "squad",
+      "tag": "引用 · 技能与团队",
+      "row": 4,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "leader_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent.id"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_by",
+          "type": "uuid"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "instructions",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/084_squad.up.sql",
+          "line": 2,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1548,
+          "end_line": 1561
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "label": "agent",
+      "tag": "引用 · 智能体配置",
+      "row": 5,
+      "col": 1,
+      "width": 316,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "runtime_mode",
+          "type": "text"
+        },
+        {
+          "name": "runtime_config",
+          "type": "jsonb"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "max_concurrent_tasks",
+          "type": "integer"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "runtime_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_runtime.id"
+        },
+        {
+          "name": "instructions",
+          "type": "text"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_by",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "custom_env",
+          "type": "jsonb"
+        },
+        {
+          "name": "custom_args",
+          "type": "jsonb"
+        },
+        {
+          "name": "mcp_config",
+          "type": "jsonb"
+        },
+        {
+          "name": "model",
+          "type": "text"
+        },
+        {
+          "name": "thinking_level",
+          "type": "text"
+        },
+        {
+          "name": "composio_toolkit_allowlist",
+          "type": "text[]"
+        },
+        {
+          "name": "permission_mode",
+          "type": "text"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "system_key",
+          "type": "text"
+        },
+        {
+          "name": "disabled_runtime_skills",
+          "type": "jsonb"
+        },
+        {
+          "name": "service_tier",
+          "type": "text"
+        },
+        {
+          "name": "conversation_starters",
+          "type": "jsonb"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 36,
+          "end_line": 49
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 25,
+          "end_line": 57
+        }
+      ]
+    },
+    {
+      "id": "autopilot",
+      "label": "autopilot",
+      "tag": "引用 · 自动化规则与运行",
+      "row": 6,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "execution_mode",
+          "type": "text"
+        },
+        {
+          "name": "issue_title_template",
+          "type": "text"
+        },
+        {
+          "name": "created_by_type",
+          "type": "text"
+        },
+        {
+          "name": "created_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "last_run_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "assignee_type",
+          "type": "text"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "project.id"
+        },
+        {
+          "name": "pause_reason",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/042_autopilot.up.sql",
+          "line": 3,
+          "end_line": 24
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 207,
+          "end_line": 224
+        }
+      ]
+    },
+    {
+      "id": "autopilot_run",
+      "label": "autopilot_run",
+      "tag": "引用 · 自动化规则与运行",
+      "row": 7,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "autopilot_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot.id"
+        },
+        {
+          "name": "trigger_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot_trigger.id"
+        },
+        {
+          "name": "source",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_task_queue.id"
+        },
+        {
+          "name": "triggered_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "failure_reason",
+          "type": "text"
+        },
+        {
+          "name": "trigger_payload",
+          "type": "jsonb"
+        },
+        {
+          "name": "result",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "squad_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "squad.id"
+        },
+        {
+          "name": "planned_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "webhook_delivery_id",
+          "type": "uuid"
+        },
+        {
+          "name": "quota_reservation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "reason_code",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/042_autopilot.up.sql",
+          "line": 50,
+          "end_line": 65
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 271,
+          "end_line": 290
+        }
+      ]
+    },
+    {
+      "id": "autopilot_trigger",
+      "label": "autopilot_trigger",
+      "tag": "引用 · 自动化规则与运行",
+      "row": 8,
+      "col": 1,
+      "width": 311,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "autopilot_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot.id"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "cron_expression",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        },
+        {
+          "name": "next_run_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "webhook_token",
+          "type": "text"
+        },
+        {
+          "name": "label",
+          "type": "text"
+        },
+        {
+          "name": "last_fired_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "signing_secret",
+          "type": "text"
+        },
+        {
+          "name": "event_filters",
+          "type": "jsonb"
+        },
+        {
+          "name": "published_by_type",
+          "type": "text"
+        },
+        {
+          "name": "published_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_by_type",
+          "type": "text"
+        },
+        {
+          "name": "created_by_id",
+          "type": "uuid"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/042_autopilot.up.sql",
+          "line": 30,
+          "end_line": 43
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 299,
+          "end_line": 323
+        }
+      ]
+    },
+    {
+      "id": "comment",
+      "label": "comment",
+      "tag": "引用 · 评论与订阅",
+      "row": 9,
+      "col": 1,
+      "width": 351,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "author_type",
+          "type": "text"
+        },
+        {
+          "name": "author_id",
+          "type": "uuid"
+        },
+        {
+          "name": "content",
+          "type": "text"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "parent_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "comment.id"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "resolved_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "resolved_by_type",
+          "type": "text"
+        },
+        {
+          "name": "resolved_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "source_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "quick_action_id",
+          "type": "uuid"
+        },
+        {
+          "name": "via_plugin_id",
+          "type": "uuid"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "recovery_settled_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "suppressed_agent_ids",
+          "type": "uuid[]"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 97,
+          "end_line": 107
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 611,
+          "end_line": 632
+        }
+      ]
+    },
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "引用 · 账号与凭据",
+      "row": 10,
+      "col": 1,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    },
+    {
+      "id": "agent_runtime",
+      "label": "agent_runtime",
+      "tag": "引用 · 运行时与守护进程",
+      "row": 11,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "daemon_id",
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "runtime_mode",
+          "type": "text"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "device_info",
+          "type": "text"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "legacy_daemon_id",
+          "type": "text"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "profile_id",
+          "type": "uuid"
+        },
+        {
+          "name": "custom_name",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/004_agent_runtime_loop.up.sql",
+          "line": 1,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 83,
+          "end_line": 101
+        }
+      ]
+    },
+    {
+      "id": "agent_task_queue",
+      "label": "agent_task_queue",
+      "tag": "引用 · 运行队列与消息",
+      "row": 12,
+      "col": 1,
+      "width": 390,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent.id"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "priority",
+          "type": "integer"
+        },
+        {
+          "name": "dispatched_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "started_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "result",
+          "type": "jsonb"
+        },
+        {
+          "name": "error",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "jsonb"
+        },
+        {
+          "name": "runtime_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_runtime.id"
+        },
+        {
+          "name": "session_id",
+          "type": "text"
+        },
+        {
+          "name": "work_dir",
+          "type": "text"
+        },
+        {
+          "name": "trigger_comment_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "comment.id"
+        },
+        {
+          "name": "chat_session_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "chat_session.id"
+        },
+        {
+          "name": "autopilot_run_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "autopilot_run.id"
+        },
+        {
+          "name": "attempt",
+          "type": "integer"
+        },
+        {
+          "name": "max_attempts",
+          "type": "integer"
+        },
+        {
+          "name": "parent_task_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_task_queue.id"
+        },
+        {
+          "name": "failure_reason",
+          "type": "text"
+        },
+        {
+          "name": "trigger_summary",
+          "type": "text"
+        },
+        {
+          "name": "force_fresh_session",
+          "type": "boolean"
+        },
+        {
+          "name": "is_leader_task",
+          "type": "boolean"
+        },
+        {
+          "name": "wait_reason",
+          "type": "text"
+        },
+        {
+          "name": "initiator_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "handoff_note",
+          "type": "text"
+        },
+        {
+          "name": "prepare_lease_expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "squad_id",
+          "type": "uuid"
+        },
+        {
+          "name": "runtime_mcp_overlay",
+          "type": "jsonb"
+        },
+        {
+          "name": "escalation_for_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "fire_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "originator_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "runtime_connected_apps",
+          "type": "jsonb"
+        },
+        {
+          "name": "coalesced_comment_ids",
+          "type": "uuid[]"
+        },
+        {
+          "name": "delivered_comment_ids",
+          "type": "uuid[]"
+        },
+        {
+          "name": "chat_input_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "chat_finalize_deferred_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "originator_source",
+          "type": "text"
+        },
+        {
+          "name": "delegated_from_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "retry_of_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "rerun_of_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "rule_version_id",
+          "type": "uuid"
+        },
+        {
+          "name": "trigger_evidence_kind",
+          "type": "text"
+        },
+        {
+          "name": "trigger_evidence_ref_id",
+          "type": "uuid"
+        },
+        {
+          "name": "accountable_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "session_rollout_missing",
+          "type": "boolean"
+        },
+        {
+          "name": "retired_session_id",
+          "type": "text"
+        },
+        {
+          "name": "quick_actions_disabled",
+          "type": "boolean"
+        },
+        {
+          "name": "regenerate_quick_actions_for",
+          "type": "uuid"
+        },
+        {
+          "name": "branch_name",
+          "type": "text"
+        },
+        {
+          "name": "durable_work_dir",
+          "type": "text"
+        },
+        {
+          "name": "channel_context_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "comment_thread_id",
+          "type": "uuid"
+        },
+        {
+          "name": "cancelled_by_type",
+          "type": "text"
+        },
+        {
+          "name": "cancelled_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "cancelled_by_name",
+          "type": "text"
+        },
+        {
+          "name": "issue_snapshot",
+          "type": "jsonb"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 127,
+          "end_line": 140
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 110,
+          "end_line": 181
+        }
+      ]
+    },
+    {
+      "id": "project",
+      "label": "project",
+      "tag": "引用 · 项目",
+      "row": 0,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "lead_type",
+          "type": "text"
+        },
+        {
+          "name": "lead_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/034_projects.up.sql",
+          "line": 2,
+          "end_line": 14
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1401,
+          "end_line": 1415
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "github_pull_request_check_suite_pr_id_fkey",
+      "from": "github_pull_request_check_suite",
+      "to": "github_pull_request",
+      "label": "pr_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "webhook_delivery_workspace_id_fkey",
+      "from": "webhook_delivery",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "webhook_delivery_autopilot_id_fkey",
+      "from": "webhook_delivery",
+      "to": "autopilot",
+      "label": "autopilot_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "webhook_delivery_trigger_id_fkey",
+      "from": "webhook_delivery",
+      "to": "autopilot_trigger",
+      "label": "trigger_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "webhook_delivery_autopilot_run_id_fkey",
+      "from": "webhook_delivery",
+      "to": "autopilot_run",
+      "label": "autopilot_run_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 4 张表、55 个字段；另展开 14 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "github_pull_request_check_suite.pr_id → github_pull_request.id",
+        "webhook_delivery.workspace_id → workspace.id",
+        "webhook_delivery.autopilot_id → autopilot.id",
+        "webhook_delivery.trigger_id → autopilot_trigger.id",
+        "webhook_delivery.autopilot_run_id → autopilot_run.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX github_pull_request_check_suite_pkey ON public.github_pull_request_check_suite USING btree (pr_id, suite_id)",
+        "CREATE UNIQUE INDEX github_pull_request_check_run_pr_ordinal_idx ON public.github_pull_request_check_run USING btree (pr_id, ordinal)",
+        "CREATE UNIQUE INDEX github_pending_check_suite_pkey ON public.github_pending_check_suite USING btree (workspace_id, repo_owner, repo_name, pr_number, suite_id)",
+        "CREATE UNIQUE INDEX idx_webhook_delivery_dedupe ON public.webhook_delivery USING btree (trigger_id, dedupe_key) WHERE ((dedupe_key IS NOT NULL) AND (status <> ALL (ARRAY['rejected'::text, 'failed'::text])))",
+        "CREATE UNIQUE INDEX uq_webhook_delivery_replay_idempotency ON public.webhook_delivery USING btree (replayed_from_delivery_id, replay_idempotency_key) WHERE ((replayed_from_delivery_id IS NOT NULL) AND (replay_idempotency_key IS NOT NULL))"
+      ]
+    }
+  ]
+}

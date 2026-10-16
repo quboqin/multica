@@ -1,0 +1,461 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Multica 注册与登录时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/sequence-signup-login-20261016-144749/signup-login.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "participants": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "选择一种登录方式",
+      "sources": [
+        {
+          "path": "packages/views/auth/login-page.tsx",
+          "line": 179,
+          "end_line": 298
+        },
+        {
+          "path": "packages/core/paths/resolve.ts",
+          "line": 30,
+          "end_line": 43
+        }
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Web 客户端",
+      "sublabel": "登录页 / 回调页",
+      "sources": [
+        {
+          "path": "packages/core/auth/store.ts",
+          "line": 71,
+          "end_line": 98
+        },
+        {
+          "path": "apps/web/app/(auth)/login/page.tsx",
+          "line": 33,
+          "end_line": 149
+        },
+        {
+          "path": "apps/web/components/web-providers.tsx",
+          "line": 18,
+          "end_line": 75
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "认证 API",
+      "sublabel": "Go Handler",
+      "sources": [
+        {
+          "path": "server/internal/handler/auth.go",
+          "line": 162,
+          "end_line": 295
+        },
+        {
+          "path": "server/internal/handler/auth.go",
+          "line": 307,
+          "end_line": 482
+        },
+        {
+          "path": "server/internal/handler/auth.go",
+          "line": 558,
+          "end_line": 744
+        }
+      ]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "验证码 / 账号",
+      "sources": [
+        {
+          "path": "server/pkg/db/queries/verification_code.sql",
+          "line": 1,
+          "end_line": 29
+        },
+        {
+          "path": "server/pkg/db/queries/user.sql",
+          "line": 1,
+          "end_line": 19
+        },
+        {
+          "path": "server/internal/handler/workspace.go",
+          "line": 159,
+          "end_line": 176
+        }
+      ]
+    },
+    {
+      "id": "mail",
+      "type": "messagebus",
+      "label": "邮件通道",
+      "sublabel": "SMTP / Resend",
+      "sources": [
+        {
+          "path": "server/internal/service/email.go",
+          "line": 337,
+          "end_line": 364
+        }
+      ]
+    },
+    {
+      "id": "google",
+      "type": "cloud",
+      "label": "Google",
+      "sublabel": "OAuth / UserInfo",
+      "sources": [
+        {
+          "path": "packages/views/auth/login-page.tsx",
+          "line": 282,
+          "end_line": 298
+        },
+        {
+          "path": "server/internal/handler/auth.go",
+          "line": 582,
+          "end_line": 672
+        },
+        {
+          "path": "apps/web/app/auth/callback/page.tsx",
+          "line": 26,
+          "end_line": 158
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 655,
+      "label": "A · 邮箱验证码入口"
+    },
+    {
+      "from": 670,
+      "to": 936,
+      "label": "B · Google 入口（与 A 二选一）"
+    },
+    {
+      "from": 970,
+      "to": 1380,
+      "label": "C · 任一入口成功后：账号与会话"
+    }
+  ],
+  "messages": [
+    {
+      "id": "email-input",
+      "from": "user",
+      "to": "web",
+      "y": 170,
+      "label": "输入邮箱",
+      "variant": "default"
+    },
+    {
+      "id": "send-code",
+      "from": "web",
+      "to": "api",
+      "y": 202,
+      "label": "POST /auth/send-code",
+      "variant": "emphasis"
+    },
+    {
+      "id": "eligibility",
+      "from": "api",
+      "to": "db",
+      "y": 234,
+      "label": "查询账号与最近发码",
+      "variant": "default"
+    },
+    {
+      "id": "eligibility-result",
+      "from": "db",
+      "to": "api",
+      "y": 266,
+      "label": "账号状态 / 发码时间",
+      "variant": "return",
+      "note": "新邮箱先过注册策略；同邮箱间隔 60 秒"
+    },
+    {
+      "id": "save-code",
+      "from": "api",
+      "to": "db",
+      "y": 334,
+      "label": "保存 6 位码，10 分钟有效",
+      "variant": "default"
+    },
+    {
+      "id": "send-mail",
+      "from": "api",
+      "to": "mail",
+      "y": 366,
+      "label": "发送验证码",
+      "variant": "default"
+    },
+    {
+      "id": "send-response",
+      "from": "api",
+      "to": "web",
+      "y": 398,
+      "label": "200：进入验证码输入页",
+      "variant": "return"
+    },
+    {
+      "id": "mail-arrives",
+      "from": "mail",
+      "to": "user",
+      "y": 430,
+      "label": "已配置邮件通道：投递验证码",
+      "variant": "dashed"
+    },
+    {
+      "id": "code-input",
+      "from": "user",
+      "to": "web",
+      "y": 462,
+      "label": "输入验证码",
+      "variant": "default"
+    },
+    {
+      "id": "verify-code",
+      "from": "web",
+      "to": "api",
+      "y": 494,
+      "label": "POST /auth/verify-code",
+      "variant": "security"
+    },
+    {
+      "id": "lookup-code",
+      "from": "api",
+      "to": "db",
+      "y": 526,
+      "label": "取最新有效且未用的码",
+      "variant": "default"
+    },
+    {
+      "id": "code-row",
+      "from": "db",
+      "to": "api",
+      "y": 558,
+      "label": "返回 attempts < 5 的记录",
+      "variant": "return"
+    },
+    {
+      "id": "consume-code",
+      "from": "api",
+      "to": "db",
+      "y": 590,
+      "label": "匹配成功：标记已用",
+      "variant": "security",
+      "note": "错误则增加尝试次数并返回 400；成功进入 C"
+    },
+    {
+      "id": "choose-google",
+      "from": "user",
+      "to": "web",
+      "y": 690,
+      "label": "选择 Google 登录",
+      "variant": "default"
+    },
+    {
+      "id": "google-authorize",
+      "from": "web",
+      "to": "google",
+      "y": 722,
+      "label": "跳转授权页：openid email profile",
+      "variant": "security"
+    },
+    {
+      "id": "google-callback",
+      "from": "google",
+      "to": "web",
+      "y": 754,
+      "label": "回调 /auth/callback?code=…",
+      "variant": "return"
+    },
+    {
+      "id": "google-api",
+      "from": "web",
+      "to": "api",
+      "y": 786,
+      "label": "POST /auth/google",
+      "variant": "emphasis"
+    },
+    {
+      "id": "token-exchange",
+      "from": "api",
+      "to": "google",
+      "y": 818,
+      "label": "授权码换 access_token",
+      "variant": "security"
+    },
+    {
+      "id": "google-token",
+      "from": "google",
+      "to": "api",
+      "y": 850,
+      "label": "access_token",
+      "variant": "return"
+    },
+    {
+      "id": "userinfo",
+      "from": "api",
+      "to": "google",
+      "y": 882,
+      "label": "Bearer 调用 UserInfo",
+      "variant": "default"
+    },
+    {
+      "id": "google-profile",
+      "from": "google",
+      "to": "api",
+      "y": 914,
+      "label": "邮箱 / 姓名 / 头像 → 进入 C",
+      "variant": "return"
+    },
+    {
+      "id": "find-account",
+      "from": "api",
+      "to": "db",
+      "y": 992,
+      "label": "按邮箱查账号",
+      "variant": "default"
+    },
+    {
+      "id": "account-found",
+      "from": "db",
+      "to": "api",
+      "y": 1024,
+      "label": "已有账号 / 不存在",
+      "variant": "return"
+    },
+    {
+      "id": "new-account",
+      "from": "api",
+      "to": "db",
+      "y": 1056,
+      "label": "仅新邮箱：策略通过后创建",
+      "variant": "security",
+      "note": "已有账号复用；新账号重查白名单、注册开关或有效邀请"
+    },
+    {
+      "id": "new-account-row",
+      "from": "db",
+      "to": "api",
+      "y": 1124,
+      "label": "仅创建分支：返回新账号",
+      "variant": "return"
+    },
+    {
+      "id": "login-response",
+      "from": "api",
+      "to": "web",
+      "y": 1156,
+      "label": "200：user + JWT；设置 Cookie",
+      "variant": "security",
+      "note": "签发含 sid 的 JWT；设置 HttpOnly 认证与 CSRF Cookie"
+    },
+    {
+      "id": "load-workspaces",
+      "from": "web",
+      "to": "api",
+      "y": 1224,
+      "label": "携会话读取工作区列表",
+      "variant": "default"
+    },
+    {
+      "id": "workspace-response",
+      "from": "api",
+      "to": "web",
+      "y": 1256,
+      "label": "返回工作区；写入 Query 缓存",
+      "variant": "return"
+    },
+    {
+      "id": "load-invites",
+      "from": "web",
+      "to": "api",
+      "y": 1288,
+      "label": "无 next 且未引导：查询邀请",
+      "variant": "default"
+    },
+    {
+      "id": "invites-response",
+      "from": "api",
+      "to": "web",
+      "y": 1320,
+      "label": "待处理邀请；查询失败可继续",
+      "variant": "return"
+    },
+    {
+      "id": "destination",
+      "from": "web",
+      "to": "user",
+      "y": 1352,
+      "label": "跳转 next / 邀请 / 引导 / 工作区",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "注册与登录共用一套流程",
+      "items": [
+        "阅读方式：选择 A 或 B，然后进入 C；一次登录不会顺序执行两种验证。图中间距表示调用先后，不代表耗时。",
+        "已有邮箱复用账号，新邮箱才创建用户；当前入口没有独立的用户名密码注册步骤。Google 入口只在配置可用时开放。",
+        "主图以普通 Web 登录为准。桌面端、CLI 的令牌交接、移动端页面、会话续期与退出未展开；列表接口内部 SQL 已折叠。"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "注册策略会在创建账号前再次检查",
+      "items": [
+        "已有账号不受新用户注册开关限制，但停用账号仍会被拒绝。",
+        "新邮箱依次检查：邮箱白名单、域名白名单、无白名单时开放注册、有效待处理邀请。邀请可允许白名单外邮箱注册。",
+        "发送验证码时先检查资格；真正创建账号时再次检查。邀请允许注册，不代表已接受邀请或加入工作区。",
+        "验证码在 findOrCreateUser 之前标记已用；后续注册策略拒绝时，不能把同一码当作未消费处理。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "验证码与错误路径",
+      "items": [
+        "同邮箱两次发码至少相隔 60 秒；验证码有效期 10 分钟。查询排除已用、过期及 attempts ≥ 5 的记录。",
+        "验证码不匹配会增加该记录的失败次数，返回 400；注册策略拒绝或账号停用返回 403。重复发码过快返回 429，存储或发信失败返回 500。",
+        "邮件通道优先 SMTP，其次 Resend；两者均未配置时只向服务端输出 DEV 验证码，不会实际发送邮件。",
+        "非生产环境可显式配置开发验证码；主图使用正常邮箱验证码验证路径。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Google 分支的实际边界",
+      "items": [
+        "浏览器获取授权码，后端使用 Client ID / Secret 换 token，再请求 Google UserInfo，按返回邮箱查找或创建 Multica 账号。",
+        "仅 invalid_grant 被识别为授权码无效并返回 400；提供方或配置异常通常返回 502，Google 未提供邮箱返回 400。",
+        "Google 账号资料可按条件补全本地姓名或头像；随后与验证码登录一样签发 Multica 自身的 JWT。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "会话与登录后的去向",
+      "items": [
+        "响应包含 user 与 token，同时设置 HttpOnly 认证 Cookie 和 CSRF Cookie。普通 Web Cookie 模式只更新用户状态，不把响应 token 存入本地存储。",
+        "现有 localStorage 旧令牌会让 Web 暂留令牌模式；Electron 使用令牌存储路径，因此不能把所有平台都理解成仅 Cookie。",
+        "跳转顺序：安全的站内 next 优先；无 next 且未完成引导时先看待处理邀请；否则未引导去 /onboarding。",
+        "已完成引导：有工作区进入第一个工作区的任务页；没有工作区去 /workspaces/new。账号创建本身不自动创建工作区。"
+      ]
+    }
+  ]
+}

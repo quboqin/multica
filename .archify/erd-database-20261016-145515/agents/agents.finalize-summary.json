@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/candidate.json",
+    "sha256": "99747bcf603aa96661630e274ed3d6f9ba5af12eee0791d434c7fd1a7764934b",
+    "bytes": 17700
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.html",
+    "sha256": "233b9ab38efb7ba4afa35a99fe24849ac8685297d9300a2ccb8a72e6368c5b9a",
+    "bytes": 880149
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/agents/agents.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2545,
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "logical_agent_mcp_server_agent_id_agent",
+            "from": "agent_mcp_server",
+            "to": "agent",
+            "label": "agent_id · 应用关联",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 3,
+          "stretch": 1.039,
+          "directCorridorBlockers": [
+            {
+              "id": "agent_invocation_target",
+              "label": "agent_invocation_target",
+              "box": [
+                40,
+                711,
+                300,
+                156
+              ]
+            },
+            {
+              "id": "agent_builder_draft",
+              "label": "agent_builder_draft",
+              "box": [
+                40,
+                1082,
+                300,
+                116
+              ]
+            },
+            {
+              "id": "agent_to_label",
+              "label": "agent_to_label",
+              "box": [
+                40,
+                1513,
+                300,
+                96
+              ]
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

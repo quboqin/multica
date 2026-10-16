@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "0140659a-31c4-40a6-a594-ec5450807f2e",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/signup-login.html",
+  "specification": {
+    "sha256": "cd1ad3b549c01c5f2a552781ecd967cdbd8ba3a75a9fdc2a05690635430751e3",
+    "bytes": 12491
+  },
+  "artifact": {
+    "sha256": "aff0ea7093d330c6009481d360913512e76dcc56b9604f5c3cbc8a4ea0f79372",
+    "bytes": 835844
+  }
+}

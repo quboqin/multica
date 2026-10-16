@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "workflow",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/candidate.json",
+    "sha256": "be69c495617d9399fb472a038bb33883658b39dac92f521a51bb39d308623cad",
+    "bytes": 20047
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/permissions.html",
+    "sha256": "9481f3aef899410237df383ec1521cba85cd2b00ca4aadd5e4e5bc4486bfba28",
+    "bytes": 858120
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/permissions.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/permissions.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/permissions.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3574
+}

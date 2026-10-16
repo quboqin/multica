@@ -1,0 +1,398 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 渠道消息交付",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/channel-delivery/channel-delivery.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 45,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "channel_reply_delivery",
+      "label": "channel_reply_delivery",
+      "tag": "渠道消息交付",
+      "row": 0,
+      "col": 0,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "turn_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "binding_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "chat_id",
+          "type": "text"
+        },
+        {
+          "name": "phase",
+          "type": "text"
+        },
+        {
+          "name": "send_state",
+          "type": "text"
+        },
+        {
+          "name": "message_id",
+          "type": "text"
+        },
+        {
+          "name": "chunks_sent",
+          "type": "integer"
+        },
+        {
+          "name": "owner_token",
+          "type": "uuid"
+        },
+        {
+          "name": "owner_expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "settled_reason",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "attempt_depth",
+          "type": "integer"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/502_channel_reply_delivery.up.sql",
+          "line": 16,
+          "end_line": 18
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 444,
+          "end_line": 461
+        }
+      ]
+    },
+    {
+      "id": "channel_task_delivery",
+      "label": "channel_task_delivery",
+      "tag": "渠道消息交付",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "binding_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_chat_id",
+          "type": "text"
+        },
+        {
+          "name": "chat_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_message_id",
+          "type": "text"
+        },
+        {
+          "name": "channel_thread_id",
+          "type": "text"
+        },
+        {
+          "name": "route_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "channel_sender_id",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/420_channel_chat_route_generation.up.sql",
+          "line": 12,
+          "end_line": 24
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 463,
+          "end_line": 476
+        }
+      ]
+    },
+    {
+      "id": "channel_outbound_message",
+      "label": "channel_outbound_message",
+      "tag": "渠道消息交付",
+      "row": 0,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_message_id",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "binding_id",
+          "type": "uuid"
+        },
+        {
+          "name": "route_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "outbound_kind",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/425_channel_outbound_message.up.sql",
+          "line": 2,
+          "end_line": 11
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 433,
+          "end_line": 442
+        }
+      ]
+    },
+    {
+      "id": "channel_outbound_card_message",
+      "label": "channel_outbound_card_message",
+      "tag": "渠道消息交付",
+      "row": 0,
+      "col": 3,
+      "width": 324,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "chat_session_id",
+          "type": "uuid"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_chat_id",
+          "type": "text"
+        },
+        {
+          "name": "channel_card_message_id",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "last_patched_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 250,
+          "end_line": 261
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 421,
+          "end_line": 431
+        }
+      ]
+    },
+    {
+      "id": "channel_media_pending_object",
+      "label": "channel_media_pending_object",
+      "tag": "渠道消息交付",
+      "row": 0,
+      "col": 4,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "storage_key",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "chat_message_id",
+          "type": "uuid"
+        },
+        {
+          "name": "storage_url",
+          "type": "text"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "lease_token",
+          "type": "uuid"
+        },
+        {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "attempt",
+          "type": "integer"
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_error",
+          "type": "text"
+        },
+        {
+          "name": "tombstone_pass",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/227_channel_media_pending_object.up.sql",
+          "line": 32,
+          "end_line": 37
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 405,
+          "end_line": 419
+        }
+      ]
+    }
+  ],
+  "relationships": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 5 张表、58 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX idx_channel_outbound_message_id ON public.channel_outbound_message USING btree (installation_id, channel_message_id)",
+        "CREATE UNIQUE INDEX idx_channel_outbound_card_task ON public.channel_outbound_card_message USING btree (task_id) WHERE (task_id IS NOT NULL)"
+      ]
+    }
+  ]
+}

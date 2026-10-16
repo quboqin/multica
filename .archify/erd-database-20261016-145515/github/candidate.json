@@ -1,0 +1,915 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · GitHub 接入与 PR",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/github/github.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "github_installation",
+      "label": "github_installation",
+      "tag": "GitHub 接入与 PR",
+      "row": 0,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "installation_id",
+          "type": "bigint",
+          "key": "uk"
+        },
+        {
+          "name": "account_login",
+          "type": "text"
+        },
+        {
+          "name": "account_type",
+          "type": "text"
+        },
+        {
+          "name": "account_avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "connected_by_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/079_github_integration.up.sql",
+          "line": 4,
+          "end_line": 16
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 777,
+          "end_line": 787
+        }
+      ]
+    },
+    {
+      "id": "github_pending_installation",
+      "label": "github_pending_installation",
+      "tag": "GitHub 接入与 PR",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "installation_id",
+          "type": "bigint",
+          "key": "pk"
+        },
+        {
+          "name": "account_login",
+          "type": "text"
+        },
+        {
+          "name": "account_type",
+          "type": "text"
+        },
+        {
+          "name": "account_avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/120_github_pending_installation.up.sql",
+          "line": 5,
+          "end_line": 13
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 804,
+          "end_line": 811
+        }
+      ]
+    },
+    {
+      "id": "github_pull_request",
+      "label": "github_pull_request",
+      "tag": "GitHub 接入与 PR",
+      "row": 2,
+      "col": 0,
+      "width": 369,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "installation_id",
+          "type": "bigint"
+        },
+        {
+          "name": "repo_owner",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "repo_name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "pr_number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "html_url",
+          "type": "text"
+        },
+        {
+          "name": "branch",
+          "type": "text"
+        },
+        {
+          "name": "author_login",
+          "type": "text"
+        },
+        {
+          "name": "author_avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "merged_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "closed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pr_created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pr_updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "head_sha",
+          "type": "text"
+        },
+        {
+          "name": "mergeable_state",
+          "type": "text"
+        },
+        {
+          "name": "additions",
+          "type": "integer"
+        },
+        {
+          "name": "deletions",
+          "type": "integer"
+        },
+        {
+          "name": "changed_files",
+          "type": "integer"
+        },
+        {
+          "name": "api_mergeable",
+          "type": "text"
+        },
+        {
+          "name": "api_merge_state_status",
+          "type": "text"
+        },
+        {
+          "name": "checks_rollup_state",
+          "type": "text"
+        },
+        {
+          "name": "snapshot_head_sha",
+          "type": "text"
+        },
+        {
+          "name": "snapshot_fetched_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/079_github_integration.up.sql",
+          "line": 20,
+          "end_line": 41
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 813,
+          "end_line": 842
+        }
+      ]
+    },
+    {
+      "id": "issue_pull_request",
+      "label": "issue_pull_request",
+      "tag": "GitHub 接入与 PR",
+      "row": 3,
+      "col": 0,
+      "width": 303,
+      "attributes": [
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "issue.id"
+        },
+        {
+          "name": "pull_request_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "github_pull_request.id"
+        },
+        {
+          "name": "linked_by_type",
+          "type": "text"
+        },
+        {
+          "name": "linked_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "linked_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "close_intent",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/079_github_integration.up.sql",
+          "line": 45,
+          "end_line": 52
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 982,
+          "end_line": 989
+        }
+      ]
+    },
+    {
+      "id": "issue_pull_request_exclusion",
+      "label": "issue_pull_request_exclusion",
+      "tag": "GitHub 接入与 PR",
+      "row": 4,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "pull_request_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "excluded_by_type",
+          "type": "text"
+        },
+        {
+          "name": "excluded_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/545_pr_auto_complete.up.sql",
+          "line": 22,
+          "end_line": 30
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 991,
+          "end_line": 998
+        }
+      ]
+    },
+    {
+      "id": "issue_pr_automation",
+      "label": "issue_pr_automation",
+      "tag": "GitHub 接入与 PR",
+      "row": 5,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "auto_complete_disabled",
+          "type": "boolean"
+        },
+        {
+          "name": "updated_by_type",
+          "type": "text"
+        },
+        {
+          "name": "updated_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/545_pr_auto_complete.up.sql",
+          "line": 13,
+          "end_line": 20
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 959,
+          "end_line": 966
+        }
+      ]
+    },
+    {
+      "id": "issue",
+      "label": "issue",
+      "tag": "引用 · 任务与标签",
+      "row": 0,
+      "col": 1,
+      "width": 356,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "assignee_type",
+          "type": "text"
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid"
+        },
+        {
+          "name": "creator_type",
+          "type": "text"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid"
+        },
+        {
+          "name": "parent_issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "acceptance_criteria",
+          "type": "jsonb"
+        },
+        {
+          "name": "context_refs",
+          "type": "jsonb"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "project.id"
+        },
+        {
+          "name": "origin_type",
+          "type": "text"
+        },
+        {
+          "name": "origin_id",
+          "type": "uuid"
+        },
+        {
+          "name": "first_executed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "stage",
+          "type": "integer"
+        },
+        {
+          "name": "properties",
+          "type": "jsonb"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "last_activity_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "triage_state",
+          "type": "text"
+        },
+        {
+          "name": "duplicate_of_issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "document_revision",
+          "type": "bigint"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 52,
+          "end_line": 72
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 894,
+          "end_line": 927
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "引用 · 工作区与成员",
+      "row": 1,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "引用 · 账号与凭据",
+      "row": 2,
+      "col": 1,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    },
+    {
+      "id": "project",
+      "label": "project",
+      "tag": "引用 · 项目",
+      "row": 3,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "lead_type",
+          "type": "text"
+        },
+        {
+          "name": "lead_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/034_projects.up.sql",
+          "line": 2,
+          "end_line": 14
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1401,
+          "end_line": 1415
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "issue_pull_request_pull_request_id_fkey",
+      "from": "issue_pull_request",
+      "to": "github_pull_request",
+      "label": "pull_request_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "github_installation_workspace_id_fkey",
+      "from": "github_installation",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "github_installation_connected_by_id_fkey",
+      "from": "github_installation",
+      "to": "user",
+      "label": "connected_by_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    },
+    {
+      "id": "github_pull_request_workspace_id_fkey",
+      "from": "github_pull_request",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "issue_pull_request_issue_id_fkey",
+      "from": "issue_pull_request",
+      "to": "issue",
+      "label": "issue_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 6 张表、61 个字段；另展开 4 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "github_installation.workspace_id → workspace.id",
+        "github_installation.connected_by_id → user.id",
+        "github_pull_request.workspace_id → workspace.id",
+        "issue_pull_request.issue_id → issue.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX github_installation_workspace_id_installation_id_key ON public.github_installation USING btree (workspace_id, installation_id)",
+        "CREATE UNIQUE INDEX github_pull_request_workspace_id_repo_owner_repo_name_pr_nu_key ON public.github_pull_request USING btree (workspace_id, repo_owner, repo_name, pr_number)",
+        "CREATE UNIQUE INDEX issue_pull_request_pkey ON public.issue_pull_request USING btree (issue_id, pull_request_id)",
+        "CREATE UNIQUE INDEX issue_pull_request_exclusion_pkey ON public.issue_pull_request_exclusion USING btree (issue_id, pull_request_id)"
+      ]
+    }
+  ]
+}

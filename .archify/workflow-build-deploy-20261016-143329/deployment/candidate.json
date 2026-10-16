@@ -1,0 +1,380 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Multica 生产部署与失败处理",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/workflow-build-deploy-20261016-143329/deployment/deployment.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "trigger",
+      "label": "GitHub Actions 与主机准备"
+    },
+    {
+      "id": "upgrade",
+      "label": "启动、检查与交付"
+    },
+    {
+      "id": "recovery",
+      "label": "失败处理"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "entry",
+      "lane": "trigger",
+      "col": 0,
+      "type": "security",
+      "label": "生产部署入口",
+      "sublabel": "release-complete 已通过",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 545,
+          "end_line": 551
+        },
+        {
+          "path": ".github/workflows/deploy.yml",
+          "line": 14,
+          "end_line": 23
+        }
+      ],
+      "tag": "自动部署已启用"
+    },
+    {
+      "id": "ssh",
+      "lane": "trigger",
+      "col": 1,
+      "type": "backend",
+      "label": "验证来源并传输",
+      "sublabel": "SSH 校验主机密钥",
+      "sources": [
+        {
+          "path": ".github/workflows/deploy.yml",
+          "line": 25,
+          "end_line": 60
+        }
+      ],
+      "tag": "标签对应的脚本与 Compose"
+    },
+    {
+      "id": "preflight",
+      "lane": "trigger",
+      "col": 2,
+      "type": "security",
+      "label": "部署前检查与加锁",
+      "sublabel": "现有环境 / .env / 容器",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 7,
+          "end_line": 49
+        }
+      ],
+      "tag": "postgres、backend 已运行"
+    },
+    {
+      "id": "pull",
+      "lane": "trigger",
+      "col": 3,
+      "type": "cloud",
+      "label": "拉取发布镜像",
+      "sublabel": "backend / frontend",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 37,
+          "end_line": 50
+        }
+      ],
+      "tag": "同时拉取 office-preview"
+    },
+    {
+      "id": "stop",
+      "lane": "trigger",
+      "col": 4,
+      "type": "backend",
+      "label": "停止应用写入",
+      "sublabel": "停止前端与后端",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 50,
+          "end_line": 54
+        }
+      ],
+      "tag": "从此开始停机"
+    },
+    {
+      "id": "backup",
+      "lane": "trigger",
+      "col": 5,
+      "type": "database",
+      "label": "备份数据库与文件",
+      "sublabel": "pg_dump + uploads tar",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 28,
+          "end_line": 35
+        },
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 52,
+          "end_line": 57
+        }
+      ],
+      "tag": "检查备份非空"
+    },
+    {
+      "id": "start",
+      "lane": "upgrade",
+      "col": 5,
+      "type": "backend",
+      "label": "启动新版本",
+      "sublabel": "迁移成功后启动 API",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 58,
+          "end_line": 58
+        },
+        {
+          "path": "docker/entrypoint.sh",
+          "line": 26,
+          "end_line": 41
+        }
+      ]
+    },
+    {
+      "id": "health",
+      "lane": "upgrade",
+      "col": 4,
+      "type": "security",
+      "label": "健康与版本检查",
+      "sublabel": "Web + /health + SHA",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 60,
+          "end_line": 77
+        }
+      ],
+      "tag": "最多 60 次尝试"
+    },
+    {
+      "id": "persist",
+      "lane": "upgrade",
+      "col": 3,
+      "type": "database",
+      "label": "保存成功版本",
+      "sublabel": "写入配置与版本记录",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 78,
+          "end_line": 91
+        }
+      ],
+      "tag": "固定本次镜像标签"
+    },
+    {
+      "id": "accept",
+      "lane": "upgrade",
+      "col": 2,
+      "type": "external",
+      "label": "运维业务验收",
+      "sublabel": "权限 / 实时更新 / 数据",
+      "sources": [
+        {
+          "path": ".github/RELEASING.md",
+          "line": 171,
+          "end_line": 175
+        },
+        {
+          "path": ".github/RELEASING.md",
+          "line": 199,
+          "end_line": 209
+        }
+      ],
+      "tag": "测试账户与更新体验"
+    },
+    {
+      "id": "abort",
+      "lane": "recovery",
+      "col": 2,
+      "type": "security",
+      "label": "升级前终止",
+      "sublabel": "处理检查或拉取错误",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 2,
+          "end_line": 2
+        },
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 10,
+          "end_line": 50
+        }
+      ],
+      "tag": "尚未执行停止写入"
+    },
+    {
+      "id": "recover",
+      "lane": "recovery",
+      "col": 4,
+      "type": "security",
+      "label": "失败后人工恢复",
+      "sublabel": "检查备份与容器状态",
+      "sources": [
+        {
+          "path": "scripts/deploy-selfhost.sh",
+          "line": 52,
+          "end_line": 77
+        },
+        {
+          "path": ".github/RELEASING.md",
+          "line": 177,
+          "end_line": 182
+        }
+      ],
+      "tag": "不自动回滚数据库"
+    }
+  ],
+  "edges": [
+    {
+      "id": "entry-to-ssh",
+      "to": "ssh",
+      "from": "entry"
+    },
+    {
+      "id": "ssh-to-preflight",
+      "to": "preflight",
+      "from": "ssh"
+    },
+    {
+      "id": "preflight-to-pull",
+      "to": "pull",
+      "from": "preflight",
+      "label": "通过"
+    },
+    {
+      "id": "preflight-to-abort",
+      "to": "abort",
+      "role": "error",
+      "variant": "security",
+      "from": "preflight",
+      "label": "失败"
+    },
+    {
+      "id": "pull-to-stop",
+      "to": "stop",
+      "from": "pull",
+      "label": "成功"
+    },
+    {
+      "id": "pull-to-abort",
+      "to": "abort",
+      "role": "error",
+      "variant": "security",
+      "from": "pull",
+      "label": "失败"
+    },
+    {
+      "id": "stop-to-backup",
+      "to": "backup",
+      "from": "stop"
+    },
+    {
+      "id": "backup-to-start",
+      "to": "start",
+      "from": "backup",
+      "label": "备份成功"
+    },
+    {
+      "id": "backup-to-recover",
+      "to": "recover",
+      "role": "error",
+      "variant": "security",
+      "from": "backup",
+      "label": "失败"
+    },
+    {
+      "id": "start-to-health",
+      "to": "health",
+      "from": "start"
+    },
+    {
+      "id": "start-to-recover",
+      "to": "recover",
+      "role": "error",
+      "variant": "security",
+      "from": "start",
+      "label": "启动失败"
+    },
+    {
+      "id": "health-to-persist",
+      "to": "persist",
+      "from": "health",
+      "label": "通过"
+    },
+    {
+      "id": "health-to-recover",
+      "to": "recover",
+      "role": "error",
+      "variant": "security",
+      "from": "health",
+      "label": "重试后仍失败"
+    },
+    {
+      "id": "persist-to-accept",
+      "to": "accept",
+      "from": "persist"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "部署前置条件",
+      "items": [
+        "production GitHub Environment 提供主机、端口、用户、部署路径与 SSH 凭据；远端必须已有 Compose 环境。",
+        "工作流不创建基础设施。私有镜像需主机预先登录 GHCR；应用密钥保留在服务器 .env。",
+        "GitHub 并发锁与主机 .deploy-lock 防止升级重叠；硬中断残留锁需要人工确认后处理。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "停机与数据保护",
+      "items": [
+        "先拉取镜像，再停止前后端；数据库继续运行以便导出。",
+        "备份含原 .env、先前发布记录、PostgreSQL dump 和本地 uploads 卷；对象存储需要单独备份策略。",
+        "备份、迁移或健康检查失败不会自动恢复数据库；停止写入后的失败可能让旧服务保持停止。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "自动检查的边界",
+      "items": [
+        "脚本从前端容器检查内部 Web 首页、API /health，并核对后端 commit 是否等于目标 SHA。",
+        "自动脚本不检查 /readyz、外部反向代理、登录、WebSocket 或业务权限；这些需要额外验收。",
+        "通过后更新 .env 的镜像选择、docker-compose.selfhost.yml 与 .current-release。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "如何阅读",
+      "items": [
+        "此图描述已有 Compose 栈的升级；首次安装与 Helm 集群部署不属于 deploy.yml 的执行路径。",
+        "图示来源为当前提交的脚本与工作流，未连接生产服务器、未触发构建或部署。"
+      ]
+    }
+  ]
+}

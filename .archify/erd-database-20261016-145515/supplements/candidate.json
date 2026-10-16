@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 运行补充与来源",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/supplements/supplements.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "task_supplement",
+      "label": "task_supplement",
+      "tag": "运行补充与来源",
+      "row": 0,
+      "col": 0,
+      "width": 323,
+      "attributes": [
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "pk"
+          ]
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "comment_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "author_id",
+          "type": "uuid"
+        },
+        {
+          "name": "client_request_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "failure_reason",
+          "type": "text"
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "delivered_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/538_task_supplement.up.sql",
+          "line": 16,
+          "end_line": 29
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1611,
+          "end_line": 1624
+        }
+      ]
+    },
+    {
+      "id": "task_supplement_capability",
+      "label": "task_supplement_capability",
+      "tag": "运行补充与来源",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "capability",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/538_task_supplement.up.sql",
+          "line": 4,
+          "end_line": 10
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1626,
+          "end_line": 1632
+        }
+      ]
+    },
+    {
+      "id": "issue_source_context",
+      "label": "issue_source_context",
+      "tag": "运行补充与来源",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "origin_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "source_issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "anchor_comment_id",
+          "type": "uuid"
+        },
+        {
+          "name": "captured_by_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "snapshot_version",
+          "type": "smallint"
+        },
+        {
+          "name": "snapshot",
+          "type": "jsonb"
+        },
+        {
+          "name": "capture_digest",
+          "type": "text"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "captured_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "attached_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/407_issue_source_context.up.sql",
+          "line": 1,
+          "end_line": 20
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1010,
+          "end_line": 1024
+        }
+      ]
+    },
+    {
+      "id": "issue_source_context_object_intent",
+      "label": "issue_source_context_object_intent",
+      "tag": "运行补充与来源",
+      "row": 1,
+      "col": 1,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "storage_key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "source_context_id",
+          "type": "uuid"
+        },
+        {
+          "name": "attachment_id",
+          "type": "uuid"
+        },
+        {
+          "name": "object_url",
+          "type": "text"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "lease_token",
+          "type": "uuid"
+        },
+        {
+          "name": "lease_expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_error",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/407_issue_source_context.up.sql",
+          "line": 24,
+          "end_line": 36
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1026,
+          "end_line": 1038
+        }
+      ]
+    }
+  ],
+  "relationships": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 4 张表、41 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX task_supplement_task_request_uidx ON public.task_supplement USING btree (task_id, client_request_id)",
+        "CREATE UNIQUE INDEX task_supplement_pkey ON public.task_supplement USING btree (comment_id, task_id)",
+        "CREATE UNIQUE INDEX idx_issue_source_context_origin_task ON public.issue_source_context USING btree (origin_task_id) WHERE ((state = 'pending'::text) AND (origin_task_id IS NOT NULL))",
+        "CREATE UNIQUE INDEX idx_issue_source_context_issue ON public.issue_source_context USING btree (issue_id) WHERE ((state = 'attached'::text) AND (issue_id IS NOT NULL))"
+      ]
+    }
+  ]
+}

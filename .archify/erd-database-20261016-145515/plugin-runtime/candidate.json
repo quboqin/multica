@@ -1,0 +1,307 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 插件执行与存储",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/plugin-runtime/plugin-runtime.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "plugin_invocation",
+      "label": "plugin_invocation",
+      "tag": "插件执行与存储",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "hook_key",
+          "type": "text"
+        },
+        {
+          "name": "trigger",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "event_type",
+          "type": "text"
+        },
+        {
+          "name": "attempt",
+          "type": "integer"
+        },
+        {
+          "name": "latency_ms",
+          "type": "integer"
+        },
+        {
+          "name": "error",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "delivery_id",
+          "type": "text"
+        },
+        {
+          "name": "planned_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/362_plugin_hook_engine.up.sql",
+          "line": 18,
+          "end_line": 34
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1333,
+          "end_line": 1347
+        }
+      ]
+    },
+    {
+      "id": "plugin_hook_schedule",
+      "label": "plugin_hook_schedule",
+      "tag": "插件执行与存储",
+      "row": 0,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "hook_key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "cron_expression",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        },
+        {
+          "name": "generation",
+          "type": "uuid"
+        },
+        {
+          "name": "activated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "next_run_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/399_plugin_hook_schedule.up.sql",
+          "line": 9,
+          "end_line": 24
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1300,
+          "end_line": 1313
+        }
+      ]
+    },
+    {
+      "id": "plugin_storage",
+      "label": "plugin_storage",
+      "tag": "插件执行与存储",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "scope_type",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "scope_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "value",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/344_plugin_v2_reset.up.sql",
+          "line": 68,
+          "end_line": 79
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1390,
+          "end_line": 1399
+        }
+      ]
+    },
+    {
+      "id": "plugin_secret",
+      "label": "plugin_secret",
+      "tag": "插件执行与存储",
+      "row": 1,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "ciphertext",
+          "type": "bytea"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/344_plugin_v2_reset.up.sql",
+          "line": 84,
+          "end_line": 91
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1381,
+          "end_line": 1388
+        }
+      ]
+    }
+  ],
+  "relationships": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 4 张表、39 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX idx_plugin_hook_schedule_installation_key ON public.plugin_hook_schedule USING btree (installation_id, hook_key)",
+        "CREATE UNIQUE INDEX idx_plugin_storage_scope_key ON public.plugin_storage USING btree (installation_id, scope_type, scope_id, key)",
+        "CREATE UNIQUE INDEX idx_plugin_secret_installation_key ON public.plugin_secret USING btree (installation_id, key)"
+      ]
+    }
+  ]
+}

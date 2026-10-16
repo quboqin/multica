@@ -1,0 +1,412 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 任务配置与视图",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/issue-config/issue-config.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "issue_status",
+      "label": "issue_status",
+      "tag": "任务配置与视图",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "category",
+          "type": "text"
+        },
+        {
+          "name": "color",
+          "type": "text"
+        },
+        {
+          "name": "is_system",
+          "type": "boolean"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/332_issue_status.up.sql",
+          "line": 23,
+          "end_line": 31
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1040,
+          "end_line": 1054
+        }
+      ]
+    },
+    {
+      "id": "issue_property",
+      "label": "issue_property",
+      "tag": "任务配置与视图",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/191_issue_properties.up.sql",
+          "line": 15,
+          "end_line": 21
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 968,
+          "end_line": 980
+        }
+      ]
+    },
+    {
+      "id": "quick_action",
+      "label": "quick_action",
+      "tag": "任务配置与视图",
+      "row": 0,
+      "col": 2,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "assignee_type",
+          "type": "text"
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid"
+        },
+        {
+          "name": "prompt",
+          "type": "text"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "last_used_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "use_count",
+          "type": "bigint"
+        },
+        {
+          "name": "created_by_type",
+          "type": "text"
+        },
+        {
+          "name": "created_by_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/237_quick_action.up.sql",
+          "line": 34,
+          "end_line": 59
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1429,
+          "end_line": 1445
+        }
+      ]
+    },
+    {
+      "id": "issue_view",
+      "label": "issue_view",
+      "tag": "任务配置与视图",
+      "row": 0,
+      "col": 3,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "scope_type",
+          "type": "text"
+        },
+        {
+          "name": "scope_id",
+          "type": "uuid"
+        },
+        {
+          "name": "scope_variant",
+          "type": "text"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "definition_version",
+          "type": "integer"
+        },
+        {
+          "name": "query",
+          "type": "jsonb"
+        },
+        {
+          "name": "display",
+          "type": "jsonb"
+        },
+        {
+          "name": "revision",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "collection_id",
+          "type": "uuid"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/265_issue_view.up.sql",
+          "line": 7,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1080,
+          "end_line": 1096
+        }
+      ]
+    },
+    {
+      "id": "issue_view_preference",
+      "label": "issue_view_preference",
+      "tag": "任务配置与视图",
+      "row": 0,
+      "col": 4,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "scope_type",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "scope_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "prefs",
+          "type": "jsonb"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/268_issue_view_preference.up.sql",
+          "line": 9,
+          "end_line": 17
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1098,
+          "end_line": 1105
+        }
+      ]
+    }
+  ],
+  "relationships": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 5 张表、60 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX idx_issue_status_workspace_key ON public.issue_status USING btree (workspace_id, key)",
+        "CREATE UNIQUE INDEX idx_issue_status_workspace_name_active ON public.issue_status USING btree (workspace_id, lower(name)) WHERE (archived_at IS NULL)",
+        "CREATE UNIQUE INDEX issue_view_preference_pkey ON public.issue_view_preference USING btree (workspace_id, user_id, scope_type, scope_id)"
+      ]
+    }
+  ]
+}

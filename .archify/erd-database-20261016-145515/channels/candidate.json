@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 渠道接入与会话",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/channels/channels.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 45,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "channel_installation",
+      "label": "channel_installation",
+      "tag": "渠道接入与会话",
+      "row": 0,
+      "col": 0,
+      "width": 351,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "channel_type",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "ws_lease_token",
+          "type": "text"
+        },
+        {
+          "name": "ws_lease_expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "installer_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 62,
+          "end_line": 82
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 390,
+          "end_line": 403
+        }
+      ]
+    },
+    {
+      "id": "channel_user_binding",
+      "label": "channel_user_binding",
+      "tag": "渠道接入与会话",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "multica_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_user_id",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "bound_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 130,
+          "end_line": 140
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 478,
+          "end_line": 487
+        },
+        {
+          "path": "server/pkg/db/queries/channel.sql",
+          "line": 559,
+          "end_line": 559
+        }
+      ]
+    },
+    {
+      "id": "channel_binding_token",
+      "label": "channel_binding_token",
+      "tag": "渠道接入与会话",
+      "row": 0,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "token_hash",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_user_id",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 281,
+          "end_line": 294
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 325,
+          "end_line": 334
+        }
+      ]
+    },
+    {
+      "id": "channel_chat_session_binding",
+      "label": "channel_chat_session_binding",
+      "tag": "渠道接入与会话",
+      "row": 0,
+      "col": 3,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "chat_session_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_chat_id",
+          "type": "text"
+        },
+        {
+          "name": "chat_type",
+          "type": "text"
+        },
+        {
+          "name": "last_message_id",
+          "type": "text"
+        },
+        {
+          "name": "last_thread_id",
+          "type": "text"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "pending_fresh",
+          "type": "boolean"
+        },
+        {
+          "name": "context_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "route_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "retired_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "history_start_message_id",
+          "type": "text"
+        },
+        {
+          "name": "history_end_message_id",
+          "type": "text"
+        },
+        {
+          "name": "history_boundary_pending",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 161,
+          "end_line": 170
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 350,
+          "end_line": 368
+        }
+      ]
+    },
+    {
+      "id": "channel_chat_context_generation",
+      "label": "channel_chat_context_generation",
+      "tag": "渠道接入与会话",
+      "row": 0,
+      "col": 4,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "chat_session_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "key": "uk"
+        },
+        {
+          "name": "history_start_message_id",
+          "type": "text"
+        },
+        {
+          "name": "history_end_message_id",
+          "type": "text"
+        },
+        {
+          "name": "history_boundary_pending",
+          "type": "boolean"
+        },
+        {
+          "name": "pending_fresh",
+          "type": "boolean"
+        },
+        {
+          "name": "initiator_user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_message_id",
+          "type": "text"
+        },
+        {
+          "name": "last_thread_id",
+          "type": "text"
+        },
+        {
+          "name": "last_sender_id",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/377_channel_chat_context_generation.up.sql",
+          "line": 22,
+          "end_line": 31
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 336,
+          "end_line": 348
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "logical_channel_user_binding_installation_id_channel_installation",
+      "from": "channel_user_binding",
+      "to": "channel_installation",
+      "label": "installation_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 5 张表、56 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX channel_installation_workspace_id_agent_id_channel_type_key ON public.channel_installation USING btree (workspace_id, agent_id, channel_type)",
+        "CREATE UNIQUE INDEX channel_user_binding_installation_id_channel_user_id_key ON public.channel_user_binding USING btree (installation_id, channel_user_id)",
+        "CREATE UNIQUE INDEX idx_channel_chat_session_binding_active_route ON public.channel_chat_session_binding USING btree (installation_id, channel_chat_id) WHERE (retired_at IS NULL)",
+        "CREATE UNIQUE INDEX channel_chat_context_generation_session_revision_idx ON public.channel_chat_context_generation USING btree (chat_session_id, revision)"
+      ]
+    }
+  ]
+}

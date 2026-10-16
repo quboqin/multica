@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "sequence",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/candidate.json",
+    "sha256": "cd1ad3b549c01c5f2a552781ecd967cdbd8ba3a75a9fdc2a05690635430751e3",
+    "bytes": 12491
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/signup-login.html",
+    "sha256": "aff0ea7093d330c6009481d360913512e76dcc56b9604f5c3cbc8a4ea0f79372",
+    "bytes": 835844
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/signup-login.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/signup-login.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/sequence-signup-login-20261016-144749/signup-login.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 3392
+}

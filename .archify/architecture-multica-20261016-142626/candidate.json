@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Multica Repository Architecture",
+    "locale": "en",
+    "output": ".archify/architecture-multica-20261016-142626/multica.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "desktop-web",
+      "type": "frontend",
+      "label": "Web + Desktop",
+      "sublabel": "Next.js / Electron",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        180,
+        76
+      ],
+      "sources": [
+        {
+          "path": "apps/web/package.json",
+          "line": 16,
+          "end_line": 30
+        },
+        {
+          "path": "apps/desktop/package.json",
+          "line": 19,
+          "end_line": 55
+        },
+        {
+          "path": "AGENTS.md",
+          "line": 15,
+          "end_line": 26
+        }
+      ]
+    },
+    {
+      "id": "shared-client",
+      "type": "frontend",
+      "label": "Shared frontend",
+      "sublabel": "views + core + ui",
+      "pos": [
+        350,
+        40
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "AGENTS.md",
+          "line": 15,
+          "end_line": 26
+        },
+        {
+          "path": "packages/core/api/client.ts",
+          "line": 905,
+          "end_line": 926
+        },
+        {
+          "path": "packages/core/api/ws-client.ts",
+          "line": 78,
+          "end_line": 113
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Go control plane",
+      "sublabel": "Chi / services / realtime",
+      "pos": [
+        700,
+        40
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/cmd/server/router.go",
+          "line": 1555,
+          "end_line": 1736
+        },
+        {
+          "path": "server/internal/service/task.go",
+          "line": 3487,
+          "end_line": 3554
+        },
+        {
+          "path": "server/internal/handler/file.go",
+          "line": 555,
+          "end_line": 580
+        }
+      ],
+      "tag": "Auth + workspace gates"
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "Entities + task queue",
+      "pos": [
+        1060,
+        40
+      ],
+      "size": [
+        180,
+        76
+      ],
+      "sources": [
+        {
+          "path": "docker-compose.selfhost.yml",
+          "line": 35,
+          "end_line": 53
+        },
+        {
+          "path": "server/internal/service/task.go",
+          "line": 3508,
+          "end_line": 3554
+        }
+      ]
+    },
+    {
+      "id": "mobile",
+      "type": "frontend",
+      "label": "Mobile",
+      "sublabel": "Expo / React Native",
+      "pos": [
+        350,
+        235
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "apps/mobile/package.json",
+          "line": 1,
+          "end_line": 24
+        },
+        {
+          "path": "apps/mobile/data/api.ts",
+          "line": 240,
+          "end_line": 286
+        },
+        {
+          "path": "apps/mobile/data/realtime/ws-client.ts",
+          "line": 203,
+          "end_line": 223
+        }
+      ],
+      "tag": "Independent client"
+    },
+    {
+      "id": "uploads",
+      "type": "database",
+      "label": "Attachment storage",
+      "sublabel": "S3 or local uploads",
+      "pos": [
+        1060,
+        235
+      ],
+      "size": [
+        180,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/cmd/server/router.go",
+          "line": 411,
+          "end_line": 421
+        },
+        {
+          "path": "server/internal/storage/storage.go",
+          "line": 9,
+          "end_line": 26
+        },
+        {
+          "path": "server/internal/storage/local.go",
+          "line": 39,
+          "end_line": 62
+        }
+      ]
+    },
+    {
+      "id": "daemon",
+      "type": "backend",
+      "label": "Execution daemon",
+      "sublabel": "server/internal/daemon",
+      "pos": [
+        700,
+        435
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/internal/daemon/wsrpc.go",
+          "line": 307,
+          "end_line": 362
+        },
+        {
+          "path": "server/internal/daemon/daemon.go",
+          "line": 9281,
+          "end_line": 9311
+        },
+        {
+          "path": "server/internal/daemon/daemon.go",
+          "line": 7434,
+          "end_line": 7444
+        }
+      ],
+      "tag": "Claim before launch"
+    },
+    {
+      "id": "agent-runtime",
+      "type": "backend",
+      "label": "Agent adapters + CLIs",
+      "sublabel": "Codex / Claude / others",
+      "pos": [
+        350,
+        435
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/pkg/agent/agent.go",
+          "line": 1,
+          "end_line": 36
+        },
+        {
+          "path": "server/pkg/agent/codex.go",
+          "line": 1139,
+          "end_line": 1173
+        }
+      ]
+    },
+    {
+      "id": "environment",
+      "type": "backend",
+      "label": "Environment setup",
+      "sublabel": "execenv helper process",
+      "pos": [
+        700,
+        635
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/internal/daemon/execenv/execenv.go",
+          "line": 406,
+          "end_line": 495
+        },
+        {
+          "path": "server/internal/daemon/execenv/runtime_config.go",
+          "line": 247,
+          "end_line": 274
+        }
+      ],
+      "tag": "Task-scoped context"
+    },
+    {
+      "id": "work-files",
+      "type": "database",
+      "label": "Worker files",
+      "sublabel": "Workdir + runtime briefs",
+      "pos": [
+        350,
+        635
+      ],
+      "size": [
+        200,
+        76
+      ],
+      "sources": [
+        {
+          "path": "server/internal/daemon/execenv/execenv.go",
+          "line": 488,
+          "end_line": 555
+        },
+        {
+          "path": "server/internal/daemon/execenv/runtime_config.go",
+          "line": 247,
+          "end_line": 274
+        }
+      ],
+      "tag": "Local directory / worktree"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Worker machine: local execution",
+      "wraps": [
+        "daemon",
+        "agent-runtime",
+        "environment",
+        "work-files"
+      ],
+      "pad": 22
+    }
+  ],
+  "connections": [
+    {
+      "id": "reuse-shared",
+      "from": "desktop-web",
+      "to": "shared-client",
+      "label": "imports"
+    },
+    {
+      "id": "shared-api",
+      "from": "shared-client",
+      "to": "api",
+      "label": "HTTP + WS",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mobile-api",
+      "from": "mobile",
+      "to": "api",
+      "label": "HTTP + WS"
+    },
+    {
+      "id": "sql-state",
+      "from": "api",
+      "to": "postgres",
+      "label": "sqlc / SQL",
+      "variant": "emphasis"
+    },
+    {
+      "id": "attachment-bytes",
+      "from": "api",
+      "to": "uploads",
+      "label": "upload / read"
+    },
+    {
+      "id": "claim-report",
+      "from": "daemon",
+      "to": "api",
+      "label": "claim / report",
+      "variant": "emphasis"
+    },
+    {
+      "id": "execute-agent",
+      "from": "daemon",
+      "to": "agent-runtime",
+      "label": "execute + stream",
+      "variant": "emphasis"
+    },
+    {
+      "id": "prepare-env",
+      "from": "daemon",
+      "to": "environment",
+      "label": "prepare"
+    },
+    {
+      "id": "write-context",
+      "from": "environment",
+      "to": "work-files",
+      "label": "create / write"
+    },
+    {
+      "id": "agent-cwd",
+      "from": "agent-runtime",
+      "to": "work-files",
+      "label": "run in cwd"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Client boundaries",
+      "items": [
+        "views contains shared pages; core owns API, Query hooks and client stores; ui owns primitives.",
+        "Mobile owns its UI, hooks and state; only core types and pure utilities are shared.",
+        "Docs and UI Lab support development; they are outside this runtime path."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Control and persistence",
+      "items": [
+        "The API authorizes requests and owns durable task claims. Claims check runtime binding and concurrency inside a transaction.",
+        "Daemon claims use WebSocket RPC first, with conditional HTTP fallback and a safety delay after uncertain outcomes.",
+        "Reports return to the API; completion endpoint: server/internal/daemon/client.go:621-645."
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Execution context",
+      "items": [
+        "The daemon prepares the environment before invoking a provider adapter. The agent process receives a working directory.",
+        "Fresh task directories start empty; repository checkout is on demand. Local-directory and worktree modes also exist.",
+        "Worker files are separate from server attachment storage. Task scoping does not imply an OS security sandbox."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Optional capabilities and scope",
+      "items": [
+        "Redis enables cross-node realtime relay when configured; server/cmd/server/main.go:448-456, 575-576.",
+        "Plugin hooks are mediated by the daemon API; server/cmd/server/router.go:1567-1573. Plugin surfaces run off the authenticated origin: 1729-1732.",
+        "This is a code-backed system overview, not a live deployment inventory. Provider internals, individual endpoints and integration transports are omitted."
+      ]
+    }
+  ]
+}

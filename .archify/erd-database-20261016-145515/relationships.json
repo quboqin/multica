@@ -1,0 +1,1278 @@
+{
+  "physical": [
+    {
+      "source": "activity_log",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "activity_log",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "agent",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "agent",
+      "column": "owner_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "agent",
+      "column": "runtime_id",
+      "target": "agent_runtime",
+      "target_column": "id"
+    },
+    {
+      "source": "agent",
+      "column": "archived_by",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_runtime",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_runtime",
+      "column": "owner_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_skill",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_skill",
+      "column": "skill_id",
+      "target": "skill",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "runtime_id",
+      "target": "agent_runtime",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "trigger_comment_id",
+      "target": "comment",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "autopilot_run_id",
+      "target": "autopilot_run",
+      "target_column": "id"
+    },
+    {
+      "source": "agent_task_queue",
+      "column": "parent_task_id",
+      "target": "agent_task_queue",
+      "target_column": "id"
+    },
+    {
+      "source": "attachment",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "attachment",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "attachment",
+      "column": "comment_id",
+      "target": "comment",
+      "target_column": "id"
+    },
+    {
+      "source": "attachment",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id"
+    },
+    {
+      "source": "attachment",
+      "column": "chat_message_id",
+      "target": "chat_message",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot",
+      "column": "project_id",
+      "target": "project",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot_run",
+      "column": "autopilot_id",
+      "target": "autopilot",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot_run",
+      "column": "trigger_id",
+      "target": "autopilot_trigger",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot_run",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot_run",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot_run",
+      "column": "squad_id",
+      "target": "squad",
+      "target_column": "id"
+    },
+    {
+      "source": "autopilot_trigger",
+      "column": "autopilot_id",
+      "target": "autopilot",
+      "target_column": "id"
+    },
+    {
+      "source": "chat_message",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id"
+    },
+    {
+      "source": "chat_session",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "chat_session",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "chat_session",
+      "column": "creator_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "chat_session",
+      "column": "runtime_id",
+      "target": "agent_runtime",
+      "target_column": "id"
+    },
+    {
+      "source": "comment",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "comment",
+      "column": "parent_id",
+      "target": "comment",
+      "target_column": "id"
+    },
+    {
+      "source": "comment",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "comment_agent_grant",
+      "column": "comment_id",
+      "target": "comment",
+      "target_column": "id"
+    },
+    {
+      "source": "comment_agent_grant",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "comment_agent_grant",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "comment_reaction",
+      "column": "comment_id",
+      "target": "comment",
+      "target_column": "id"
+    },
+    {
+      "source": "comment_reaction",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "daemon_connection",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "daemon_token",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "feedback",
+      "column": "user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "feedback",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "github_installation",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "github_installation",
+      "column": "connected_by_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "github_pull_request",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "github_pull_request_check_suite",
+      "column": "pr_id",
+      "target": "github_pull_request",
+      "target_column": "id"
+    },
+    {
+      "source": "inbox_item",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "inbox_item",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "issue",
+      "column": "parent_issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue",
+      "column": "project_id",
+      "target": "project",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_dependency",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_dependency",
+      "column": "depends_on_issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_label",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_pull_request",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_pull_request",
+      "column": "pull_request_id",
+      "target": "github_pull_request",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_reaction",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_reaction",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_subscriber",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_to_label",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id"
+    },
+    {
+      "source": "issue_to_label",
+      "column": "label_id",
+      "target": "issue_label",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_binding_token",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_binding_token",
+      "column": "installation_id",
+      "target": "lark_installation",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_chat_session_binding",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_chat_session_binding",
+      "column": "installation_id",
+      "target": "lark_installation",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_inbound_audit",
+      "column": "installation_id",
+      "target": "lark_installation",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_inbound_message_dedup",
+      "column": "installation_id",
+      "target": "lark_installation",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_installation",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_installation",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_installation",
+      "column": "installer_user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_outbound_card_message",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_outbound_card_message",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_user_binding",
+      "column": "installation_id",
+      "target": "lark_installation",
+      "target_column": "id"
+    },
+    {
+      "source": "lark_user_binding",
+      "column": "workspace_id",
+      "target": "lark_installation",
+      "target_column": "workspace_id"
+    },
+    {
+      "source": "lark_user_binding",
+      "column": "workspace_id",
+      "target": "member",
+      "target_column": "workspace_id"
+    },
+    {
+      "source": "lark_user_binding",
+      "column": "multica_user_id",
+      "target": "member",
+      "target_column": "user_id"
+    },
+    {
+      "source": "member",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "member",
+      "column": "user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "notification_preference",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "notification_preference",
+      "column": "user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "personal_access_token",
+      "column": "user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "pinned_item",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "pinned_item",
+      "column": "user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "project",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "project_resource",
+      "column": "project_id",
+      "target": "project",
+      "target_column": "id"
+    },
+    {
+      "source": "project_resource",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "skill",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "skill",
+      "column": "created_by",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "skill_file",
+      "column": "skill_id",
+      "target": "skill",
+      "target_column": "id"
+    },
+    {
+      "source": "squad",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "squad",
+      "column": "leader_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "squad_member",
+      "column": "squad_id",
+      "target": "squad",
+      "target_column": "id"
+    },
+    {
+      "source": "task_message",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id"
+    },
+    {
+      "source": "task_token",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id"
+    },
+    {
+      "source": "task_token",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id"
+    },
+    {
+      "source": "task_token",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "task_token",
+      "column": "user_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "task_usage",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id"
+    },
+    {
+      "source": "webhook_delivery",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "webhook_delivery",
+      "column": "autopilot_id",
+      "target": "autopilot",
+      "target_column": "id"
+    },
+    {
+      "source": "webhook_delivery",
+      "column": "trigger_id",
+      "target": "autopilot_trigger",
+      "target_column": "id"
+    },
+    {
+      "source": "webhook_delivery",
+      "column": "autopilot_run_id",
+      "target": "autopilot_run",
+      "target_column": "id"
+    },
+    {
+      "source": "webhook_delivery",
+      "column": "replayed_from_delivery_id",
+      "target": "webhook_delivery",
+      "target_column": "id"
+    },
+    {
+      "source": "workspace_invitation",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id"
+    },
+    {
+      "source": "workspace_invitation",
+      "column": "inviter_id",
+      "target": "user",
+      "target_column": "id"
+    },
+    {
+      "source": "workspace_invitation",
+      "column": "invitee_user_id",
+      "target": "user",
+      "target_column": "id"
+    }
+  ],
+  "logical": [
+    {
+      "source": "comment",
+      "column": "source_task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/agent.sql",
+        "line": 1626,
+        "end_line": 1626,
+        "expression": "failed.id = recovery.source_task_id"
+      }
+    },
+    {
+      "source": "issue",
+      "column": "assignee_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/agent.sql",
+        "line": 2740,
+        "end_line": 2740,
+        "expression": "owned_agent.id = i.assignee_id",
+        "condition": "assignee_type=agent"
+      }
+    },
+    {
+      "source": "issue",
+      "column": "assignee_id",
+      "target": "squad",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/agent.sql",
+        "line": 2750,
+        "end_line": 2750,
+        "expression": "s.id = i.assignee_id",
+        "condition": "assignee_type=squad"
+      }
+    },
+    {
+      "source": "squad_member",
+      "column": "member_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/agent.sql",
+        "line": 2770,
+        "end_line": 2770,
+        "expression": "owned_member.id = sm.member_id",
+        "condition": "member_type=agent"
+      }
+    },
+    {
+      "source": "autopilot_subscriber",
+      "column": "autopilot_id",
+      "target": "autopilot",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/autopilot.sql",
+        "line": 728,
+        "end_line": 728,
+        "expression": "a.id = s.autopilot_id"
+      }
+    },
+    {
+      "source": "autopilot_run",
+      "column": "quota_reservation_id",
+      "target": "autopilot_quota_reservation",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/autopilot_quota.sql",
+        "line": 121,
+        "end_line": 121,
+        "expression": "ar.quota_reservation_id = r.id"
+      }
+    },
+    {
+      "source": "channel_installation",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/channel.sql",
+        "line": 114,
+        "end_line": 114,
+        "expression": "a.id = ci.agent_id"
+      }
+    },
+    {
+      "source": "channel_installation",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/channel.sql",
+        "line": 155,
+        "end_line": 155,
+        "expression": "w.id = ci.workspace_id"
+      }
+    },
+    {
+      "source": "channel_chat_context_generation",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/channel.sql",
+        "line": 238,
+        "end_line": 238,
+        "expression": "session.id = generation.chat_session_id"
+      }
+    },
+    {
+      "source": "channel_user_binding",
+      "column": "installation_id",
+      "target": "channel_installation",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/channel.sql",
+        "line": 559,
+        "end_line": 559,
+        "expression": "ci.id = b.installation_id"
+      }
+    },
+    {
+      "source": "agent_builder_draft",
+      "column": "chat_session_id",
+      "target": "chat_session",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/chat.sql",
+        "line": 151,
+        "end_line": 151,
+        "expression": "d.chat_session_id = cs.id"
+      }
+    },
+    {
+      "source": "chat_message",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/chat.sql",
+        "line": 612,
+        "end_line": 612,
+        "expression": "owner.id = message.task_id"
+      }
+    },
+    {
+      "source": "record",
+      "column": "collection_id",
+      "target": "collection",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/collection.sql",
+        "line": 3,
+        "end_line": 3,
+        "expression": "r.collection_id=c.id"
+      }
+    },
+    {
+      "source": "collection_access",
+      "column": "project_id",
+      "target": "project",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/collection_access.sql",
+        "line": 10,
+        "end_line": 10,
+        "expression": "p.id=d.project_id"
+      }
+    },
+    {
+      "source": "collection_access",
+      "column": "collection_id",
+      "target": "collection",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/collection_access.sql",
+        "line": 39,
+        "end_line": 39,
+        "expression": "a.collection_id=c.id"
+      }
+    },
+    {
+      "source": "task_supplement",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/comment.sql",
+        "line": 390,
+        "end_line": 390,
+        "expression": "bound.id = s.task_id"
+      }
+    },
+    {
+      "source": "task_supplement",
+      "column": "comment_id",
+      "target": "comment",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/comment.sql",
+        "line": 391,
+        "end_line": 391,
+        "expression": "s.comment_id = c.id"
+      }
+    },
+    {
+      "source": "dingtalk_group_presence",
+      "column": "installation_id",
+      "target": "channel_installation",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/dingtalk.sql",
+        "line": 171,
+        "end_line": 171,
+        "expression": "installation.id = presence.installation_id"
+      }
+    },
+    {
+      "source": "dingtalk_bot_identity",
+      "column": "installation_id",
+      "target": "channel_installation",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/dingtalk.sql",
+        "line": 207,
+        "end_line": 207,
+        "expression": "identity.installation_id = installation.id"
+      }
+    },
+    {
+      "source": "document_access",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/document.sql",
+        "line": 5,
+        "end_line": 5,
+        "expression": "d.issue_id=issue.id"
+      }
+    },
+    {
+      "source": "document_access",
+      "column": "project_id",
+      "target": "project",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/document_access.sql",
+        "line": 10,
+        "end_line": 10,
+        "expression": "p.id=d.project_id"
+      }
+    },
+    {
+      "source": "github_pull_request_check_run",
+      "column": "pr_id",
+      "target": "github_pull_request",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/github_snapshot.sql",
+        "line": 66,
+        "end_line": 66,
+        "expression": "cr.pr_id = pr.id"
+      }
+    },
+    {
+      "source": "agent_to_label",
+      "column": "label_id",
+      "target": "issue_label",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/issue_label.sql",
+        "line": 175,
+        "end_line": 175,
+        "expression": "atl.label_id = l.id"
+      }
+    },
+    {
+      "source": "skill_to_label",
+      "column": "label_id",
+      "target": "issue_label",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/issue_label.sql",
+        "line": 219,
+        "end_line": 219,
+        "expression": "stl.label_id = l.id"
+      }
+    },
+    {
+      "source": "record_link",
+      "column": "to_id",
+      "target": "issue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/record_link.sql",
+        "line": 37,
+        "end_line": 37,
+        "expression": "i.id=l.to_id",
+        "condition": "to_type=issue"
+      }
+    },
+    {
+      "source": "record_link",
+      "column": "to_id",
+      "target": "record",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/record_link.sql",
+        "line": 38,
+        "end_line": 38,
+        "expression": "t.id=l.to_id",
+        "condition": "to_type=record"
+      }
+    },
+    {
+      "source": "record_link",
+      "column": "from_record_id",
+      "target": "record",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/record_link.sql",
+        "line": 49,
+        "end_line": 49,
+        "expression": "r.id=l.from_record_id"
+      }
+    },
+    {
+      "source": "record_link",
+      "column": "collection_id",
+      "target": "collection",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/record_link.sql",
+        "line": 50,
+        "end_line": 50,
+        "expression": "c.id=l.collection_id"
+      }
+    },
+    {
+      "source": "record_link",
+      "column": "from_field_id",
+      "target": "collection_field",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/record_link.sql",
+        "line": 51,
+        "end_line": 51,
+        "expression": "f.id=l.from_field_id"
+      }
+    },
+    {
+      "source": "seat_capacity_outbox",
+      "column": "member_id",
+      "target": "member",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/seat_capacity.sql",
+        "line": 167,
+        "end_line": 167,
+        "expression": "existing.member_id = m.id"
+      }
+    },
+    {
+      "source": "workspace_share_link",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/share_link.sql",
+        "line": 31,
+        "end_line": 31,
+        "expression": "w.id = wsl.workspace_id"
+      }
+    },
+    {
+      "source": "workspace_share_link",
+      "column": "created_by",
+      "target": "user",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/share_link.sql",
+        "line": 32,
+        "end_line": 32,
+        "expression": "u.id = wsl.created_by"
+      }
+    },
+    {
+      "source": "issue_source_context",
+      "column": "origin_task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/source_context.sql",
+        "line": 73,
+        "end_line": 73,
+        "expression": "task.id = isc.origin_task_id"
+      }
+    },
+    {
+      "source": "task_supplement_capability",
+      "column": "task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/supplement.sql",
+        "line": 42,
+        "end_line": 42,
+        "expression": "cap.task_id = t.id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "issue_id",
+      "target": "issue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/system_wakeup.sql",
+        "line": 31,
+        "end_line": 31,
+        "expression": "i.id=w.issue_id"
+      }
+    },
+    {
+      "source": "issue_vcs_pull_request",
+      "column": "pull_request_id",
+      "target": "vcs_pull_request",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/vcs.sql",
+        "line": 119,
+        "end_line": 119,
+        "expression": "ipr.pull_request_id = pr.id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "filter_task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 11,
+        "end_line": 11,
+        "expression": "ft.id=w.filter_task_id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 18,
+        "end_line": 18,
+        "expression": "a.id=w.agent_id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "created_by",
+      "target": "user",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 19,
+        "end_line": 19,
+        "expression": "creator.id=w.created_by"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "source_task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 20,
+        "end_line": 20,
+        "expression": "creator_task.id=w.source_task_id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "filter_actor_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 22,
+        "end_line": 22,
+        "expression": "actor_agent.id=w.filter_actor_id",
+        "condition": "filter_actor_type=agent"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "filter_agent_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 25,
+        "end_line": 25,
+        "expression": "source.id=w.filter_agent_id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "last_task_id",
+      "target": "agent_task_queue",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 26,
+        "end_line": 26,
+        "expression": "t.id=w.last_task_id"
+      }
+    },
+    {
+      "source": "issue_wakeup_receipt",
+      "column": "wakeup_id",
+      "target": "issue_wakeup",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/wakeup.sql",
+        "line": 245,
+        "end_line": 245,
+        "expression": "r.wakeup_id=w.id"
+      }
+    },
+    {
+      "source": "agent_mcp_server",
+      "column": "server_id",
+      "target": "workspace_mcp_server",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/workspace_mcp.sql",
+        "line": 15,
+        "end_line": 15,
+        "expression": "s.id = ams.server_id"
+      }
+    },
+    {
+      "source": "agent_mcp_server",
+      "column": "agent_id",
+      "target": "agent",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/workspace_mcp.sql",
+        "line": 16,
+        "end_line": 16,
+        "expression": "a.id = ams.agent_id"
+      }
+    },
+    {
+      "source": "issue_wakeup",
+      "column": "workspace_id",
+      "target": "workspace",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/workspace_wakeup.sql",
+        "line": 24,
+        "end_line": 24,
+        "expression": "ws.id=w.workspace_id"
+      }
+    },
+    {
+      "source": "plugin_package_version",
+      "column": "package_id",
+      "target": "plugin_package",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/internal/service/plugin_package.go",
+        "line": 133,
+        "end_line": 150,
+        "expression": "verified parent identifier"
+      }
+    },
+    {
+      "source": "plugin_package_file",
+      "column": "version_id",
+      "target": "plugin_package_version",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/internal/service/plugin_package.go",
+        "line": 157,
+        "end_line": 167,
+        "expression": "verified parent identifier"
+      }
+    },
+    {
+      "source": "plugin_installation",
+      "column": "package_version_id",
+      "target": "plugin_package_version",
+      "target_column": "id",
+      "evidence": {
+        "path": "server/pkg/db/queries/plugin.sql",
+        "line": 66,
+        "end_line": 72,
+        "expression": "verified parent identifier"
+      }
+    }
+  ]
+}

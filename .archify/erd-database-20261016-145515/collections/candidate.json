@@ -1,0 +1,476 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · Collections",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/collections/collections.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "collection",
+      "label": "collection",
+      "tag": "Collections",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        },
+        {
+          "name": "created_by",
+          "type": "uuid"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "title_name",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/567_cortex_collections.up.sql",
+          "line": 1,
+          "end_line": 6
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 567,
+          "end_line": 580
+        }
+      ]
+    },
+    {
+      "id": "collection_field",
+      "label": "collection_field",
+      "tag": "Collections",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "collection_id",
+          "type": "uuid"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/567_cortex_collections.up.sql",
+          "line": 7,
+          "end_line": 11
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 600,
+          "end_line": 609
+        }
+      ]
+    },
+    {
+      "id": "record",
+      "label": "record",
+      "tag": "Collections",
+      "row": 0,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "collection_id",
+          "type": "uuid"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "fields",
+          "type": "jsonb"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/567_cortex_collections.up.sql",
+          "line": 12,
+          "end_line": 17
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1447,
+          "end_line": 1458
+        },
+        {
+          "path": "server/pkg/db/queries/collection.sql",
+          "line": 3,
+          "end_line": 3
+        }
+      ]
+    },
+    {
+      "id": "record_link",
+      "label": "record_link",
+      "tag": "Collections",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "collection_id",
+          "type": "uuid"
+        },
+        {
+          "name": "from_record_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "from_field_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "to_type",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "to_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/575_record_link.up.sql",
+          "line": 5,
+          "end_line": 10
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1460,
+          "end_line": 1469
+        },
+        {
+          "path": "server/pkg/db/queries/record_link.sql",
+          "line": 38,
+          "end_line": 38
+        }
+      ]
+    },
+    {
+      "id": "collection_access",
+      "label": "collection_access",
+      "tag": "Collections",
+      "row": 1,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "collection_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid"
+        },
+        {
+          "name": "scope",
+          "type": "text"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid"
+        },
+        {
+          "name": "scope_role",
+          "type": "text"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/586_collection_sharing.up.sql",
+          "line": 1,
+          "end_line": 11
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 582,
+          "end_line": 591
+        },
+        {
+          "path": "server/pkg/db/queries/collection_access.sql",
+          "line": 39,
+          "end_line": 39
+        }
+      ]
+    },
+    {
+      "id": "collection_collaborator",
+      "label": "collection_collaborator",
+      "tag": "Collections",
+      "row": 1,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "collection_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "role",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/586_collection_sharing.up.sql",
+          "line": 12,
+          "end_line": 17
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 593,
+          "end_line": 598
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "logical_record_collection_id_collection",
+      "from": "record",
+      "to": "collection",
+      "label": "collection_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_collection_access_collection_id_collection",
+      "from": "collection_access",
+      "to": "collection",
+      "label": "collection_id · 应用关联",
+      "fromCardinality": "one",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_record_link_to_id_record",
+      "from": "record_link",
+      "to": "record",
+      "label": "to_id [to_type=record] · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_record_link_from_record_id_record",
+      "from": "record_link",
+      "to": "record",
+      "label": "from_record_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_record_link_collection_id_collection",
+      "from": "record_link",
+      "to": "collection",
+      "label": "collection_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_record_link_from_field_id_collection_field",
+      "from": "record_link",
+      "to": "collection_field",
+      "label": "from_field_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 6 张表、50 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX collection_field_name_idx ON public.collection_field USING btree (collection_id, lower(name)) WHERE (archived_at IS NULL)",
+        "CREATE UNIQUE INDEX record_link_edge_idx ON public.record_link USING btree (from_record_id, from_field_id, to_type, to_id)",
+        "CREATE UNIQUE INDEX collection_collaborator_idx ON public.collection_collaborator USING btree (collection_id, user_id)"
+      ]
+    }
+  ]
+}
