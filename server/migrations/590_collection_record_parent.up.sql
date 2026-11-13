@@ -1,0 +1,1 @@
+ALTER TABLE record ADD COLUMN IF NOT EXISTS parent_id UUID;

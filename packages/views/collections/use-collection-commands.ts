@@ -49,6 +49,13 @@ function patchCachedRecord(
       }
       if ("id" in data && data.id === recordId && "fields" in data)
         return patch(data as CollectionRecord);
+      if ("records" in data && Array.isArray(data.records))
+        return {
+          ...data,
+          records: data.records.map((record: CollectionRecord) =>
+            record.id === recordId ? patch(record) : record,
+          ),
+        };
       return data;
     },
   );
@@ -222,10 +229,12 @@ export function useCollectionCommands(
     mutationFn: ({
       title,
       fields,
+      parentId,
     }: {
       title: string;
       fields?: Record<string, unknown>;
-    }) => api.createCollectionRecord(collectionId, title, fields),
+      parentId?: string;
+    }) => api.createCollectionRecord(collectionId, title, fields, parentId),
     onSuccess: () => refreshAll(),
     onError: (error) => toast.error(errorMessage(error)),
   });

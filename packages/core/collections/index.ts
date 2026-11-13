@@ -2,6 +2,7 @@ import { DocumentAccessSchema } from "../documents/schema";
 import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { z } from "zod";
 export * from "./import";
+export { collectionHasHierarchy, flattenCollectionTree } from "./hierarchy";
 import { api } from "../api";
 
 export const CollectionSchema = z.object({
@@ -80,6 +81,8 @@ export const CollectionRecordSchema = z.object({
   workspace_id: z.string(),
   collection_id: z.string(),
   title: z.string(),
+  parent_id: z.string().uuid().nullable().optional().catch(undefined),
+  child_count: z.number().int().nonnegative().optional().catch(undefined),
   fields: z.record(z.string(), z.unknown()).catch({}),
   formula_errors: z.record(z.string(), z.string()).optional().catch(undefined),
   /** Relation cells by field id. Empty on servers that predate relations. */
@@ -128,6 +131,8 @@ export type RelationTarget = z.infer<typeof RelationTargetSchema>;
 export type RecordLink = z.infer<typeof RecordLinkSchema>;
 export type RecordBacklink = z.infer<typeof RecordBacklinkSchema>;
 export interface CollectionQuery {
+  /** Omit for a flat list, "root" for roots, or a UUID for direct children. */
+  parent_id?: string;
   record_id?: string;
   date_field?: string;
   date_start?: string;
@@ -220,6 +225,20 @@ export function collectionRecordsOptions(
       api.listCollectionRecords(id, query, pageParam, signal, wsId),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.next_cursor ?? undefined,
+    enabled: !!wsId && !!id,
+  });
+}
+
+/** A page of direct children, owned by Query just like the root list. */
+export function collectionRecordPageOptions(
+  wsId: string,
+  id: string,
+  query: CollectionQuery,
+  cursor: string | null,
+) {
+  return queryOptions({
+    queryKey: [...collectionKeys.records(wsId, id, query), "page", cursor],
+    queryFn: ({ signal }) => api.listCollectionRecords(id, query, cursor, signal, wsId),
     enabled: !!wsId && !!id,
   });
 }

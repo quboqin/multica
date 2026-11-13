@@ -57,6 +57,7 @@ export function filterOperators(type: string): string[] {
   switch (type) {
     case "text":
     case "url":
+    case "email":
       return ["contains", "exact"];
     case "number":
       return ["exact", "gt", "gte", "lt", "lte"];

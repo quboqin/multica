@@ -355,7 +355,7 @@ export function CollectionDetailPage({
           update({
             filters: [
               ...prefs.filters,
-              { field: fieldId, op: field.type === "text" || field.type === "url" ? "contains" : "exact", value: "" },
+              { field: fieldId, op: field.type === "text" || field.type === "url" || field.type === "email" ? "contains" : "exact", value: "" },
             ],
           });
         setFilterOpen(true);

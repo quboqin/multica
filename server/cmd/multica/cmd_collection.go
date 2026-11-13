@@ -89,7 +89,7 @@ const (
 	collectionSchemaForbiddenCode = "collection_schema_forbidden"
 )
 
-var collectionFieldTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "actor", "multi_actor", collectionRelationType, "formula"}
+var collectionFieldTypes = []string{"text", "number", "select", "multi_select", "date", "checkbox", "url", "email", "actor", "multi_actor", collectionRelationType, "formula"}
 
 var collectionCmd = &cobra.Command{
 	Use:   "collection",
@@ -163,7 +163,7 @@ var collectionFieldListCmd = &cobra.Command{
 var collectionFieldAddCmd = &cobra.Command{
 	Use:   "add <table>",
 	Short: "Add a field (requires edit access)",
-	Long: `Add a field. Types: text, number, select, multi_select, date, checkbox, url,
+	Long: `Add a field. Types: text, number, select, multi_select, date, checkbox, url, email,
 actor, multi_actor, relation, formula. A table holds at most 50 fields.
 
 Select types take repeatable --option flags (the ":#rrggbb" color is optional):
@@ -192,7 +192,7 @@ their ids (and the values rows hold) survive, and an option left out is cleared
 from every row, for good. Use it to reorder, recolor, rename or remove.
 
 --type only converts along safe paths (select ↔ multi_select, actor ↔
-multi_actor, number/date/url/checkbox → text). Anything else is refused: add a
+multi_actor, number/date/url/email/checkbox → text). Anything else is refused: add a
 new field instead. A relation's target never changes.`,
 	Args: exactArgs(2),
 	RunE: runCollectionFieldUpdate,

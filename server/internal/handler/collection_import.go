@@ -133,7 +133,7 @@ func (h *Handler) ImportCollection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch column.Type {
-		case "text", "number", "checkbox", "date", "url", "select":
+		case "text", "number", "checkbox", "date", "url", "email", "select":
 		default:
 			writeError(w, 400, "unsupported import field type: "+column.Type)
 			return

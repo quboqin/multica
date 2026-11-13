@@ -844,6 +844,7 @@
       "true_label": "はい",
       "false_label": "いいえ",
       "value_placeholder": "値を入力…",
+      "email_placeholder": "name@example.com",
       "url_placeholder": "https://…",
       "number_placeholder": "0",
       "actor_search_placeholder": "メンバーを検索…",
@@ -1207,6 +1208,15 @@
     "no_versions": "保存されたバージョンはありません"
   },
   "cortex_table": {
+    "type_email": "メールアドレス",
+    "add_child": "子行を追加",
+    "add_child_to": "{{title}} に子行を追加",
+    "expand_children": "{{title}} の子行を展開",
+    "collapse_children": "{{title}} の子行を折りたたむ",
+    "retry_children": "子行を再読み込み",
+    "load_more_children": "{{title}} の子行をさらに読み込む",
+    "hierarchy_flat_hint": "検索、フィルター、グループでは一致する行を階層なしで表示します。",
+    "delete_parent_hint": "この行を削除すると、子行は最上位の行として残ります。",
     "share_table": "テーブルを共有",
     "tables": "テーブル",
     "all_records": "すべてのレコード",

@@ -3,16 +3,28 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { ColumnDef, ColumnSizingState } from "@tanstack/react-table";
-import { Maximize2, Plus, Trash2 } from "lucide-react";
+import { ChevronRight, Loader2, Maximize2, Plus, Trash2 } from "lucide-react";
 import {
   collectionRecordOptions,
   collectionRecordsOptions,
+  collectionHasHierarchy,
   type CollectionField,
   type CollectionQuery,
   type CollectionRecord,
 } from "@multica/core/collections";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogClose,
+} from "@multica/ui/components/ui/dialog";
+import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -26,6 +38,7 @@ import { CollectionFieldEditor } from "./collection-cell";
 import { CollectionFieldMenu, CollectionTitleMenu } from "./collection-field-menu";
 import { FieldTypeIcon, fieldIsQueryable, isRelation } from "./collection-fields";
 import type { CollectionCommands } from "./use-collection-commands";
+import { useCollectionHierarchy } from "./use-collection-hierarchy";
 
 export const tableCapabilities = {
   layouts: ["table"],
@@ -86,11 +99,15 @@ export function CollectionTable({
 }) {
   const wsId = useWorkspaceId();
   const { t } = useT("issues");
+  const hierarchical = collectionHasHierarchy(query);
   const pages = useInfiniteQuery(
-    collectionRecordsOptions(wsId, collectionId, query),
+    collectionRecordsOptions(wsId, collectionId, hierarchical ? { ...query, parent_id: "root" } : query),
   );
   const [editing, setEditing] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [newChild, setNewChild] = useState<{ source: string; record: CollectionRecord } | null>(null);
+  const source = `${wsId}:${collectionId}`;
+  const childParent = newChild?.source === source ? newChild.record : null;
   const [sizing, setSizing] = useState<ColumnSizingState>({ title: 240 });
   const headers = useRef(new Map<string, HTMLElement>());
   // The row being edited is read on its own, so it stays editable even after
@@ -98,10 +115,14 @@ export function CollectionTable({
   const focused = useQuery(
     collectionRecordOptions(wsId, collectionId, editing?.split(":")[0] ?? null),
   );
-  const loaded = useMemo(
+  const roots = useMemo(
     () => pages.data?.pages.flatMap((page) => page.records) ?? [],
     [pages.data],
   );
+  const hierarchy = useCollectionHierarchy(wsId, collectionId, query, roots, hierarchical);
+  const hierarchyRef = useRef(hierarchy);
+  hierarchyRef.current = hierarchy;
+  const loaded = hierarchy.records;
   const identity = useMemo(
     () => ({
       workspaceId: wsId,
@@ -166,20 +187,56 @@ export function CollectionTable({
           />
         </div>
       ),
-      cell: ({ row }) => (
-        <TitleCell
-          readOnly={actions.readOnly}
-          record={row.original}
-          renaming={renaming === row.original.id}
-          onRenamingChange={(active) => {
-            setRenaming(active ? row.original.id : null);
-            setEditing(active ? `${row.original.id}:title` : null);
-          }}
-          onRename={(title) => void commands.setTitle(row.original, title)}
-          onOpen={() => actions.onOpenRecord(row.original.id)}
-          onDelete={() => commands.deleteRecord.mutate(row.original.id)}
-        />
-      ),
+      cell: ({ row }) => {
+        const tree = hierarchyRef.current;
+        const branch = tree.branch(row.original.id);
+        return (
+          <div
+            className="flex min-w-0 items-center gap-1"
+            style={{ paddingLeft: Math.min(tree.depths.get(row.original.id) ?? 0, 12) * 16 }}
+          >
+            {hierarchical && <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={t(($) => branch.expanded ? $.cortex_table.collapse_children : $.cortex_table.expand_children, { title: row.original.title })}
+              aria-expanded={branch.expanded}
+              disabled={!row.original.child_count || editing !== null}
+              className={cn(!row.original.child_count && "invisible")}
+              onClick={() => tree.toggle(row.original.id)}
+            >
+              {branch.loading
+                ? <Loader2 className="animate-spin" />
+                : <ChevronRight className={cn(branch.expanded && "rotate-90")} />}
+            </Button>}
+            <div className="min-w-0 flex-1">
+              <TitleCell
+                readOnly={actions.readOnly}
+                record={row.original}
+                renaming={renaming === row.original.id}
+                onRenamingChange={(active) => {
+                  setRenaming(active ? row.original.id : null);
+                  setEditing(active ? `${row.original.id}:title` : null);
+                }}
+                onRename={(title) => void commands.setTitle(row.original, title)}
+                onOpen={() => actions.onOpenRecord(row.original.id)}
+                onDelete={() => commands.deleteRecord.mutate(row.original.id)}
+                onAddChild={canCreate ? () => setNewChild({ source: `${wsId}:${collectionId}`, record: row.original }) : undefined}
+              />
+            </div>
+            {branch.expanded && branch.error && <Button variant="ghost" size="xs" title={branch.error.message} onClick={branch.retry}>
+              {t(($) => $.cortex_table.retry_children)}
+            </Button>}
+            {branch.expanded && branch.hasMore && <Button
+              variant="ghost"
+              size="icon-xs"
+              disabled={branch.loading}
+              aria-label={t(($) => $.cortex_table.load_more_children, { title: row.original.title })}
+              onClick={branch.loadMore}
+            ><Plus /></Button>}
+          </div>
+        );
+      },
     };
     const fieldColumns = fields.map<ColumnDef<CollectionRecord>>((field) => ({
       id: field.id,
@@ -292,60 +349,75 @@ export function CollectionTable({
       cell: ({row}) => <input type="checkbox" aria-label={t($=>$.cortex_bulk.select_row,{title:row.original.title})} checked={actions.selection!.rows.some(r=>r.id===row.original.id)} onChange={e=>actions.selection!.toggle(row.original,e.target.checked)}/>
     }] : [];
     return [...selectionColumns, titleColumn, ...fieldColumns, addColumn];
-  }, [titleName, fields, actions, commands, editing, renaming, t]);
+  }, [titleName, fields, actions, commands, editing, renaming, t, hierarchical, wsId, collectionId, canCreate]);
 
   const total = pages.data?.pages[0]?.total ?? 0;
   return (
-    <div
-      className="flex min-h-0 flex-col"
-      data-selected-record={selectedRecordId ?? undefined}
-    >
-      <DataViewTable
-        sourceIdentity={identity}
-        rows={rows}
-        rowId={(row) => row.id}
-        columns={columns}
-        visibleColumnIds={fields.map((field) => field.id)}
-        columnSizing={sizing}
-        onColumnSizingChange={setSizing}
-        onReorderColumn={actions.onReorderField}
-        columnPinning={{ left: ["title"], right: [] }}
-        capabilities={tableCapabilities}
-        emptyMessage={
-          pages.isLoading
-            ? t(($) => $.cortex.loading)
-            : t(($) => $.cortex_table.no_records)
-        }
-        className={cn(
-          !showHeader && "[&_thead]:hidden",
-          "[&_tbody_tr]:h-9",
+    <Dialog open={childParent !== null} onOpenChange={(open) => {
+      if (!open && !commands.createRecord.isPending) setNewChild(null);
+    }}>
+      <div
+        className="flex min-h-0 flex-col"
+        data-selected-record={selectedRecordId ?? undefined}
+      >
+        {!hierarchical && <p className="px-4 py-1 text-caption text-muted-foreground">{t(($) => $.cortex_table.hierarchy_flat_hint)}</p>}
+        <DataViewTable
+          sourceIdentity={identity}
+          rows={rows}
+          rowId={(row) => row.id}
+          columns={columns}
+          visibleColumnIds={fields.map((field) => field.id)}
+          columnSizing={sizing}
+          onColumnSizingChange={setSizing}
+          onReorderColumn={actions.onReorderField}
+          columnPinning={{ left: actions.selection ? ["__select", "title"] : ["title"], right: [] }}
+          capabilities={tableCapabilities}
+          emptyMessage={
+            pages.isLoading
+              ? t(($) => $.cortex.loading)
+              : t(($) => $.cortex_table.no_records)
+          }
+          className={cn(
+            !showHeader && "[&_thead]:hidden",
+            "[&_tbody_tr]:h-9",
+          )}
+        />
+        {pages.error && (
+          <p role="alert" className="px-4 py-2 text-caption text-destructive">
+            {pages.error.message}
+          </p>
         )}
-      />
-      {pages.error && (
-        <p role="alert" className="px-4 py-2 text-caption text-destructive">
-          {pages.error.message}
-        </p>
-      )}
-      {pages.hasNextPage && (
-        <button
-          type="button"
-          className="border-b px-4 py-2 text-left text-caption text-muted-foreground hover:bg-accent/40"
-          disabled={pages.isFetching}
-          onClick={() => void pages.fetchNextPage()}
-        >
-          {t(($) => $.cortex_table.load_more, {
-            loaded: loaded.length,
-            total,
-          })}
-        </button>
-      )}
-      {!actions.readOnly && canCreate && <NewRecordRow
-        pending={commands.createRecord.isPending}
-        onCreate={(title) =>
-          commands.createRecord.mutateAsync({ title, fields: newRecordFields })
-        }
+        {pages.hasNextPage && (
+          <button
+            type="button"
+            className="border-b px-4 py-2 text-left text-caption text-muted-foreground hover:bg-accent/40"
+            disabled={pages.isFetching}
+            onClick={() => void pages.fetchNextPage()}
+          >
+            {t(($) => $.cortex_table.load_more, {
+              loaded: roots.length,
+              total,
+            })}
+          </button>
+        )}
+        {!actions.readOnly && canCreate && <NewRecordRow
+          pending={commands.createRecord.isPending}
+          onCreate={(title) =>
+            commands.createRecord.mutateAsync({ title, fields: newRecordFields })
+          }
+        />}
+      </div>
+      {childParent && <NewChildDialog
+        key={childParent.id}
+        record={childParent}
+        commands={commands}
+        fields={newRecordFields}
+        onCreated={() => {
+          hierarchyRef.current.toggle(childParent.id, true);
+          setNewChild(null);
+        }}
       />}
-    </div>
+    </Dialog>
   );
 }
 
@@ -357,6 +429,7 @@ function TitleCell({
   onRename,
   onOpen,
   onDelete,
+  onAddChild,
 }: {
   record: CollectionRecord;
   readOnly?: boolean;
@@ -365,6 +438,7 @@ function TitleCell({
   onRename: (title: string) => void;
   onOpen: () => void;
   onDelete: () => void;
+  onAddChild?: () => void;
 }) {
   const { t } = useT("issues");
   const [draft, setDraft] = useState(record.title);
@@ -408,6 +482,15 @@ function TitleCell({
             </span>
           )}
         </button>
+        {!readOnly && onAddChild && <DialogTrigger render={
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            aria-label={t(($) => $.cortex_table.add_child_to, { title: record.title })}
+            onClick={onAddChild}
+          />
+        }><Plus /></DialogTrigger>}
         <Button
           variant="outline"
           size="xs"
@@ -428,8 +511,64 @@ function TitleCell({
           <Trash2 />
           {t(($) => $.cortex_table.move_to_trash)}
         </ContextMenuItem>
+        {!!record.child_count && <p className="px-2 py-1 text-caption text-muted-foreground">{t(($) => $.cortex_table.delete_parent_hint)}</p>}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+function NewChildDialog({
+  record,
+  commands,
+  fields,
+  onCreated,
+}: {
+  record: CollectionRecord;
+  commands: CollectionCommands;
+  fields?: Record<string, unknown>;
+  onCreated: () => void;
+}) {
+  const { t } = useT("issues");
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  return (
+      <DialogContent>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          if (!title.trim() || commands.createRecord.isPending) return;
+          setError(null);
+          void commands.createRecord.mutateAsync({
+            title: title.trim(), fields, parentId: record.id,
+          }).then(() => {
+            onCreated();
+            setTitle("");
+          }).catch((cause: unknown) =>
+            setError(cause instanceof Error ? cause.message : String(cause)),
+          );
+        }}>
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.cortex_table.add_child_to, { title: record.title })}</DialogTitle>
+          </DialogHeader>
+          <Label className="my-4 flex flex-col items-stretch gap-2">
+            {t(($) => $.cortex_table.record_title)}
+            <Input
+              autoFocus
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              disabled={commands.createRecord.isPending}
+            />
+          </Label>
+          {error && <p role="alert" className="mb-4 text-caption text-destructive">{error}</p>}
+          <DialogFooter>
+            <DialogClose render={<Button type="button" variant="outline" disabled={commands.createRecord.isPending} />}>
+              {t(($) => $.cortex_table.cancel)}
+            </DialogClose>
+            <Button type="submit" disabled={!title.trim() || commands.createRecord.isPending} aria-busy={commands.createRecord.isPending}>
+              {t(($) => $.cortex_table.add_child)}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
   );
 }
 
