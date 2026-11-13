@@ -6,6 +6,7 @@ export const ImportFieldTypeSchema = z.enum([
   "checkbox",
   "date",
   "url",
+  "email",
   "select",
 ]);
 export const ImportColumnSchema = z.object({

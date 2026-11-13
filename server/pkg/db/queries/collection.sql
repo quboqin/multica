@@ -30,15 +30,19 @@ INSERT INTO collection_field (workspace_id,collection_id,name,type,config,positi
 SELECT * FROM collection_field WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND archived_at IS NULL;
 
 -- name: CreateCollectionRecord :one
-INSERT INTO record (workspace_id,collection_id,title,fields) VALUES($1,$2,$3,$4) RETURNING *;
+INSERT INTO record (workspace_id,collection_id,title,fields,parent_id) VALUES($1,$2,$3,$4,$5) RETURNING *;
+
+-- name: CountCollectionRecordChildren :one
+SELECT count(*) FROM record WHERE workspace_id=$1 AND collection_id=$2 AND parent_id=$3 AND deleted_at IS NULL;
 
 -- name: SoftDeleteCollectionRecord :one
 UPDATE record SET deleted_at=now(),revision=revision+1,updated_at=now()
 WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL RETURNING *;
 
 -- name: RestoreCollectionRecord :one
-UPDATE record SET deleted_at=NULL,revision=revision+1,updated_at=now()
-WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NOT NULL AND deleted_at > now()-interval '30 days' RETURNING *;
+UPDATE record r SET deleted_at=NULL,revision=r.revision+1,updated_at=now(),
+parent_id=CASE WHEN EXISTS (SELECT 1 FROM record p WHERE p.workspace_id=r.workspace_id AND p.collection_id=r.collection_id AND p.id=r.parent_id AND p.deleted_at IS NULL) THEN r.parent_id ELSE NULL END
+WHERE r.workspace_id=$1 AND r.collection_id=$2 AND r.id=$3 AND r.deleted_at IS NOT NULL AND r.deleted_at > now()-interval '30 days' RETURNING r.*;
 
 -- name: ListDeletedCollectionRecords :many
 SELECT * FROM record WHERE workspace_id=$1 AND collection_id=$2 AND deleted_at IS NOT NULL AND deleted_at > now()-interval '30 days'

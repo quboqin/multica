@@ -844,6 +844,7 @@
       "true_label": "예",
       "false_label": "아니요",
       "value_placeholder": "값 입력…",
+      "email_placeholder": "name@example.com",
       "url_placeholder": "https://…",
       "number_placeholder": "0",
       "actor_search_placeholder": "멤버 검색…",
@@ -1207,6 +1208,15 @@
     "no_versions": "저장된 버전 없음"
   },
   "cortex_table": {
+    "type_email": "이메일",
+    "add_child": "하위 행 추가",
+    "add_child_to": "{{title}}에 하위 행 추가",
+    "expand_children": "{{title}}의 하위 행 펼치기",
+    "collapse_children": "{{title}}의 하위 행 접기",
+    "retry_children": "하위 행 다시 불러오기",
+    "load_more_children": "{{title}}의 하위 행 더 불러오기",
+    "hierarchy_flat_hint": "검색, 필터 및 그룹에서는 일치하는 행을 계층 없이 표시합니다.",
+    "delete_parent_hint": "이 행을 삭제하면 하위 행은 최상위 행으로 유지됩니다.",
     "share_table": "테이블 공유",
     "tables": "테이블",
     "all_records": "전체 레코드",

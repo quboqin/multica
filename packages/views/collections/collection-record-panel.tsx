@@ -145,6 +145,7 @@ export function CollectionRecordPanel({
               <Trash2 />
               {t(($) => $.cortex_table.move_to_trash)}
             </DropdownMenuItem>
+            {!!record?.child_count && <p className="px-2 py-1 text-caption text-muted-foreground">{t(($) => $.cortex_table.delete_parent_hint)}</p>}
           </DropdownMenuContent>
         </DropdownMenu>
         <Button

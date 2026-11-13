@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/formula"
+	"net/mail"
 	"net/url"
 	"sort"
 	"strings"
@@ -45,6 +46,7 @@ type PropertyConfig struct {
 // record_link rather than entries in a record's value bag.
 const TypeRelation = "relation"
 const TypeFormula = "formula"
+const TypeEmail = "email"
 
 // Relation targets, stored as record_link.to_type.
 const (
@@ -268,6 +270,16 @@ func ValidateValue(def Definition, raw json.RawMessage) ([]byte, error) {
 
 	cfg := parsePropertyConfig(def.Config)
 	switch def.Type {
+	case TypeEmail:
+		s, ok := v.(string)
+		if !ok {
+			return nil, errors.New("value must be an email address string")
+		}
+		s, err := NormalizeEmail(s)
+		if err != nil {
+			return nil, err
+		}
+		return json.Marshal(s)
 	case "text":
 		s, ok := v.(string)
 		if !ok {
@@ -381,4 +393,14 @@ func ValidateValue(def Definition, raw json.RawMessage) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported property type %q", def.Type)
 	}
+}
+
+// NormalizeEmail accepts one bare address, preserving the local part's case.
+func NormalizeEmail(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	address, err := mail.ParseAddress(s)
+	if len(s) > 254 || strings.ContainsAny(s, "\r\n") || err != nil || address.Name != "" || address.Address != s {
+		return "", errors.New("value must be a single email address, for example name@example.com")
+	}
+	return s, nil
 }

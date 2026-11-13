@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, Mail } from "lucide-react";
 import type {
   CollectionField,
   CollectionRecord,
@@ -86,9 +86,10 @@ export function CollectionValue({
         <Checkbox checked={value === true} disabled aria-label={field.name} />
       );
     case "url":
+    case "email":
       return (
         <span className="flex min-w-0 items-center gap-1 text-primary">
-          <ExternalLink className="size-3 shrink-0" />
+          {field.type === "email" ? <Mail className="size-3 shrink-0" /> : <ExternalLink className="size-3 shrink-0" />}
           <span className="truncate">{String(value)}</span>
         </span>
       );

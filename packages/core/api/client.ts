@@ -1636,6 +1636,7 @@ export class ApiClient {
     if (cursor) params.set("cursor", cursor);
     if (query.search) params.set("search", query.search);
     if (query.record_id) params.set("record_id", query.record_id);
+    if (query.parent_id) params.set("parent_id", query.parent_id);
     for (const key of ["date_field", "date_start", "date_end"] as const) {
       if (query[key]) params.set(key, query[key]);
     }
@@ -1737,11 +1738,16 @@ export class ApiClient {
     id: string,
     title: string,
     fields?: Record<string, unknown>,
+    parentId?: string,
   ) {
     return this.collectionRecordCommand(
       id,
       "",
-      fields && Object.keys(fields).length ? { title, fields } : { title },
+      {
+        title,
+        ...(fields && Object.keys(fields).length ? { fields } : {}),
+        ...(parentId ? { parent_id: parentId } : {}),
+      },
       "POST",
     );
   }

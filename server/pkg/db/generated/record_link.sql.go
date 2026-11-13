@@ -84,7 +84,7 @@ func (q *Queries) DeleteRecordLink(ctx context.Context, arg DeleteRecordLinkPara
 }
 
 const getLiveCollectionRecord = `-- name: GetLiveCollectionRecord :one
-SELECT r.id, r.workspace_id, r.collection_id, r.title, r.fields, r.revision, r.position, r.deleted_at, r.created_at, r.updated_at FROM record r
+SELECT r.id, r.workspace_id, r.collection_id, r.title, r.fields, r.revision, r.position, r.deleted_at, r.created_at, r.updated_at, r.parent_id FROM record r
 JOIN collection c ON c.id=r.collection_id AND c.workspace_id=r.workspace_id AND c.archived_at IS NULL
 WHERE r.workspace_id=$1 AND r.collection_id=$2 AND r.id=$3 AND r.deleted_at IS NULL
 `
@@ -109,6 +109,7 @@ func (q *Queries) GetLiveCollectionRecord(ctx context.Context, arg GetLiveCollec
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
@@ -276,7 +277,7 @@ func (q *Queries) ListRecordLinksTo(ctx context.Context, arg ListRecordLinksToPa
 }
 
 const lockCollectionRecord = `-- name: LockCollectionRecord :one
-SELECT id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at FROM record WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL FOR UPDATE
+SELECT id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id FROM record WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL FOR UPDATE
 `
 
 type LockCollectionRecordParams struct {
@@ -301,13 +302,14 @@ func (q *Queries) LockCollectionRecord(ctx context.Context, arg LockCollectionRe
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
 
 const touchCollectionRecord = `-- name: TouchCollectionRecord :one
 UPDATE record SET revision=revision+1,updated_at=now()
-WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at
+WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id
 `
 
 type TouchCollectionRecordParams struct {
@@ -331,6 +333,7 @@ func (q *Queries) TouchCollectionRecord(ctx context.Context, arg TouchCollection
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }

@@ -838,6 +838,7 @@
       "true_label": "是",
       "false_label": "否",
       "value_placeholder": "输入值…",
+      "email_placeholder": "name@example.com",
       "url_placeholder": "https://…",
       "number_placeholder": "0",
       "actor_search_placeholder": "搜索成员…",
@@ -1207,6 +1208,15 @@
     "no_versions": "暂无历史版本"
   },
   "cortex_table": {
+    "type_email": "邮箱",
+    "add_child": "添加子行",
+    "add_child_to": "为 {{title}} 添加子行",
+    "expand_children": "展开 {{title}} 的子行",
+    "collapse_children": "折叠 {{title}} 的子行",
+    "retry_children": "重新加载子行",
+    "load_more_children": "加载 {{title}} 的更多子行",
+    "hierarchy_flat_hint": "搜索、筛选或分组时，匹配行平铺显示。",
+    "delete_parent_hint": "删除此行后，子行会保留并提升到顶层。",
     "share_table": "共享表格",
     "tables": "表格",
     "all_records": "全部记录",

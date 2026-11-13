@@ -9,6 +9,16 @@ import {
 } from ".";
 
 describe("collection schemas", () => {
+  it("preserves valid hierarchy metadata and tolerates missing or malformed projections", () => {
+    const base = { id: "r", workspace_id: "w", collection_id: "c", title: "Row", revision: 1, created_at: "" };
+    expect(CollectionRecordSchema.parse(base).parent_id).toBeUndefined();
+    expect(CollectionRecordSchema.parse(base).child_count).toBeUndefined();
+    expect(CollectionRecordSchema.parse({ ...base, parent_id: 42, child_count: -1 })).toMatchObject({ parent_id: undefined, child_count: undefined });
+    const parent = "11111111-1111-4111-8111-111111111111";
+    expect(CollectionRecordSchema.parse({ ...base, parent_id: parent, child_count: 2 })).toMatchObject({ parent_id: parent, child_count: 2 });
+    expect(CollectionRecordSchema.parse({ ...base, parent_id: null }).parent_id).toBeNull();
+    expect(CollectionFieldSchema.parse({ id: "email", name: "Email", type: "email" }).type).toBe("email");
+  });
   it("keeps the record count optional for older servers", () => {
     const base = { id: "c1", workspace_id: "w1", name: "Backlog" };
     expect(CollectionSchema.parse(base).record_count).toBeUndefined();

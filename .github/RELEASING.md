@@ -235,6 +235,34 @@ unresolved reachable vulnerability.
 Every Go binary retains its compiler version in the standard Go build metadata;
 use `go version -m <binary>` when auditing a downloaded release artifact.
 
+## Collection database compatibility (v0.8.0)
+
+Upgrading from v0.7.7 applies migrations 590–592. The upgrade adds a nullable
+`record.parent_id`, builds its index concurrently, and widens the collection
+field-type constraint to include Email. It does not rewrite existing record
+values or revisions. Existing records become root rows; old clients retain the
+flat-list API. Old insert/update SQL remains valid against the new schema.
+
+Run `TestCollectionUpgradePreservesLegacyDataAndRollbackValues` with a test
+database before release. It exercises upgrade/retry, old write shapes, nested
+records, Email values, rollback and re-upgrade using the real migration files.
+
+Deploy through the normal backup-and-stop-writers procedure above, replacing
+all backend writers before enabling the new features. The deployment records
+collection/record/field counts in the private backup directory, then verifies
+they have not decreased and runs `scripts/check-collection-db-compat.sql`
+before recording success. Its JSON result is logged and saved beside the backup.
+The check verifies
+migrations 590–592 are recorded, `record.parent_id` is nullable UUID, the parent
+index is valid, and no live record points at a missing/deleted parent or a
+parent in another workspace/table. Check an existing table's values as well as
+creating a child row and an Email field through the new backend.
+
+Do not automatically downgrade the database on deployment failure. A schema
+rollback preserves rows and cell values and converts Email fields to text, but
+dropping `parent_id` loses hierarchy metadata. Restoring the pre-upgrade backup
+also discards writes made after that backup; plan recovery explicitly.
+
 ## Office preview service
 
 Self-host Compose includes a private `office-preview` Gotenberg container for

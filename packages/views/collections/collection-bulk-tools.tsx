@@ -251,6 +251,7 @@ export function CollectionBulkTools({
                 </DialogTitle>
               </DialogHeader>
               <p>{t(($) => $.cortex_bulk.retention)}</p>
+              {selected.some((record) => !!record.child_count) && <p>{t(($) => $.cortex_table.delete_parent_hint)}</p>}
               {batch.error && <p role="alert">{batch.error.message}</p>}
               <Button
                 variant="destructive"

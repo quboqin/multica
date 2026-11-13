@@ -44,6 +44,23 @@ func (q *Queries) ConvertCollectionFieldValues(ctx context.Context, arg ConvertC
 	return result.RowsAffected(), nil
 }
 
+const countCollectionRecordChildren = `-- name: CountCollectionRecordChildren :one
+SELECT count(*) FROM record WHERE workspace_id=$1 AND collection_id=$2 AND parent_id=$3 AND deleted_at IS NULL
+`
+
+type CountCollectionRecordChildrenParams struct {
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	CollectionID pgtype.UUID `json:"collection_id"`
+	ParentID     pgtype.UUID `json:"parent_id"`
+}
+
+func (q *Queries) CountCollectionRecordChildren(ctx context.Context, arg CountCollectionRecordChildrenParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countCollectionRecordChildren, arg.WorkspaceID, arg.CollectionID, arg.ParentID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countDeletedCollectionRecords = `-- name: CountDeletedCollectionRecords :one
 SELECT count(*)::bigint FROM record WHERE workspace_id=$1 AND collection_id=$2 AND deleted_at IS NOT NULL AND deleted_at > now()-interval '30 days'
 `
@@ -137,7 +154,7 @@ func (q *Queries) CreateCollectionField(ctx context.Context, arg CreateCollectio
 }
 
 const createCollectionRecord = `-- name: CreateCollectionRecord :one
-INSERT INTO record (workspace_id,collection_id,title,fields) VALUES($1,$2,$3,$4) RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at
+INSERT INTO record (workspace_id,collection_id,title,fields,parent_id) VALUES($1,$2,$3,$4,$5) RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id
 `
 
 type CreateCollectionRecordParams struct {
@@ -145,6 +162,7 @@ type CreateCollectionRecordParams struct {
 	CollectionID pgtype.UUID `json:"collection_id"`
 	Title        string      `json:"title"`
 	Fields       []byte      `json:"fields"`
+	ParentID     pgtype.UUID `json:"parent_id"`
 }
 
 func (q *Queries) CreateCollectionRecord(ctx context.Context, arg CreateCollectionRecordParams) (Record, error) {
@@ -153,6 +171,7 @@ func (q *Queries) CreateCollectionRecord(ctx context.Context, arg CreateCollecti
 		arg.CollectionID,
 		arg.Title,
 		arg.Fields,
+		arg.ParentID,
 	)
 	var i Record
 	err := row.Scan(
@@ -166,6 +185,7 @@ func (q *Queries) CreateCollectionRecord(ctx context.Context, arg CreateCollecti
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
@@ -393,7 +413,7 @@ func (q *Queries) ListCollections(ctx context.Context, arg ListCollectionsParams
 }
 
 const listDeletedCollectionRecords = `-- name: ListDeletedCollectionRecords :many
-SELECT id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at FROM record WHERE workspace_id=$1 AND collection_id=$2 AND deleted_at IS NOT NULL AND deleted_at > now()-interval '30 days'
+SELECT id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id FROM record WHERE workspace_id=$1 AND collection_id=$2 AND deleted_at IS NOT NULL AND deleted_at > now()-interval '30 days'
 ORDER BY deleted_at DESC,id LIMIT 200
 `
 
@@ -422,6 +442,7 @@ func (q *Queries) ListDeletedCollectionRecords(ctx context.Context, arg ListDele
 			&i.DeletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ParentID,
 		); err != nil {
 			return nil, err
 		}
@@ -520,8 +541,9 @@ func (q *Queries) RestoreCollectionField(ctx context.Context, arg RestoreCollect
 }
 
 const restoreCollectionRecord = `-- name: RestoreCollectionRecord :one
-UPDATE record SET deleted_at=NULL,revision=revision+1,updated_at=now()
-WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NOT NULL AND deleted_at > now()-interval '30 days' RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at
+UPDATE record r SET deleted_at=NULL,revision=r.revision+1,updated_at=now(),
+parent_id=CASE WHEN EXISTS (SELECT 1 FROM record p WHERE p.workspace_id=r.workspace_id AND p.collection_id=r.collection_id AND p.id=r.parent_id AND p.deleted_at IS NULL) THEN r.parent_id ELSE NULL END
+WHERE r.workspace_id=$1 AND r.collection_id=$2 AND r.id=$3 AND r.deleted_at IS NOT NULL AND r.deleted_at > now()-interval '30 days' RETURNING r.id, r.workspace_id, r.collection_id, r.title, r.fields, r.revision, r.position, r.deleted_at, r.created_at, r.updated_at, r.parent_id
 `
 
 type RestoreCollectionRecordParams struct {
@@ -544,6 +566,7 @@ func (q *Queries) RestoreCollectionRecord(ctx context.Context, arg RestoreCollec
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
@@ -554,7 +577,7 @@ UPDATE record SET fields=CASE WHEN $1::boolean THEN fields-$2::text
  revision=revision+1,updated_at=now()
 WHERE workspace_id=$4 AND collection_id=$5 AND id=$6 AND deleted_at IS NULL
  AND (NOT $7::boolean OR COALESCE(fields->$2::text,'null'::jsonb)=$8::jsonb OR COALESCE(fields->$2::text,'null'::jsonb)=$3::jsonb)
-RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at
+RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id
 `
 
 type SetCollectionRecordFieldParams struct {
@@ -591,13 +614,14 @@ func (q *Queries) SetCollectionRecordField(ctx context.Context, arg SetCollectio
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
 
 const softDeleteCollectionRecord = `-- name: SoftDeleteCollectionRecord :one
 UPDATE record SET deleted_at=now(),revision=revision+1,updated_at=now()
-WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at
+WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id
 `
 
 type SoftDeleteCollectionRecordParams struct {
@@ -620,6 +644,7 @@ func (q *Queries) SoftDeleteCollectionRecord(ctx context.Context, arg SoftDelete
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
@@ -752,7 +777,7 @@ func (q *Queries) UpdateCollectionField(ctx context.Context, arg UpdateCollectio
 const updateCollectionRecordTitle = `-- name: UpdateCollectionRecordTitle :one
 UPDATE record SET title=$1,revision=revision+1,updated_at=now()
 WHERE workspace_id=$2 AND collection_id=$3 AND id=$4 AND deleted_at IS NULL
- AND (title=$5 OR title=$1) RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at
+ AND (title=$5 OR title=$1) RETURNING id, workspace_id, collection_id, title, fields, revision, position, deleted_at, created_at, updated_at, parent_id
 `
 
 type UpdateCollectionRecordTitleParams struct {
@@ -783,6 +808,7 @@ func (q *Queries) UpdateCollectionRecordTitle(ctx context.Context, arg UpdateCol
 		&i.DeletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentID,
 	)
 	return i, err
 }

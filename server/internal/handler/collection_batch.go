@@ -289,8 +289,11 @@ func (h *Handler) BatchCollectionRecords(w http.ResponseWriter, r *http.Request)
 		_, err = tx.Exec(r.Context(), "UPDATE record SET fields=(fields || $4::jsonb)-$5::text[],revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND collection_id=$2 AND id=ANY($3::uuid[])", c.WorkspaceID, c.ID, ids, raw, unset)
 	case "delete":
 		_, err = tx.Exec(r.Context(), "UPDATE record SET deleted_at=now(),revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND collection_id=$2 AND id=ANY($3::uuid[])", c.WorkspaceID, c.ID, ids)
+		if err == nil {
+			_, err = tx.Exec(r.Context(), "UPDATE record SET parent_id=NULL,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND collection_id=$2 AND parent_id=ANY($3::uuid[]) AND NOT(id=ANY($3::uuid[]))", c.WorkspaceID, c.ID, ids)
+		}
 	case "restore":
-		_, err = tx.Exec(r.Context(), "UPDATE record SET deleted_at=NULL,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND collection_id=$2 AND id=ANY($3::uuid[])", c.WorkspaceID, c.ID, ids)
+		_, err = tx.Exec(r.Context(), "UPDATE record SET deleted_at=NULL,revision=revision+1,updated_at=now(),parent_id=CASE WHEN EXISTS(SELECT 1 FROM record p WHERE p.workspace_id=$1 AND p.collection_id=$2 AND p.id=record.parent_id AND (p.deleted_at IS NULL OR p.id=ANY($3::uuid[]))) THEN parent_id ELSE NULL END WHERE workspace_id=$1 AND collection_id=$2 AND id=ANY($3::uuid[])", c.WorkspaceID, c.ID, ids)
 	}
 	if err != nil {
 		writeError(w, 400, "batch exceeds record limits; nothing changed")

@@ -40,7 +40,7 @@ func collectionFieldConversion(from, to string) (string, bool) {
 		return "wrap", true
 	case from == "multi_select" && to == "select", from == "multi_actor" && to == "actor":
 		return "first", true
-	case to == "text" && (from == "number" || from == "date" || from == "url" || from == "checkbox"):
+	case to == "text" && (from == "number" || from == "date" || from == "url" || from == fields.TypeEmail || from == "checkbox"):
 		return "text", true
 	case from == "text" && to == "url":
 		return "", false
@@ -258,14 +258,27 @@ func (h *Handler) changeRecordTrash(w http.ResponseWriter, r *http.Request, remo
 	if !ok {
 		return
 	}
-	var (
-		record db.Record
-		err    error
-	)
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, 500, "failed to change record")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := h.Queries.WithTx(tx)
+	if _, err = q.LockCollection(r.Context(), db.LockCollectionParams{WorkspaceID: collection.WorkspaceID, ID: collection.ID}); err != nil {
+		writeError(w, 404, "collection not found")
+		return
+	}
+	var record db.Record
 	if remove {
-		record, err = h.Queries.SoftDeleteCollectionRecord(r.Context(), db.SoftDeleteCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
+		record, err = q.SoftDeleteCollectionRecord(r.Context(), db.SoftDeleteCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
+		if err == nil {
+			// Deleting a parent never deletes its children. Promote them to
+			// roots atomically, including trashed children awaiting restoration.
+			_, err = tx.Exec(r.Context(), "UPDATE record SET parent_id=NULL,revision=revision+1,updated_at=now() WHERE workspace_id=$1 AND collection_id=$2 AND parent_id=$3", collection.WorkspaceID, collection.ID, id)
+		}
 	} else {
-		record, err = h.Queries.RestoreCollectionRecord(r.Context(), db.RestoreCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
+		record, err = q.RestoreCollectionRecord(r.Context(), db.RestoreCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, ID: id})
 	}
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -273,6 +286,10 @@ func (h *Handler) changeRecordTrash(w http.ResponseWriter, r *http.Request, remo
 		} else {
 			writeError(w, 500, "failed to change record")
 		}
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "failed to commit record change")
 		return
 	}
 	h.respondCollectionRecord(w, r, record, 200)
