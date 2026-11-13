@@ -248,7 +248,11 @@ database before release. It exercises upgrade/retry, old write shapes, nested
 records, Email values, rollback and re-upgrade using the real migration files.
 
 Deploy through the normal backup-and-stop-writers procedure above, replacing
-all backend writers before enabling the new features. After deployment, verify
+all backend writers before enabling the new features. The deployment records
+collection/record/field counts in the private backup directory, then verifies
+they have not decreased and runs `scripts/check-collection-db-compat.sql`
+before recording success. Its JSON result is logged and saved beside the backup.
+The check verifies
 migrations 590–592 are recorded, `record.parent_id` is nullable UUID, the parent
 index is valid, and no live record points at a missing/deleted parent or a
 parent in another workspace/table. Check an existing table's values as well as

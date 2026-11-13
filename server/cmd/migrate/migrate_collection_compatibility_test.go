@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -58,6 +61,32 @@ func TestCollectionUpgradePreservesLegacyDataAndRollbackValues(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	checkSQL, err := os.ReadFile(filepath.Join("..", "..", "..", "scripts", "check-collection-db-compat.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCompatible := func(want bool) {
+		t.Helper()
+		var raw []byte
+		if err := pool.QueryRow(ctx, string(checkSQL)).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			Compatible     bool `json:"compatible"`
+			InvalidParents int  `json:"invalid_parents"`
+		}
+		if err := json.Unmarshal(raw, &result); err != nil || result.Compatible != want {
+			t.Fatalf("deployment compatibility check: %s, want compatible=%v, err=%v", raw, want, err)
+		}
+	}
+	assertCompatible(true)
+	if _, err := pool.Exec(ctx, `UPDATE record SET parent_id=md5('missing')::uuid WHERE id=md5('child')::uuid`); err != nil {
+		t.Fatal(err)
+	}
+	assertCompatible(false)
+	if _, err := pool.Exec(ctx, `UPDATE record SET parent_id=md5('legacy')::uuid WHERE id=md5('child')::uuid`); err != nil {
+		t.Fatal(err)
+	}
 	// Re-running an already recorded upgrade must not rewrite user data.
 	if err := runMigrations(ctx, pool, options); err != nil {
 		t.Fatal(err)
@@ -91,4 +120,5 @@ func TestCollectionUpgradePreservesLegacyDataAndRollbackValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertIndexValidity(t, pool, schema, "record_parent_index", true)
+	assertCompatible(true)
 }
