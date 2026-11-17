@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { ColumnDef, ColumnSizingState } from "@tanstack/react-table";
-import { ChevronRight, Loader2, Maximize2, Plus, Trash2 } from "lucide-react";
+import { ChevronRight, Loader2, Maximize2, Plus, Trash2 } from "@multica/ui/icons";
 import {
   collectionRecordOptions,
   collectionRecordsOptions,

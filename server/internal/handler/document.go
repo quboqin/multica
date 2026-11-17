@@ -54,15 +54,20 @@ func (h *Handler) ListDocuments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "failed to list documents")
 		return
 	}
+	hidden, ok := h.requestHiddenProjects(w, r, uuidToString(ws))
+	if !ok {
+		return
+	}
 	result := make([]IssueResponse, 0, len(docs))
 	prefix := h.getIssuePrefix(r.Context(), ws)
 	for _, doc := range docs {
+		if !hidden.CanSeeProject(doc.Issue.ProjectID) { continue }
 		if narrowed && !allowed[doc.Issue.ID] {
 			continue
 		}
 		resp := issueToResponse(doc.Issue, prefix)
 		resp.DocumentOwnerID = uuidToString(doc.OwnerID)
-		h.fillStatusCategory(r.Context(), ws, &resp)
+		h.fillStatusCategory(r.Context(), ws, hidden, &resp)
 		result = append(result, resp)
 	}
 	writeJSON(w, 200, result)
@@ -216,8 +221,12 @@ func (h *Handler) TransitionDocument(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) respondDocument(w http.ResponseWriter, r *http.Request, doc db.Issue, user string) {
+	hidden, ok := h.requestHiddenProjects(w, r, uuidToString(doc.WorkspaceID))
+	if !ok {
+		return
+	}
 	resp := issueToResponse(doc, h.getIssuePrefix(r.Context(), doc.WorkspaceID))
-	h.fillStatusCategory(r.Context(), doc.WorkspaceID, &resp)
+	h.fillStatusCategory(r.Context(), doc.WorkspaceID, hidden, &resp)
 	actorType, actorID := h.resolveActor(r, user, uuidToString(doc.WorkspaceID))
 	h.publish(protocol.EventIssueUpdated, uuidToString(doc.WorkspaceID), actorType, actorID, map[string]any{"issue": resp})
 	writeJSON(w, 200, resp)

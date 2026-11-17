@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Loader2, RotateCw } from "lucide-react";
+import { Download, Loader2, RotateCw } from "@multica/ui/icons";
 import { api, ApiError, PreviewTooLargeError } from "@multica/core/api";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";

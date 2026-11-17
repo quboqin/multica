@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Upload } from "lucide-react";
+import { Upload } from "@multica/ui/icons";
 import { api } from "@multica/core/api";
 import {
   collectionKeys,
@@ -153,7 +153,7 @@ export function CollectionImportDialog({
           )
         }
       />
-      <DialogContent className="flex max-h-[90dvh] flex-col sm:max-w-4xl">
+      <DialogContent className="flex max-h-[90%] flex-col sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>{t(($) => $.cortex_import.title)}</DialogTitle>
           <DialogDescription>

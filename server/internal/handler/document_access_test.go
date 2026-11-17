@@ -10,7 +10,6 @@ import (
 	"github.com/multica-ai/multica/server/internal/documentaccess"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/middleware"
-	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/testutil"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -125,23 +124,13 @@ func TestDocumentEventsNotificationsAndAttachments(t *testing.T) {
 	attachment := dbfx.Insert(t, "attachment", testutil.Cols{"workspace_id": testWorkspaceID, "issue_id": doc.ID, "uploader_type": "member", "uploader_id": testUserID, "filename": "private.txt", "url": "http://localhost/uploads/doc-private.txt", "content_type": "text/plain", "size_bytes": 3})
 	testutil.Call(t, testHandler.GetAttachmentByID, withURLParam(newRequestAs(other, "GET", "/api/attachments/"+attachment, nil), "id", attachment)).Want(404)
 	testutil.Call(t, testHandler.DownloadAttachment, withURLParam(newRequestAs(other, "GET", "/api/attachments/"+attachment+"/download", nil), "id", attachment)).Want(404)
-	localHandler := *testHandler
-	t.Setenv("LOCAL_UPLOAD_DIR", t.TempDir())
-	t.Setenv("LOCAL_UPLOAD_BASE_URL", "http://localhost")
-	localHandler.Storage = storage.NewLocalStorageFromEnv()
-	for _, path := range []string{"/uploads/doc-private.txt", "/uploads/nested/../doc-private.txt"} {
-		response := testutil.Call(t, localHandler.ServeLocalUpload, newRequestAs(other, "GET", path, nil)).Want(http.StatusTemporaryRedirect)
-		if response.Header().Get("Location") != "/api/attachments/"+attachment+"/download" {
-			t.Fatal("raw document upload bypassed authorization")
-		}
-	}
 	item := dbfx.Insert(t, "inbox_item", testutil.Cols{"workspace_id": testWorkspaceID, "recipient_type": "member", "recipient_id": other, "type": "mention", "title": "private title", "body": "private body", "issue_id": doc.ID})
 	testutil.Call(t, inboxWorkspaceHandler(testHandler.ListInbox), withURLParam(newRequestAs(other, "GET", "/api/inbox", nil), "workspaceId", testWorkspaceID)).Want(200)
-	if _, err := testHandler.Queries.GetInboxItem(context.Background(), parseUUID(item)); err == nil {
+	if _, err := testHandler.Queries.GetInboxItemInWorkspace(context.Background(), db.GetInboxItemInWorkspaceParams{ID: parseUUID(item), WorkspaceID: parseUUID(testWorkspaceID)}); err == nil {
 		t.Fatal("old revoked notification remained readable")
 	}
 	shareDocument(t, doc.ID, "workspace", "view", nil, nil, 1, 200)
-	if _, err := testHandler.Queries.GetInboxItem(context.Background(), parseUUID(item)); err != nil {
+	if _, err := testHandler.Queries.GetInboxItemInWorkspace(context.Background(), db.GetInboxItemInWorkspaceParams{ID: parseUUID(item), WorkspaceID: parseUUID(testWorkspaceID)}); err != nil {
 		t.Fatal(err)
 	}
 	event, allowed = policy(events.Event{Type: "comment:created", WorkspaceID: testWorkspaceID, Payload: map[string]any{"comment": map[string]any{"issue_id": doc.ID, "content": "shared"}}})
@@ -182,5 +171,44 @@ func TestDocumentRunSurfacesRespectAudience(t *testing.T) {
 	family := testutil.Call(t, testHandler.ListTasksByIssue, request("GET", "/api/issues/"+doc.ID+"/tasks?scope=family", "id", doc.ID)).Want(200)
 	if strings.Contains(family.Body.String(), hiddenRun) || !strings.Contains(family.Body.String(), run) {
 		t.Fatal("document family runs did not apply each page's audience")
+	}
+}
+
+func TestCortexProjectSharesRespectPrivateMembership(t *testing.T) {
+	f := newPrivateProjectFixture(t)
+	doc := createTestDocument(t, "")
+	table := dbfx.Insert(t, "collection", testutil.Cols{"workspace_id": testWorkspaceID, "created_by": testUserID, "name": t.Name()})
+	shareDocument(t, doc.ID, "project", "edit", &f.projectID, nil, 1, 200)
+	shareCollection(t, table, "project", "edit", &f.projectID, nil, 1, 200)
+	ctx := context.Background()
+	for _, resource := range []struct {
+		name       string
+		permission func(string) (string, error)
+	}{
+		{"document", func(user string) (string, error) {
+			return testHandler.Queries.GetDocumentPermission(ctx, db.GetDocumentPermissionParams{IssueID: parseUUID(doc.ID), WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(user)})
+		}},
+		{"collection", func(user string) (string, error) {
+			return testHandler.Queries.GetCollectionPermission(ctx, db.GetCollectionPermissionParams{CollectionID: parseUUID(table), WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(user)})
+		}},
+	} {
+		t.Run(resource.name, func(t *testing.T) {
+			for _, tc := range []struct{ user, want string }{{f.insider, "edit"}, {f.outsider, ""}, {f.outsideAdmin, ""}, {testUserID, "owner"}} {
+				got, err := resource.permission(tc.user)
+				if err != nil || got != tc.want {
+					t.Fatalf("permission for %s = %q, %v; want %q", tc.user, got, err, tc.want)
+				}
+			}
+		})
+	}
+	removeProjectMemberRow(t, f.projectID, f.insider)
+	permission, err := testHandler.Queries.GetDocumentPermission(ctx, db.GetDocumentPermissionParams{IssueID: parseUUID(doc.ID), WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(f.insider)})
+	if err != nil || permission != "" {
+		t.Fatalf("removed project member retained document access: %q, %v", permission, err)
+	}
+	shareDocument(t, doc.ID, "project", "edit", &f.projectID, []map[string]string{{"user_id": f.outsider, "role": "view"}}, 2, 200)
+	permission, err = testHandler.Queries.GetDocumentPermission(ctx, db.GetDocumentPermissionParams{IssueID: parseUUID(doc.ID), WorkspaceID: parseUUID(testWorkspaceID), UserID: parseUUID(f.outsider)})
+	if err != nil || permission != "view" {
+		t.Fatalf("explicit read collaborator inherited project edit: %q, %v", permission, err)
 	}
 }

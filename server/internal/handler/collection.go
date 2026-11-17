@@ -186,7 +186,7 @@ func (h *Handler) CreateCollectionField(w http.ResponseWriter, r *http.Request) 
 	if req.Type == fields.TypeRelation {
 		config, err = h.relationFieldConfig(r.Context(), collection, req.Config, requestUserID(r), requestTaskID(r))
 	} else if req.Type != fields.TypeFormula {
-		config, err = fields.ValidateConfig(req.Type, req.Config, validateLabelName, normalizeColor)
+		config, err = fields.ValidateConfig(req.Type, req.Config, 50, validateLabelName, normalizeColor)
 	}
 	if err != nil {
 		writeError(w, 400, err.Error())

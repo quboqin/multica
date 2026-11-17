@@ -59,11 +59,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       bundleIdentifier: isProd
         ? (process.env.EXPO_BUNDLE_IDENTIFIER_PROD ?? "com.cosinetech.multica")
         : isStaging
-          ? "ai.multica.mobile.staging"
+          ? (process.env.EXPO_BUNDLE_IDENTIFIER_STAGING ?? "ai.multica.mobile.staging")
           : (process.env.EXPO_BUNDLE_IDENTIFIER_DEV ?? "ai.multica.mobile.dev"),
     },
     plugins: [
       "expo-router",
+      "expo-image",
+      "expo-localization",
       "expo-secure-store",
       "@react-native-community/datetimepicker",
       "react-native-enriched-markdown",
@@ -88,7 +90,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         {
           ios: {
             buildReactNativeFromSource: true,
-            deploymentTarget: "16.0",
+            // SDK 57's supported scene runtime is required for Xcode 27 builds.
+            // Keep this in prebuild config so clean native generations retain it.
+            enableSceneSupport: true,
           },
         },
       ],

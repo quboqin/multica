@@ -5,14 +5,14 @@ import { useQuery } from "@tanstack/react-query";
 import {
   CalendarDays,
   CircleDot,
-  GanttChart,
-  Kanban,
+  ChartGantt as GanttChart,
+  Columns3 as Kanban,
   LayoutGrid,
   List,
   Search,
   Table2,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "@multica/ui/icons";
 import {
   collectionDetailOptions,
   collectionListOptions,
@@ -52,7 +52,7 @@ export type ViewLayout =
   | "gallery"
   | "gantt";
 
-const LAYOUT_ICON: Record<ViewLayout, LucideIcon> = {
+const LAYOUT_ICON: Record<ViewLayout, IconComponent> = {
   table: Table2,
   board: Kanban,
   list: List,

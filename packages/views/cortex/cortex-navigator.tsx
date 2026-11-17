@@ -10,7 +10,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronRight,
   FileText,
-  ListFilter,
+  Filter as ListFilter,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -19,7 +19,7 @@ import {
   Star,
   Table2,
   Trash2,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -753,7 +753,7 @@ function FilterChip({
       <button
         type="button"
         aria-label={`${clearLabel} ${label}`}
-        className="rounded-full px-1 text-muted-foreground hover:text-foreground"
+        className="rounded-md px-1 text-muted-foreground hover:text-foreground"
         onClick={onClear}
       >
         ×

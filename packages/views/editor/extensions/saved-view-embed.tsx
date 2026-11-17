@@ -6,7 +6,7 @@ import {
 } from "@tiptap/react";
 import { lazy, Suspense, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutGrid } from "lucide-react";
+import { LayoutGrid } from "@multica/ui/icons";
 import { issueViewDetailOptions } from "@multica/core/issue-views/queries";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { Button } from "@multica/ui/components/ui/button";

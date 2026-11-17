@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { GripVertical, ListTodo, Plus, Table2, X } from "lucide-react";
+import { GripVertical, ListTodo, Plus, Table2, X } from "@multica/ui/icons";
 import type {
   CollectionField,
   CollectionFieldInput,
@@ -517,7 +517,7 @@ function FieldForm({
                     aria-label={t(($) => $.cortex_table.option_color, {
                       name: option.name || index + 1,
                     })}
-                    className="size-5 shrink-0 cursor-pointer rounded-full border border-surface-border"
+                    className="size-5 shrink-0 cursor-pointer rounded-md border border-surface-border"
                     style={{ backgroundColor: option.color }}
                   />
                 }

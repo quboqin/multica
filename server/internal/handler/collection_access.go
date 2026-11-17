@@ -191,6 +191,9 @@ func (h *Handler) UpdateCollectionAccess(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if project.Valid {
+		if !h.requireProjectVisible(w, r, h.resolveWorkspaceID(r), project, http.StatusNotFound, "project not found") {
+			return
+		}
 		if _, err = q.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{ID: project, WorkspaceID: collection.WorkspaceID}); err != nil {
 			writeError(w, 400, "project not found")
 			return

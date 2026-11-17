@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Pin, PinOff } from "lucide-react";
+import { Pin, PinOff } from "@multica/ui/icons";
 import { toast } from "sonner";
 import { useAuthStore } from "@multica/core/auth";
 import type { CollectionAccess } from "@multica/core/collections";

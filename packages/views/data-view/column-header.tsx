@@ -9,7 +9,7 @@ import {
   ChevronDown,
   EyeOff,
   GripVertical,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import { cn } from "@multica/ui/lib/utils";
 import {
   DropdownMenu,

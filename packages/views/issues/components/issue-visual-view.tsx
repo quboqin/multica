@@ -21,7 +21,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { Issue, IssueTableQuerySpec } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
-import { CalendarDays, Eye, Image } from "lucide-react";
+import { CalendarDays, Eye, Image } from "@multica/ui/icons";
 import {
   DataViewCalendar,
   DataViewChoiceChip,

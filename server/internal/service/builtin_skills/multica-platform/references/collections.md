@@ -53,9 +53,9 @@ what that person may do — rows and structure alike.
 
 Tables start private to their creator. A table a run creates belongs to its
 runtime's owner. Sharing can grant view or edit access to named members, a
-project, or the workspace. Project audiences currently include workspace
-members, just as document sharing does. Workspace administrative roles do not
-bypass table sharing. A missing share reads as not found; read-only access
+project, or the workspace. Workspace-visible project audiences include workspace
+members; private project audiences include only project members. Workspace
+administrative roles do not bypass table sharing or private project membership. A missing share reads as not found; read-only access
 refuses writes. Ask the owner for access; do not try another route.
 
 ## CLI: read the table first

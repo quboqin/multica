@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from "react-native";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -23,14 +23,13 @@ export default function EditDocumentPage() {
   const access = useQuery(documentAccessOptions(wsId, id));
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [base, setBase] = useState<DocumentBase | null>(null);
+  const [base, setBase] = useState<(DocumentBase & { id: string }) | null>(null);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (!doc.data || doc.data.id !== id || doc.data.kind !== "doc" || base) return;
-    const next = { title: doc.data.title, body: doc.data.description ?? "", revision: doc.data.document_revision ?? 1 };
+  if (doc.data?.id === id && doc.data.kind === "doc" && base?.id !== id) {
+    const next = { id, title: doc.data.title, body: doc.data.description ?? "", revision: doc.data.document_revision ?? 1 };
     setBase(next); setTitle(next.title); setBody(next.body);
-  }, [doc.data, id, base]);
+  }
 
   const save = async () => {
     if (!base || !title.trim() || !access.data?.can_edit || saving) return;
@@ -48,7 +47,7 @@ export default function EditDocumentPage() {
           { text: t("cancel"), style: "cancel" },
           { text: t("retry"), onPress: () => {
             void api.getIssue(id).then((latest) => {
-              const next = { title: latest.title, body: latest.description ?? "", revision: latest.document_revision ?? 1 };
+              const next = { id, title: latest.title, body: latest.description ?? "", revision: latest.document_revision ?? 1 };
               setBase(next); setTitle(next.title); setBody(next.body);
             }).catch(() => Alert.alert(t("load_failed")));
           } },

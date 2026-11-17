@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/multica-ai/multica/server/internal/formula"
+	"github.com/multica-ai/multica/server/internal/issueproperty"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"net/mail"
 	"net/url"
 	"sort"
@@ -109,7 +111,7 @@ func parsePropertyConfig(raw []byte) PropertyConfig {
 	return cfg
 }
 
-func ValidateConfig(propType string, cfg *PropertyConfig, validateLabelName func(string) (string, error), normalizeColor func(string) (string, error)) ([]byte, error) {
+func ValidateConfig(propType string, cfg *PropertyConfig, optionLimit int, validateLabelName func(string) (string, error), normalizeColor func(string) (string, error)) ([]byte, error) {
 	if cfg != nil && cfg.Formula != nil {
 		return nil, fmt.Errorf("type %q does not accept a formula", propType)
 	}
@@ -125,8 +127,8 @@ func ValidateConfig(propType string, cfg *PropertyConfig, validateLabelName func
 	if cfg == nil || len(cfg.Options) == 0 {
 		return nil, errors.New("select properties require at least one option")
 	}
-	if len(cfg.Options) > maxPropertySelectOptions {
-		return nil, fmt.Errorf("a property cannot have more than %d options", maxPropertySelectOptions)
+	if len(cfg.Options) > optionLimit {
+		return nil, fmt.Errorf("a property cannot have more than %d options", optionLimit)
 	}
 	seenIDs := make(map[string]struct{}, len(cfg.Options))
 	seenNames := make(map[string]struct{}, len(cfg.Options))
@@ -257,6 +259,9 @@ func ParseActorRefList(items []any) ([]ActorRef, error) {
 }
 
 func ValidateValue(def Definition, raw json.RawMessage) ([]byte, error) {
+	if def.Type == "multi_text" || def.Type == "multi_url" {
+		return issueproperty.ValidateValue(db.IssueProperty{Type: def.Type, Config: def.Config}, raw)
+	}
 	if len(raw) == 0 {
 		return nil, errors.New("value is required")
 	}

@@ -3,13 +3,15 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-
+	"github.com/multica-ai/multica/server/internal/events"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // Saved issue views (MUL-4796): server-backed filter definitions with
@@ -18,6 +20,11 @@ import (
 // interpretation lives in the client definition_version contract.
 
 const issueViewNameMaxLen = 80
+
+// issueViewDefinitionVersionMax is the newest definition_version any client
+// writes. A client that introduces a new version bumps this first, so a write
+// in a format no other client can read is refused rather than stored.
+const issueViewDefinitionVersionMax = 1
 
 // issueViewBodyMaxBytes bounds every saved-view write. The query/display
 // blobs are filter documents — real ones are a few KB; the cap is the
@@ -101,6 +108,26 @@ func canReadIssueView(v db.IssueView, userID pgtype.UUID) bool {
 	return v.OwnerID == userID || v.Visibility == "workspace"
 }
 
+// publishIssueViewChanged tells every member who can see the view, before or
+// after the write, to re-read their views. The payload names the view only, so
+// a view leaving the workspace never carries its content out with it.
+func (h *Handler) publishIssueViewChanged(view db.IssueView, wasShared bool, actorID, action string) {
+	e := events.Event{
+		Type:        protocol.EventIssueViewChanged,
+		WorkspaceID: uuidToString(view.WorkspaceID),
+		ActorType:   "member",
+		ActorID:     actorID,
+		Payload: map[string]any{
+			"view_id": uuidToString(view.ID),
+			"action":  action,
+		},
+	}
+	if !wasShared && view.Visibility != "workspace" {
+		e.MemberPrivateUserID = uuidToString(view.OwnerID)
+	}
+	h.Bus.Publish(e)
+}
+
 func isJSONObject(raw json.RawMessage) bool {
 	var m map[string]json.RawMessage
 	if json.Unmarshal(raw, &m) != nil {
@@ -169,6 +196,10 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 	if req.DefinitionVersion <= 0 {
 		req.DefinitionVersion = 1
 	}
+	if req.DefinitionVersion > issueViewDefinitionVersionMax {
+		writeError(w, http.StatusBadRequest, "unsupported definition_version")
+		return
+	}
 	if len(req.Query) == 0 || !isJSONObject(req.Query) {
 		writeError(w, http.StatusBadRequest, "query must be a JSON object")
 		return
@@ -203,6 +234,9 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 			ID: projUUID, WorkspaceID: wsUUID,
 		}); err != nil {
 			writeError(w, http.StatusNotFound, "project not found")
+			return
+		}
+		if !h.requireProjectVisible(w, r, uuidToString(wsUUID), projUUID, http.StatusNotFound, "project not found") {
 			return
 		}
 		scopeID = projUUID
@@ -243,6 +277,7 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create view")
 		return
 	}
+	h.publishIssueViewChanged(view, false, userID, "created")
 	writeJSON(w, http.StatusCreated, issueViewToResponse(view))
 }
 
@@ -257,6 +292,26 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 	}
 
 	scopeType := r.URL.Query().Get("scope_type")
+	if scopeType == "all" {
+		views, err := h.Queries.ListAllIssueViewsForUser(r.Context(), db.ListAllIssueViewsForUserParams{
+			WorkspaceID: wsUUID,
+			OwnerID:     parseUUID(userID),
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to list views")
+			return
+		}
+		views, ok := h.visibleIssueViews(w, r, wsUUID, views)
+		if !ok {
+			return
+		}
+		resp := make([]IssueViewResponse, len(views))
+		for i, v := range views {
+			resp[i] = issueViewToResponse(v)
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	if !contains(validIssueViewScopeTypes, scopeType) {
 		writeError(w, http.StatusBadRequest, "invalid scope_type")
 		return
@@ -286,6 +341,10 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list views")
+		return
+	}
+	views, ok = h.visibleIssueViews(w, r, wsUUID, views)
+	if !ok {
 		return
 	}
 	resp := make([]IssueViewResponse, 0, len(views))
@@ -318,6 +377,9 @@ func (h *Handler) loadIssueViewForUser(w http.ResponseWriter, r *http.Request, u
 		return db.IssueView{}, pgtype.UUID{}, false
 	}
 	if view.CollectionID.Valid && !h.checkCollectionResource(w, r, view.CollectionID, wsUUID) {
+		return db.IssueView{}, pgtype.UUID{}, false
+	}
+	if view.ScopeType == "project" && !h.requireProjectVisible(w, r, uuidToString(wsUUID), view.ScopeID, http.StatusNotFound, "view not found") {
 		return db.IssueView{}, pgtype.UUID{}, false
 	}
 	return view, wsUUID, true
@@ -362,6 +424,11 @@ type UpdateIssueViewRequest struct {
 	Query            json.RawMessage `json:"query"`
 	Display          json.RawMessage `json:"display"`
 	ExpectedRevision int32           `json:"expected_revision"`
+	// DefinitionVersion, when sent, is the format the query/display were
+	// written in. It must match the stored view's, so a client that only
+	// knows an older format cannot overwrite a newer definition with it.
+	// Optional because clients built before it was added never send it.
+	DefinitionVersion *int32 `json:"definition_version"`
 }
 
 func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +453,12 @@ func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ExpectedRevision <= 0 {
 		writeError(w, http.StatusBadRequest, "expected_revision is required")
+		return
+	}
+	if req.DefinitionVersion != nil && *req.DefinitionVersion != view.DefinitionVersion {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"view is stored as definition_version %d; this client writes definition_version %d",
+			view.DefinitionVersion, *req.DefinitionVersion))
 		return
 	}
 
@@ -456,6 +529,7 @@ func (h *Handler) UpdateIssueView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update view")
 		return
 	}
+	h.publishIssueViewChanged(updated, view.Visibility == "workspace", userID, "updated")
 	writeJSON(w, http.StatusOK, issueViewToResponse(updated))
 }
 
@@ -478,5 +552,26 @@ func (h *Handler) DeleteIssueView(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to delete view")
 		return
 	}
+	h.publishIssueViewChanged(view, false, userID, "deleted")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// visibleIssueViews drops project-scoped views on private projects the caller
+// cannot see (MUL-8472); a workspace-shared view would otherwise name one.
+func (h *Handler) visibleIssueViews(w http.ResponseWriter, r *http.Request, wsUUID pgtype.UUID, views []db.IssueView) ([]db.IssueView, bool) {
+	hidden, ok := h.requestHiddenProjects(w, r, uuidToString(wsUUID))
+	if !ok {
+		return nil, false
+	}
+	if hidden.Empty() {
+		return views, true
+	}
+	out := views[:0:0]
+	for _, v := range views {
+		if v.ScopeType == "project" && !hidden.CanSeeProject(v.ScopeID) {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out, true
 }

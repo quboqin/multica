@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Mail } from "lucide-react";
+import { ExternalLink, Mail } from "@multica/ui/icons";
 import type {
   CollectionField,
   CollectionRecord,

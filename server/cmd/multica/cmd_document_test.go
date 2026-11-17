@@ -152,7 +152,7 @@ func TestRunDocumentSaveSendsBodyTitleAndRevision(t *testing.T) {
 	srv := documentServer(t, 3, func(req cortexRequest) (int, any) {
 		return 200, testDocument(testDocID, "MUL-7", 4, nil)
 	})
-	cmd := testCmdLike(t, documentSaveCmd, "expected-revision", "3", "content", "line one\\nline two", "title", "Design notes v2", "output", "table")
+	cmd := testCmdLike(t, documentSaveCmd, "expected-revision", "3", "content", "line one\nline two", "title", "Design notes v2", "output", "table")
 	out, err := captureStdout(t, func() error { return runDocumentSave(cmd, []string{"MUL-7"}) })
 	if err != nil {
 		t.Fatalf("runDocumentSave: %v", err)

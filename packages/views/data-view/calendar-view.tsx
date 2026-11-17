@@ -1,6 +1,6 @@
 "use client";
 import { useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "@multica/ui/icons";
 import { calendarDate, calendarDays } from "@multica/core/data-source";
 import type { DataSourceCapabilities } from "@multica/core/data-source";
 import { Button } from "@multica/ui/components/ui/button";

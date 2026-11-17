@@ -9,7 +9,7 @@ import {
   MoreHorizontal,
   Trash2,
   X,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import { toast } from "sonner";
 import {
   collectionRecordOptions,

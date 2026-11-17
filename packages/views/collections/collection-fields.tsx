@@ -4,7 +4,7 @@ import {
   ArrowUpRight,
   AtSign,
   Calendar,
-  CheckSquare,
+  CheckCircle2 as CheckSquare,
   CircleDot,
   Hash,
   Sigma,
@@ -13,8 +13,8 @@ import {
   Mail,
   Type,
   Users,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "@multica/ui/icons";
 import type {
   CollectionField,
   CollectionRecord,
@@ -47,7 +47,7 @@ export const COLLECTION_FIELD_TYPES: readonly string[] = [
   "formula",
 ];
 
-const TYPE_ICONS: Record<string, LucideIcon> = {
+const TYPE_ICONS: Record<string, IconComponent> = {
   text: Type,
   number: Hash,
   select: CircleDot,

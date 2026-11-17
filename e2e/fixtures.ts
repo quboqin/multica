@@ -55,6 +55,7 @@ export class TestApiClient {
   private createdCollectionIds: string[] = [];
   private createdProjectIds: string[] = [];
   private seededIssueIds: string[] = [];
+  private createdPropertyIds: string[] = [];
 
   async login(email: string, name: string) {
     const client = new pg.Client(DATABASE_URL);
@@ -204,6 +205,20 @@ export class TestApiClient {
     const project = await res.json();
     this.createdProjectIds.push(project.id);
     return project as { id: string; title: string; status: string };
+  }
+
+  /** Create a workspace custom property definition; archived on cleanup. */
+  async createProperty(name: string, type = "text", config?: { options: { name: string; color: string }[] }) {
+    const res = await this.authedFetch("/api/properties", {
+      method: "POST",
+      body: JSON.stringify({ name, type, config }),
+    });
+    if (!res.ok) {
+      throw new Error(`create property failed: ${res.status} ${await res.text()}`);
+    }
+    const property = await res.json();
+    this.createdPropertyIds.push(property.id);
+    return property as { id: string; name: string; config: { options?: { id: string; name: string; color: string }[] } };
   }
 
   async updateProject(id: string, updates: Record<string, unknown>) {
@@ -368,15 +383,47 @@ export class TestApiClient {
     await this.authedFetch(`/api/issues/${id}`, { method: "DELETE" });
   }
 
-  async createComment(issueId: string, content: string) {
+  async createComment(issueId: string, content: string, parentId?: string) {
     const res = await this.authedFetch(`/api/issues/${issueId}/comments`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, ...(parentId ? { parent_id: parentId } : {}) }),
     });
     if (!res.ok) {
       throw new Error(`create comment failed: ${res.status} ${await res.text()}`);
     }
     return (await res.json()) as { id: string };
+  }
+
+  async seedCommentNotification(issueId: string, commentId: string, title: string) {
+    if (!this.workspaceId || !this.email) throw new Error("Select a workspace before seeding a notification");
+    const client = new pg.Client(DATABASE_URL);
+    await client.connect();
+    try {
+      await client.query(
+        `INSERT INTO inbox_item (workspace_id, recipient_type, recipient_id, actor_type, actor_id, type, issue_id, title, details)
+         SELECT $1, 'member', id, 'member', id, 'new_comment', $2, $3, $4::jsonb FROM "user" WHERE email = $5`,
+        [this.workspaceId, issueId, title, JSON.stringify({ comment_id: commentId }), this.email],
+      );
+    } finally {
+      await client.end();
+    }
+  }
+
+  /** Seed an owned runtime without launching an actual agent tool. */
+  async seedRuntime(name: string): Promise<string> {
+    if (!this.workspaceId || !this.email) throw new Error("Select a workspace before seeding a runtime");
+    const client = new pg.Client(DATABASE_URL);
+    await client.connect();
+    try {
+      const result = await client.query(
+        `INSERT INTO agent_runtime (workspace_id, name, runtime_mode, provider, status, owner_id, last_seen_at)
+         SELECT $1, $2, 'local', 'claude', 'online', id, now() FROM "user" WHERE email = $3 RETURNING id`,
+        [this.workspaceId, name, this.email],
+      );
+      return result.rows[0].id as string;
+    } finally {
+      await client.end();
+    }
   }
 
   /** Adds an existing user to this client's workspace and returns the member id. */
@@ -481,6 +528,19 @@ export class TestApiClient {
     }
     this.createdProjectIds = [];
     if(this.createdMemberIds.length){const client=new pg.Client(DATABASE_URL);await client.connect();try {await client.query("DELETE FROM member WHERE id=ANY($1::uuid[])",[this.createdMemberIds]);this.createdMemberIds=[];}finally{await client.end();}}
+    // Definitions cannot be deleted, only archived; archiving takes them out
+    // of every picker so later tests see the catalog they expect.
+    for (const id of this.createdPropertyIds) {
+      try {
+        await this.authedFetch(`/api/properties/${id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ archived: true }),
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    this.createdPropertyIds = [];
   }
 
   getToken() {

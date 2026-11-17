@@ -5,7 +5,7 @@ import { CollectionFieldEditor } from "./collection-cell";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-it.each([ ["email", "person@example.com"], ["url", "https://example.com/path"] ])("edits a %s field with the matching input type", (type, value) => {
+it.each([ ["email", "person@example.com", "email"], ["url", "https://example.com/path", "text"] ])("edits a %s field with the shared property editor", (type, value, inputType) => {
   const onChange = vi.fn();
   const onOpenChange = vi.fn();
   renderWithI18n(<CollectionFieldEditor
@@ -14,7 +14,7 @@ it.each([ ["email", "person@example.com"], ["url", "https://example.com/path"] ]
     open onOpenChange={onOpenChange} onChange={onChange}
   />);
   const input = screen.getByLabelText("Contact");
-  expect(input).toHaveAttribute("type", type);
+  expect(input).toHaveAttribute("type", inputType);
   fireEvent.change(input, { target: { value } });
   fireEvent.submit(input.closest("form")!);
   expect(onChange).toHaveBeenCalledWith(value);

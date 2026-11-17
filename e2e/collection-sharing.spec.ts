@@ -83,7 +83,7 @@ test("shares a collection with read/edit roles, revokes access, and pins it pers
     await readerPage
       .getByRole("button", { name: "Pin to sidebar", exact: true })
       .click();
-    expect(
+    await expect.poll(async () =>
       (await reader.cortexRequest("/api/pins?include=collection")).body,
     ).toEqual(
       expect.arrayContaining([
@@ -120,7 +120,7 @@ test("shares a collection with read/edit roles, revokes access, and pins it pers
       readerPage.getByText("Edited by collaborator", { exact: true }),
     ).toHaveCount(0);
     expect((await reader.cortexRequest(root)).status).toBe(404);
-    expect(
+    await expect.poll(async () =>
       (await reader.cortexRequest("/api/pins?include=collection")).body,
     ).toEqual([]);
     // Wider audiences use the same read/edit control as named collaborators.
@@ -130,7 +130,7 @@ test("shares a collection with read/edit roles, revokes access, and pins it pers
     await page.getByRole("option", { name: "Project", exact: true }).click();
     await dialog.getByRole("combobox", { name: "Select project" }).click();
     await page.getByRole("option", { name: project.title, exact: true }).click();
-    await expect(dialog.getByText(/All workspace members can currently access projects/)).toBeVisible();
+    await expect(dialog.getByText(/Members who can access this project receive the selected permission/)).toBeVisible();
     await dialog.getByRole("button", { name: "Save sharing" }).click();
     await expect(dialog).toBeHidden();
     expect((await reader.cortexRequest(root)).body.access).toMatchObject({scope:"project",project_id:project.id,can_edit:false});

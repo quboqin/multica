@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronRight, Table2 } from "lucide-react";
+import { ChevronRight, Table2 } from "@multica/ui/icons";
 import { issueRecordLinksOptions } from "@multica/core/collections";
 import { useCurrentWorkspace, useWorkspacePaths } from "@multica/core/paths";
 import { cn } from "@multica/ui/lib/utils";

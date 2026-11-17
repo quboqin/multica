@@ -6,7 +6,7 @@ import {
 } from "./document-history";
 import { useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AtSign, FileText, LayoutGrid } from "lucide-react";
+import { AtSign, FileText, LayoutGrid } from "@multica/ui/icons";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueViewDetailOptions } from "@multica/core/issue-views/queries";
 import { useWorkspacePaths } from "@multica/core/paths";

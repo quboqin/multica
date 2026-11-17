@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, Table2 } from "lucide-react";
+import { Plus, Table2 } from "@multica/ui/icons";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { CollectionNavigator, NewTablePopover } from "../cortex";
