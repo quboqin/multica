@@ -883,6 +883,7 @@
       "true_label": "Yes",
       "false_label": "No",
       "value_placeholder": "Enter value…",
+      "email_placeholder": "name@example.com",
       "url_placeholder": "https://…",
       "number_placeholder": "0",
       "actor_search_placeholder": "Search members…",
@@ -1252,6 +1253,15 @@
     "no_versions": "No saved versions"
   },
   "cortex_table": {
+    "type_email": "Email",
+    "add_child": "Add child row",
+    "add_child_to": "Add child row to {{title}}",
+    "expand_children": "Expand children of {{title}}",
+    "collapse_children": "Collapse children of {{title}}",
+    "retry_children": "Retry children",
+    "load_more_children": "Load more children of {{title}}",
+    "hierarchy_flat_hint": "Search, filters and groups show matching rows without nesting.",
+    "delete_parent_hint": "Deleting this row keeps its children as top-level rows.",
     "share_table": "Share table",
     "tables": "Tables",
     "all_records": "All records",

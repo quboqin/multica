@@ -78,6 +78,16 @@ case "$*" in
   *'ps -q backend'*) echo api ;;
   *'pg_dump'*) [[ "$FAIL_BACKUP" != true ]] || exit 1; echo dump ;;
   *'--entrypoint tar'*) echo archive ;;
+  *'psql'*'-c SELECT'*) echo '2|3|4' ;;
+  *'psql'*)
+    [[ "$FAIL_DB_QUERY" != true ]] || exit 1
+    cat >/dev/null
+    if [[ "$DB_BAD_SCHEMA" == true ]]; then echo '{"compatible":false,"collections":2,"records":3,"fields":4}'
+    elif [[ "$DB_COUNTS_REDUCED" == true ]]; then echo '{"compatible":true,"collections":2,"records":2,"fields":4}'
+    else echo '{"compatible":true,"collections":2,"records":3,"fields":4}'; fi ;;
+  *'node -e'*'result.compatible'*)
+    while [[ "$1" != node ]]; do shift; done
+    exec "$@" ;;
   *'node -e'*) [[ "$FAIL_HEALTH" != true ]] || exit 1 ;;
 esac
 `, { mode: 0o755 });
@@ -126,3 +136,16 @@ test("unhealthy new containers do not record a successful release or overwrite t
   assert.equal(existsSync(join(deploy, ".current-release")), false);
   assert.equal(existsSync(join(deploy, ".deploy-lock")), false);
 });
+
+for (const failure of ["FAIL_DB_QUERY", "DB_BAD_SCHEMA", "DB_COUNTS_REDUCED"]) {
+  test(`${failure} prevents recording a successful deployment without rolling back data`, (t) => {
+    const { deploy, run } = setup(t);
+    const result = run({ [failure]: "true" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /database compatibility checks/);
+    assert.match(result.stderr, /No automatic database rollback/);
+    assert.match(readFileSync(join(deploy, ".env"), "utf8"), /MULTICA_IMAGE_TAG=v1.0.0/);
+    assert.equal(existsSync(join(deploy, ".current-release")), false);
+    assert.equal(existsSync(join(deploy, ".deploy-lock")), false);
+  });
+}

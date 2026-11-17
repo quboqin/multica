@@ -49,6 +49,22 @@ func TestExcelPreviewKeepsWorkbookValues(t *testing.T) {
 	}
 }
 
+func TestEmailColumnInferenceAndValues(t *testing.T) {
+	p, err := Read(t.Context(), "contacts.csv", strings.NewReader("Name,Email,Website\nAlice,alice@example.com,https://example.com\nBob,bob+tag@example.com,https://example.com/b\n"), "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Columns[1].Type != "email" || p.Columns[2].Type != "url" {
+		t.Fatalf("inferred columns: %+v", p.Columns)
+	}
+	if value, err := CellValue("email", " alice@example.com "); err != nil || value != "alice@example.com" {
+		t.Fatalf("email import: %v, %v", value, err)
+	}
+	if _, err := CellValue("email", "invalid"); err == nil {
+		t.Fatal("invalid email accepted")
+	}
+}
+
 func TestCSVInferenceBoundsAndHeaderSelection(t *testing.T) {
 	p, err := Read(t.Context(), "data.csv", strings.NewReader("report\nName,Name,,Number\n\nfirst,00123,,7\nsecond,99999,,8\n"), "", 2)
 	if err != nil {

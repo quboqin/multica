@@ -16,7 +16,7 @@ import (
 // the meaning of a stored formula. Only scalar fields in this table are inputs.
 func formulaSourceType(t string) bool {
 	switch t {
-	case "text", "number", "date", "url", "checkbox", "select", fields.TypeFormula:
+	case "text", "number", "date", "url", fields.TypeEmail, "checkbox", "select", fields.TypeFormula:
 		return true
 	}
 	return false

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
@@ -86,6 +86,76 @@ describe("field entry points", () => {
     onReorderField: vi.fn(),
     onOpenRecord: vi.fn(),
     ...overrides,
+  });
+
+  it("loads expanded branches independently and collapses nested rows", async () => {
+    const record = (id: string, title: string, child_count = 0) => ({ id, title, child_count, workspace_id: "ws-1", collection_id: "c-1", fields: {}, links: {}, revision: 1, created_at: "" });
+    api.listCollectionRecords.mockImplementation(async (_id, query, cursor) => ({
+      records: query.parent_id === "parent"
+        ? cursor ? [record("sibling", "Sibling")] : [record("child", "Child", 1)]
+        : query.parent_id === "child" ? [record("grandchild", "Grandchild")]
+          : [record("parent", "Parent", 2)],
+      total: 2, groups: [], next_cursor: query.parent_id === "parent" && !cursor ? "page-2" : null,
+    }));
+    withQuery(<CollectionTable collectionId="c-1" titleName="Name" fields={[]} query={{}} commands={commands} actions={actions()} selectedRecordId={null} />);
+    await screen.findByRole("button", { name: "Rename Parent" });
+    expect(api.listCollectionRecords).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Expand children of Parent" }));
+    await screen.findByRole("button", { name: "Rename Child" });
+    fireEvent.click(screen.getByRole("button", { name: "Load more children of Parent" }));
+    await screen.findByRole("button", { name: "Rename Sibling" });
+    fireEvent.click(screen.getByRole("button", { name: "Expand children of Child" }));
+    await screen.findByRole("button", { name: "Rename Grandchild" });
+    fireEvent.click(screen.getByRole("button", { name: "Collapse children of Parent" }));
+    expect(screen.queryByRole("button", { name: "Rename Child" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rename Grandchild" })).not.toBeInTheDocument();
+    expect(api.listCollectionRecords).toHaveBeenCalledWith("c-1", { parent_id: "parent" }, "page-2", expect.anything(), "ws-1");
+  });
+
+  it("preserves a new child's title on failure and expands its parent after success", async () => {
+    const user = userEvent.setup();
+    api.listCollectionRecords.mockResolvedValue({ records: [{ id: "parent", title: "Parent", fields: {}, links: {}, revision: 1, created_at: "" }], total: 1, groups: [], next_cursor: null });
+    vi.mocked(commands.createRecord.mutateAsync).mockRejectedValueOnce(new Error("Could not save")).mockResolvedValueOnce({} as never);
+    withQuery(<CollectionTable collectionId="c-1" titleName="Name" fields={[]} query={{}} commands={commands} actions={actions()} selectedRecordId={null} />);
+    await user.click(await screen.findByRole("button", { name: "Add child row to Parent" }));
+    await user.type(screen.getByLabelText("Record title"), "New child");
+    await user.click(screen.getByRole("button", { name: "Add child row" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save");
+    expect(screen.getByLabelText("Record title")).toHaveValue("New child");
+    await user.click(screen.getByRole("button", { name: "Add child row" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(commands.createRecord.mutateAsync).toHaveBeenLastCalledWith({ title: "New child", fields: undefined, parentId: "parent" });
+    await waitFor(() => expect(api.listCollectionRecords).toHaveBeenCalledWith("c-1", { parent_id: "parent" }, null, expect.anything(), "ws-1"));
+  });
+
+  it("pins selection before the title in both the header and record rows", async () => {
+    const record = {
+      id: "r-1", workspace_id: "ws-1", collection_id: "c-1",
+      title: "Oracle", fields: {}, links: {}, revision: 1, created_at: "",
+    };
+    api.listCollectionRecords.mockResolvedValue({
+      records: [record], total: 1, groups: [], next_cursor: null,
+    });
+    const toggle = vi.fn();
+    withQuery(
+      <CollectionTable
+        collectionId="c-1" titleName="Name" fields={[stage]} query={{}}
+        commands={commands} actions={actions({ selection: { rows: [], toggle } })}
+        selectedRecordId={null}
+      />,
+    );
+    const checkbox = await screen.findByRole("checkbox", { name: "Select Oracle" });
+    const row = checkbox.closest("tr")!;
+    const header = screen.getAllByRole("columnheader");
+    expect(header.map((cell) => cell.dataset.columnId)).toEqual([
+      "__select", "title", "stage", "__add",
+    ]);
+    expect(within(row).getAllByRole("cell").map((cell) => cell.dataset.columnId))
+      .toEqual(["__select", "title", "stage", "__add"]);
+    expect(header[0]).toHaveStyle({ position: "sticky", left: "0px" });
+    expect(header[1]).toHaveStyle({ position: "sticky", left: "44px" });
+    fireEvent.click(checkbox);
+    expect(toggle).toHaveBeenCalledWith(record, true);
   });
 
   it("spells out New field on a table with no fields and hands over its header cell", async () => {

@@ -10,6 +10,7 @@ import {
   Sigma,
   Link2,
   ListChecks,
+  Mail,
   Type,
   Users,
   type LucideIcon,
@@ -41,6 +42,7 @@ export const RELATION_TYPE = "relation";
  */
 export const COLLECTION_FIELD_TYPES: readonly string[] = [
   ...ISSUE_PROPERTY_TYPES,
+  "email",
   RELATION_TYPE,
   "formula",
 ];
@@ -53,6 +55,7 @@ const TYPE_ICONS: Record<string, LucideIcon> = {
   date: Calendar,
   checkbox: CheckSquare,
   url: Link2,
+  email: Mail,
   actor: AtSign,
   multi_actor: Users,
   relation: ArrowUpRight,
@@ -78,6 +81,7 @@ export function FieldTypeIcon({
 /** Field type labels, including types unavailable to task properties. */
 export function FieldTypeLabel({ type }: { type: string }) {
   const { t } = useT("issues");
+  if (type === "email") return <>{t(($) => $.cortex_table.type_email)}</>;
   if (type === "formula") return <>{t(($) => $.cortex_formula.type)}</>;
   if (type === RELATION_TYPE) return <>{t(($) => $.cortex_table.type_relation)}</>;
   return <PropertyTypeLabel type={type} />;
@@ -135,6 +139,7 @@ export function safeFieldConversions(type: string): string[] {
     case "number":
     case "date":
     case "url":
+    case "email":
     case "checkbox":
       return ["text"];
     default:

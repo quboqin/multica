@@ -37,6 +37,16 @@ function commandsWith(
 afterEach(cleanup);
 
 describe("field panel", () => {
+  it.each([ ["email", "Email"], ["url", "URL"] ])("creates a %s field from the type selector", async (type, label) => {
+    const user = userEvent.setup();
+    const commands = commandsWith();
+    renderWithI18n(<CollectionFieldPanel open anchor={null} target={{ kind: "new" }} fieldCount={0} commands={commands} onOpenChange={vi.fn()} />);
+    await user.type(screen.getByLabelText("Name"), "Contact");
+    await user.click(screen.getByRole("combobox", { name: "Field type" }));
+    await user.click(await screen.findByRole("option", { name: label }));
+    await user.click(screen.getByRole("button", { name: "Create field" }));
+    expect(commands.createField.mutateAsync).toHaveBeenCalledWith({ name: "Contact", type });
+  });
   it("creates a formula with field references and preserves the draft on validation errors", async () => {
     const user = userEvent.setup();
     const commands = commandsWith();

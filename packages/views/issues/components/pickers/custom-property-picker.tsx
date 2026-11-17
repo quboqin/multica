@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarDays, Check, ExternalLink } from "lucide-react";
+import { CalendarDays, Check, ExternalLink, Mail } from "lucide-react";
 import { toast } from "sonner";
 import type { Issue, IssueProperty, IssuePropertyValue } from "@multica/core/types";
 import { hasUnknownActorRef } from "@multica/core/types";
@@ -34,6 +34,7 @@ const EDITABLE_PROPERTY_TYPES = [
   "text",
   "number",
   "url",
+  "email",
   "actor",
   "multi_actor",
 ];
@@ -359,7 +360,7 @@ export function CustomPropertyValueInput({
   }
 }
 
-/** Popover-with-input editor shared by text / number / url. */
+/** Popover-with-input editor shared by text / number / url / email. */
 function TextishPropertyEditor({
   property,
   value,
@@ -389,7 +390,9 @@ function TextishPropertyEditor({
   }, [open, value]);
 
   const placeholder =
-    property.type === "url"
+    property.type === "email"
+      ? t(($) => $.pickers.custom_property.email_placeholder)
+      : property.type === "url"
       ? t(($) => $.pickers.custom_property.url_placeholder)
       : property.type === "number"
         ? t(($) => $.pickers.custom_property.number_placeholder)
@@ -434,7 +437,8 @@ function TextishPropertyEditor({
         >
           <Input
             autoFocus
-            type={property.type === "number" ? "number" : "text"}
+            type={property.type === "number" ? "number" : property.type === "email" ? "email" : property.type === "url" ? "url" : "text"}
+            aria-label={property.name}
             step={property.type === "number" ? "any" : undefined}
             inputMode={property.type === "number" ? "decimal" : undefined}
             value={draft}
@@ -442,15 +446,23 @@ function TextishPropertyEditor({
             placeholder={placeholder}
             className="h-8"
           />
-          {property.type === "url" && typeof value === "string" && (
+          {(property.type === "url" || property.type === "email") && typeof value === "string" && (
             <Button
               type="button"
               variant="ghost"
               size="icon-sm"
               aria-label={t(($) => $.pickers.custom_property.open_link)}
-              onClick={() => window.open(value, "_blank", "noopener,noreferrer")}
+              onClick={() => {
+                if (property.type === "email") window.open(`mailto:${encodeURIComponent(value)}`, "_blank", "noopener,noreferrer");
+                else {
+                  try {
+                    const url = new URL(value);
+                    if (url.protocol === "http:" || url.protocol === "https:") window.open(url.href, "_blank", "noopener,noreferrer");
+                  } catch { /* Invalid stored URLs remain editable. */ }
+                }
+              }}
             >
-              <ExternalLink className="size-3.5" />
+              {property.type === "email" ? <Mail className="size-3.5" /> : <ExternalLink className="size-3.5" />}
             </Button>
           )}
         </form>

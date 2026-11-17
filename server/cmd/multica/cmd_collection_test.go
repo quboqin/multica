@@ -210,6 +210,23 @@ func TestResolveCollectionFieldRef(t *testing.T) {
 	}
 }
 
+func TestCollectionEmailFieldCLI(t *testing.T) {
+	srv := newCortexTestServer(t, func(req cortexRequest) (int, any) {
+		if req.Method == http.MethodPost && req.Path == "/api/collections/"+testRequestsID+"/fields" {
+			return 201, collectionFieldDTO{ID: "email", Name: "Email", Type: "email"}
+		}
+		return requestsCatalog(req)
+	})
+	if _, err := captureStdout(t, func() error {
+		return runCollectionFieldAdd(testCmdLike(t, collectionFieldAddCmd, "name", "Email", "type", "email"), []string{testRequestsID})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if writes := srv.writes(); len(writes) != 1 || writes[0].Body["type"] != "email" {
+		t.Fatalf("email type not sent: %+v", writes)
+	}
+}
+
 // A 403 is normally flattened into generic "no access" copy. The structure
 // refusal opts out by code, because it is the one refusal a caller can act on:
 // the table is visible and its rows are still open to them.

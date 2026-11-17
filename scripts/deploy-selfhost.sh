@@ -19,6 +19,8 @@ source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 compose_source="$source_dir/docker-compose.selfhost.yml"
 [[ -f "$compose_source" ]] || compose_source="$source_dir/../docker-compose.selfhost.yml"
 [[ -f "$compose_source" ]] || exit 1
+compatibility_sql="$source_dir/check-collection-db-compat.sql"
+[[ -f "$compatibility_sql" ]] || exit 1
 mkdir "$deploy_dir/.deploy-lock" || {
   echo 'Another deployment holds .deploy-lock; inspect it before retrying.' >&2
   exit 1
@@ -29,6 +31,7 @@ release_dir="$deploy_dir/.releases/$tag-$commit"
 mkdir -p "$release_dir" "$deploy_dir/backups"
 backup_dir="$(mktemp -d "$deploy_dir/backups/$(date -u +%Y%m%dT%H%M%SZ)-$tag.XXXXXXXX")"
 cp "$compose_source" "$release_dir/compose.yml"
+cp "$compatibility_sql" "$release_dir/check-collection-db-compat.sql"
 cp "$deploy_dir/.env" "$backup_dir/env"
 if [[ -f "$deploy_dir/.current-release" ]]; then
   cp "$deploy_dir/.current-release" "$backup_dir/previous-release"
@@ -41,6 +44,9 @@ export MULTICA_WEB_IMAGE=ghcr.io/quboqin/multica-web
 export MULTICA_IMAGE_TAG="$tag"
 dc() {
   docker compose --project-directory "$deploy_dir" --env-file "$deploy_dir/.env" -f "$release_dir/compose.yml" "$@"
+}
+db_psql() {
+  dc exec -T postgres sh -c 'exec psql -XAt -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' -- "$@"
 }
 dc config --quiet
 [[ -n "$(dc ps -q postgres)" && -n "$(dc ps -q backend)" ]] || {
@@ -55,6 +61,9 @@ dc stop frontend backend
 dc exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup_dir/database.dump"
 dc run --rm --no-deps --entrypoint tar backend -C /app/data/uploads -czf - . > "$backup_dir/uploads.tar.gz"
 [[ -s "$backup_dir/database.dump" && -s "$backup_dir/uploads.tar.gz" ]] || exit 1
+db_psql -c "SELECT (SELECT count(*) FROM collection), (SELECT count(*) FROM record), (SELECT count(*) FROM collection_field)" > "$backup_dir/collection-counts.before"
+IFS='|' read -r collections_before records_before fields_before < "$backup_dir/collection-counts.before"
+[[ "$collections_before" =~ ^[0-9]+$ && "$records_before" =~ ^[0-9]+$ && "$fields_before" =~ ^[0-9]+$ ]] || exit 1
 dc up -d backend frontend
 
 healthy=false
@@ -75,6 +84,18 @@ if [[ "$healthy" != true ]]; then
   echo "Deployment failed health/version checks. Backup: $backup_dir. No automatic database rollback was attempted." >&2
   exit 1
 fi
+# Validate the migrated schema and retained data before recording success.
+if ! compatibility="$(db_psql < "$compatibility_sql")" || ! dc exec -T frontend node -e '
+  const result = JSON.parse(process.argv[1]);
+  const before = process.argv.slice(2).map(BigInt);
+  if (result.compatible !== true ||
+      ["collections", "records", "fields"].some((key, index) => BigInt(result[key]) < before[index])) process.exit(1);
+  console.log("Collection database compatibility verified:", JSON.stringify(result));
+' "$compatibility" "$collections_before" "$records_before" "$fields_before"; then
+  echo "Deployment failed database compatibility checks. Backup: $backup_dir. No automatic database rollback was attempted." >&2
+  exit 1
+fi
+printf '%s\n' "$compatibility" > "$backup_dir/collection-compatibility.after.json"
 # Persist the successful image selection so an operator's later Compose command
 # cannot silently return to latest or an upstream image. Preserve secret bytes.
 awk -v tag="$tag" '

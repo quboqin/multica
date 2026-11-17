@@ -22,7 +22,11 @@ import (
 )
 
 func collectionRecordResponse(record db.Record) map[string]any {
-	return map[string]any{"id": uuidToString(record.ID), "workspace_id": uuidToString(record.WorkspaceID), "collection_id": uuidToString(record.CollectionID), "title": record.Title, "fields": json.RawMessage(record.Fields), "revision": record.Revision, "position": record.Position, "created_at": timestampToString(record.CreatedAt), "updated_at": timestampToString(record.UpdatedAt)}
+	var parent any
+	if record.ParentID.Valid {
+		parent = uuidToString(record.ParentID)
+	}
+	return map[string]any{"id": uuidToString(record.ID), "workspace_id": uuidToString(record.WorkspaceID), "collection_id": uuidToString(record.CollectionID), "parent_id": parent, "title": record.Title, "fields": json.RawMessage(record.Fields), "revision": record.Revision, "position": record.Position, "created_at": timestampToString(record.CreatedAt), "updated_at": timestampToString(record.UpdatedAt)}
 }
 func collectionFieldResponse(field db.CollectionField) map[string]any {
 	return map[string]any{"id": uuidToString(field.ID), "workspace_id": uuidToString(field.WorkspaceID), "collection_id": uuidToString(field.CollectionID), "name": field.Name, "type": field.Type, "config": json.RawMessage(field.Config), "position": field.Position}
@@ -233,8 +237,9 @@ func (h *Handler) CreateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	var req struct {
-		Title  string                     `json:"title"`
-		Fields map[string]json.RawMessage `json:"fields"`
+		Title    string                     `json:"title"`
+		Fields   map[string]json.RawMessage `json:"fields"`
+		ParentID *string                    `json:"parent_id"`
 	}
 	if !decodeCollectionBody(w, r, &req) {
 		return
@@ -247,9 +252,41 @@ func (h *Handler) CreateCollectionRecord(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	record, err := h.Queries.CreateCollectionRecord(r.Context(), db.CreateCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, Title: req.Title, Fields: initial})
+	var parent pgtype.UUID
+	if req.ParentID != nil {
+		parent, ok = parseUUIDOrBadRequest(w, *req.ParentID, "parent_id")
+		if !ok {
+			return
+		}
+	}
+	// Parent links are assigned only at creation. A new row cannot be its own
+	// ancestor, and no update endpoint rewires the tree.
+	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
 		writeError(w, 500, "failed to create record")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := h.Queries.WithTx(tx)
+	if _, err = q.LockCollection(r.Context(), db.LockCollectionParams{WorkspaceID: collection.WorkspaceID, ID: collection.ID}); err != nil {
+		writeError(w, 404, "collection not found")
+		return
+	}
+	if parent.Valid {
+		var exists bool
+		err = tx.QueryRow(r.Context(), "SELECT EXISTS(SELECT 1 FROM record WHERE workspace_id=$1 AND collection_id=$2 AND id=$3 AND deleted_at IS NULL)", collection.WorkspaceID, collection.ID, parent).Scan(&exists)
+		if err != nil || !exists {
+			writeError(w, 400, "parent must be a live record in this collection")
+			return
+		}
+	}
+	record, err := q.CreateCollectionRecord(r.Context(), db.CreateCollectionRecordParams{WorkspaceID: collection.WorkspaceID, CollectionID: collection.ID, Title: req.Title, Fields: initial, ParentID: parent})
+	if err != nil {
+		writeError(w, 500, "failed to create record")
+		return
+	}
+	if err = tx.Commit(r.Context()); err != nil {
+		writeError(w, 500, "failed to commit record")
 		return
 	}
 	h.respondCollectionRecord(w, r, record, 201)
@@ -353,6 +390,9 @@ func (h *Handler) SetCollectionRecordField(w http.ResponseWriter, r *http.Reques
 }
 func (h *Handler) respondCollectionRecord(w http.ResponseWriter, r *http.Request, record db.Record, status int) {
 	response := collectionRecordResponse(record)
+	if children, err := h.Queries.CountCollectionRecordChildren(r.Context(), db.CountCollectionRecordChildrenParams{WorkspaceID: record.WorkspaceID, CollectionID: record.CollectionID, ParentID: record.ID}); err == nil {
+		response["child_count"] = children
+	}
 	if err := h.attachFormulaValues(r.Context(), h.Queries, record.WorkspaceID, record.CollectionID, []map[string]any{response}); err != nil {
 		slog.Warn("read formula values failed", "error", err)
 	}
@@ -377,6 +417,17 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	args := []any{collection.WorkspaceID, collection.ID}
 	add := func(value any) string { args = append(args, value); return fmt.Sprintf("$%d", len(args)) }
 	where := []string{"r.workspace_id=$1", "r.collection_id=$2", "r.deleted_at IS NULL"}
+	if raw := r.URL.Query().Get("parent_id"); raw != "" {
+		if raw == "root" {
+			where = append(where, "r.parent_id IS NULL")
+		} else {
+			parent, ok := parseUUIDOrBadRequest(w, raw, "parent_id")
+			if !ok {
+				return
+			}
+			where = append(where, "r.parent_id="+add(parent))
+		}
+	}
 	if raw := r.URL.Query().Get("record_id"); raw != "" {
 		recordID, ok := parseUUIDOrBadRequest(w, raw, "record_id")
 		if !ok {
@@ -539,7 +590,7 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 			where = append(where, "(r.created_at,r.id)<("+add(at)+","+add(recordID)+")")
 		}
 	}
-	rows, err := tx.Query(r.Context(), "SELECT r.id,r.workspace_id,r.collection_id,r.title,r.fields,r.revision,r.position,r.created_at,r.updated_at FROM record r WHERE "+strings.Join(where, " AND ")+" ORDER BY "+orderBy+" LIMIT "+add(limit+1)+" OFFSET "+add(offset), args...)
+	rows, err := tx.Query(r.Context(), "SELECT r.id,r.workspace_id,r.collection_id,r.title,r.fields,r.revision,r.position,r.created_at,r.updated_at,r.parent_id,(SELECT count(*) FROM record child WHERE child.workspace_id=r.workspace_id AND child.collection_id=r.collection_id AND child.parent_id=r.id AND child.deleted_at IS NULL) FROM record r WHERE "+strings.Join(where, " AND ")+" ORDER BY "+orderBy+" LIMIT "+add(limit+1)+" OFFSET "+add(offset), args...)
 	if err != nil {
 		writeError(w, 500, "failed to list records")
 		return
@@ -550,11 +601,14 @@ func (h *Handler) ListCollectionRecords(w http.ResponseWriter, r *http.Request) 
 	cursors := []recordCursor{}
 	for rows.Next() {
 		var record db.Record
-		if err = rows.Scan(&record.ID, &record.WorkspaceID, &record.CollectionID, &record.Title, &record.Fields, &record.Revision, &record.Position, &record.CreatedAt, &record.UpdatedAt); err != nil {
+		var children int64
+		if err = rows.Scan(&record.ID, &record.WorkspaceID, &record.CollectionID, &record.Title, &record.Fields, &record.Revision, &record.Position, &record.CreatedAt, &record.UpdatedAt, &record.ParentID, &children); err != nil {
 			writeError(w, 500, "failed to decode record")
 			return
 		}
-		records = append(records, collectionRecordResponse(record))
+		response := collectionRecordResponse(record)
+		response["child_count"] = children
+		records = append(records, response)
 		recordIDs = append(recordIDs, record.ID)
 		cursors = append(cursors, recordCursor{Fingerprint: fingerprint, CreatedAt: record.CreatedAt.Time.Format(time.RFC3339Nano), ID: uuidToString(record.ID)})
 	}

@@ -306,6 +306,40 @@ func TestRunRecordCreateSendsCellsInOneRequest(t *testing.T) {
 	}
 }
 
+func TestRecordParentFlagsAndOutput(t *testing.T) {
+	srv := recordWriteServer(t, "")
+	cmd := testCmdLike(t, recordCreateCmd, "title", "Child", "parent", "Embed live views")
+	if _, err := captureStdout(t, func() error { return runRecordCreate(cmd, []string{testRequestsID}) }); err != nil {
+		t.Fatal(err)
+	}
+	if writes := srv.writes(); len(writes) != 1 || writes[0].Body["parent_id"] != testRowID {
+		t.Fatalf("parent was not resolved: %+v", writes)
+	}
+	for _, parent := range []string{"root", testRowID} {
+		if _, err := captureStdout(t, func() error {
+			return runRecordList(testCmdLike(t, recordListCmd, "parent", parent), []string{testRequestsID})
+		}); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, request := range srv.requests {
+			if request.Path == recordsPath(testRequestsID) && request.Query.Get("parent_id") == parent {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("parent filter %s missing: %+v", parent, srv.requests)
+		}
+	}
+	row := testRow()
+	parent := testACMERowID
+	row.ParentID, row.ChildCount = &parent, 2
+	out := buildRecordOutput(nil, row, nil, false)
+	if out.ParentID == nil || *out.ParentID != parent || out.ChildCount != 2 {
+		t.Fatalf("hierarchy metadata missing: %+v", out)
+	}
+}
+
 // What --to means follows the field: an issue key for a relation to issues, a
 // row of the target table otherwise.
 func TestRunRecordLinkResolvesTargetsByWhatTheFieldPointsAt(t *testing.T) {

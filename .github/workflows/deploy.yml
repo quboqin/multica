@@ -55,6 +55,6 @@ jobs:
           remote_dir=$(ssh "${opts[@]}" "$target" 'mktemp -d /tmp/multica-release.XXXXXXXX')
           [[ "$remote_dir" =~ ^/tmp/multica-release\.[a-zA-Z0-9]+$ ]]
           trap 'ssh "${opts[@]}" "$target" "rm -rf -- $remote_dir"; rm -f "$RUNNER_TEMP/deploy-ssh/key"' EXIT
-          scp "${opts[@]}" scripts/deploy-selfhost.sh docker-compose.selfhost.yml "$target:$remote_dir/"
+          scp "${opts[@]}" scripts/deploy-selfhost.sh scripts/check-collection-db-compat.sql docker-compose.selfhost.yml "$target:$remote_dir/"
           printf -v command 'bash %q %q %q %q' "$remote_dir/deploy-selfhost.sh" "$RELEASE_TAG" "$(git rev-parse HEAD)" "$DEPLOY_PATH"
           ssh "${opts[@]}" "$target" "$command"

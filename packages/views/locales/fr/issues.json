@@ -883,6 +883,7 @@
       "true_label": "Oui",
       "false_label": "Non",
       "value_placeholder": "Saisir une valeur…",
+      "email_placeholder": "name@example.com",
       "url_placeholder": "https://…",
       "number_placeholder": "0",
       "actor_search_placeholder": "Rechercher des membres…",
@@ -1252,6 +1253,15 @@
     "no_versions": "Aucune version enregistrée"
   },
   "cortex_table": {
+    "type_email": "E-mail",
+    "add_child": "Ajouter une sous-ligne",
+    "add_child_to": "Ajouter une sous-ligne à {{title}}",
+    "expand_children": "Développer les sous-lignes de {{title}}",
+    "collapse_children": "Réduire les sous-lignes de {{title}}",
+    "retry_children": "Recharger les sous-lignes",
+    "load_more_children": "Charger plus de sous-lignes de {{title}}",
+    "hierarchy_flat_hint": "La recherche, les filtres et les groupes affichent les lignes correspondantes sans hiérarchie.",
+    "delete_parent_hint": "Supprimer cette ligne conserve ses sous-lignes au premier niveau.",
     "share_table": "Partager le tableau",
     "tables": "Tables",
     "all_records": "Tous les enregistrements",

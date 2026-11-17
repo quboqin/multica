@@ -64,10 +64,10 @@ type recordBacklinkResponse struct {
 // validateCollectionFieldType admits the shared property types plus the
 // collection-only relation and formula types.
 func validateCollectionFieldType(t string) error {
-	if t == fields.TypeFormula || t == fields.TypeRelation || validatePropertyType(t) == nil {
+	if t == fields.TypeEmail || t == fields.TypeFormula || t == fields.TypeRelation || validatePropertyType(t) == nil {
 		return nil
 	}
-	return fmt.Errorf("invalid type %q; valid types: %s, %s, %s", t, strings.Join(validPropertyTypes, ", "), fields.TypeRelation, fields.TypeFormula)
+	return fmt.Errorf("invalid type %q; valid types: %s, %s, %s, %s", t, strings.Join(validPropertyTypes, ", "), fields.TypeEmail, fields.TypeRelation, fields.TypeFormula)
 }
 
 // relationFieldConfig canonicalizes a new relation field's target and checks

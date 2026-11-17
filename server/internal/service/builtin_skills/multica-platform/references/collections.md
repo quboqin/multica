@@ -21,12 +21,15 @@ no assignee, no comments, no inbox entry, and writing one never starts a run.
 
 - A table has its own field catalog, up to 50 fields, separate from the
   workspace's issue properties. Field types: `text`, `number`, `select`,
-  `multi_select`, `date`, `checkbox`, `url`, `actor`, `multi_actor`,
-  `relation`.
+  `multi_select`, `date`, `checkbox`, `url`, `email`, `actor`, `multi_actor`,
+  `relation`, `formula`.
 - The first column of every table is the row's **title**. It is not a field, and
   it is written with `--title`.
 - A `relation` field links a row to issues, or to the rows of one other table.
   Which one is fixed when the field is created.
+- A row may have one parent in the same table. Parentage is set at creation;
+  the table view can expand nested rows. Search, filters and groups show flat
+  matching rows, so a collapsed parent never hides a match.
 - A row needs a discussion, an owner or a run? That is an issue. Create the
   issue and link the row to it; do not try to make the row behave like one.
 
@@ -96,7 +99,7 @@ some changes cannot be undone:
   a new option and the old one goes, with its values. Renaming is done in the
   app.
 - `--type` converts only along safe paths: `select` ↔ `multi_select`, `actor` ↔
-  `multi_actor`, and `number` / `date` / `url` / `checkbox` → `text`. Going from
+  `multi_actor`, and `number` / `date` / `url` / `email` / `checkbox` → `text`. Going from
   a multi type to its single type keeps the **first** value of each cell and
   drops the rest. Any other conversion is refused: add a new field instead.
 - A relation's target is fixed when the field is created.
@@ -115,6 +118,9 @@ multica record list <table> --output json
 multica record list <table> --search "<text in title>" --filter "Stage=Triage" --sort Due --limit 100 --output json
 multica record get <table> <row> --output json
 multica record create <table> --title "<title>" --set "Stage=Triage" --set "Seats=25" --output json
+multica record create <table> --parent "<parent row>" --title "<child title>" --output json
+multica record list <table> --parent root --output json
+multica record list <table> --parent "<parent row>" --output json
 multica record update <table> <row> --set "Stage=Scheduled" --unset "Due" --title "<new title>" --output json
 multica record delete <table> <row>               # to the table's trash, restorable for 30 days
 multica record trash <table> --output json
@@ -133,6 +139,11 @@ the way `--set` takes them back — option and member names, not ids:
 An empty cell is simply absent. Add `--detail` to get `fields` rows instead —
 field ids, types, stored values and link ids — when you need an id.
 
+JSON rows include `parent_id` for child rows and `child_count` for live direct
+children. Deleting a parent keeps its unselected children as top-level rows;
+restoring the parent does not move those promoted rows back under it. Batch
+restoring a selected parent and its selected child together preserves their link.
+
 `--filter "Field=Value"` is repeatable: the same field twice matches either
 value, different fields must all match, `"Field=__none__"` matches an empty
 cell. Comparisons use `>`, `>=`, `<`, `<=` for numbers/dates and `~=` for text containment. Relation equality accepts a target name or ID; relation sorting uses the alphabetically first visible target title. Deleted/archived targets do not match or contribute sort labels.
@@ -142,6 +153,7 @@ cell. Comparisons use `>`, `>=`, `<`, `<=` for numbers/dates and `~=` for text c
 | Type | `--set` form |
 |---|---|
 | `text`, `url` | `--set "Notes=any string"` (a url must be http or https) |
+| `email` | `--set "Email=person@example.com"` — one bare email address, no display name or list |
 | `number` | `--set "Seats=25"` |
 | `date` | `--set "Renewal=2026-10-01"` (`YYYY-MM-DD`) |
 | `checkbox` | `--set "Signed=true"` or `false` |

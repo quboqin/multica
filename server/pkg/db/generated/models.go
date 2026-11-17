@@ -1455,6 +1455,7 @@ type Record struct {
 	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ParentID     pgtype.UUID        `json:"parent_id"`
 }
 
 type RecordLink struct {

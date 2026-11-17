@@ -47,6 +47,8 @@ type recordDTO struct {
 	FormulaErrors map[string]string          `json:"formula_errors,omitempty"`
 	ID            string                     `json:"id"`
 	CollectionID  string                     `json:"collection_id"`
+	ParentID      *string                    `json:"parent_id,omitempty"`
+	ChildCount    int64                      `json:"child_count"`
 	Title         string                     `json:"title"`
 	Fields        map[string]any             `json:"fields"`
 	Links         map[string][]recordLinkDTO `json:"links"`
@@ -82,13 +84,15 @@ type recordFieldRow struct {
 // --detail they come as "fields" instead: ids, types and stored values, which
 // is what identifies one link among several or an option that was renamed.
 type recordOutput struct {
-	ID           string `json:"id"`
-	CollectionID string `json:"collection_id"`
-	Title        string `json:"title"`
-	Revision     int64  `json:"revision"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	DeletedAt    string `json:"deleted_at,omitempty"`
+	ID           string  `json:"id"`
+	CollectionID string  `json:"collection_id"`
+	ParentID     *string `json:"parent_id,omitempty"`
+	ChildCount   int64   `json:"child_count"`
+	Title        string  `json:"title"`
+	Revision     int64   `json:"revision"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	DeletedAt    string  `json:"deleted_at,omitempty"`
 	// Exactly one of the two is set. They are pointers so the chosen one still
 	// prints when empty — a row with no cells is "values": {}, not a missing key.
 	Values *map[string]any   `json:"values,omitempty"`
@@ -170,9 +174,11 @@ var recordCreateCmd = &cobra.Command{
   checkbox      --set "Signed=true"
   number        --set "Seats=25"
   date          --set "Renewal=2026-10-01"
+  email         --set "Email=person@example.com"
   text / url    --set "Notes=any string"
 
-A relation field is not set here: create the row, then "multica record link".`,
+A relation field is not set here: create the row, then "multica record link".
+Use --parent <row> to create a child of an existing row in this table.`,
 	Args: exactArgs(1),
 	RunE: runRecordCreate,
 }
@@ -263,6 +269,7 @@ func init() {
 
 	recordListCmd.Flags().String("output", "table", "Output format: table or json")
 	recordListCmd.Flags().String("search", "", "Only rows whose title contains this text")
+	recordListCmd.Flags().String("parent", "", "Direct children of this row (id or exact title); root lists top-level rows")
 	recordListCmd.Flags().StringArray("filter", nil, `Only rows where "Field=Value" holds (repeatable; "Field=__none__" matches an empty cell)`)
 	recordListCmd.Flags().String("sort", "", `Sort by "title", "created_at", or a field name or id`)
 	recordListCmd.Flags().Bool("desc", false, "Sort descending (with --sort)")
@@ -284,6 +291,7 @@ func init() {
 	issueRecordsCmd.Flags().String("output", "table", "Output format: table or json")
 
 	recordCreateCmd.Flags().String("title", "", "Row title (the table's first column)")
+	recordCreateCmd.Flags().String("parent", "", "Parent row (id or exact title); omit for a top-level row")
 	recordCreateCmd.Flags().StringArray("set", nil, `Cell value as "Field=Value" (repeatable; see --help for per-type forms)`)
 
 	recordUpdateCmd.Flags().String("title", "", "New row title")
@@ -452,6 +460,7 @@ func buildRecordOutput(fields []collectionFieldDTO, record recordDTO, actorNames
 	rows := buildRecordRows(fields, record, actorNames)
 	out := recordOutput{
 		ID: record.ID, CollectionID: record.CollectionID, Title: record.Title, Revision: record.Revision,
+		ParentID: record.ParentID, ChildCount: record.ChildCount,
 		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, DeletedAt: record.DeletedAt,
 		rows: rows,
 	}
@@ -667,7 +676,7 @@ func resolveRecordFilterValue(ctx context.Context, client *cli.APIClient, direct
 			return "", fmt.Errorf("--filter %s: value %q is not a date in YYYY-MM-DD form", field.Name, trimmed)
 		}
 		return trimmed, nil
-	case "url":
+	case "url", "email":
 		return trimmed, nil
 	case "text":
 		// Text is stored exactly as written, so trimming would miss a value
@@ -744,6 +753,15 @@ func runRecordList(cmd *cobra.Command, args []string) error {
 	}
 	var members memberDirectory
 	params := url.Values{"limit": {strconv.Itoa(limit)}}
+	if parent, _ := cmd.Flags().GetString("parent"); parent != "" {
+		if parent != "root" {
+			parent, err = resolveRecordRef(ctx, client, detail.Collection, parent)
+			if err != nil {
+				return err
+			}
+		}
+		params.Set("parent_id", parent)
+	}
 	if search, _ := cmd.Flags().GetString("search"); search != "" {
 		params.Set("search", search)
 	}
@@ -842,6 +860,13 @@ func runRecordCreate(cmd *cobra.Command, args []string) error {
 		values[field.ID] = value
 	}
 	body := map[string]any{"title": title}
+	if parent, _ := cmd.Flags().GetString("parent"); parent != "" {
+		parentID, err := resolveRecordRef(ctx, client, detail.Collection, parent)
+		if err != nil {
+			return err
+		}
+		body["parent_id"] = parentID
+	}
 	if len(values) > 0 {
 		body["fields"] = values
 	}

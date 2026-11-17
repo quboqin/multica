@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/csv"
 	"fmt"
+	"github.com/multica-ai/multica/server/internal/fields"
 	"io"
 	"math"
 	"net/url"
@@ -212,7 +213,7 @@ func truncate(s string, n int) string {
 // Conservative inference keeps ambiguous dates, mixed values, long identifiers,
 // formatted numbers and leading zeroes as text instead of losing information.
 func InferType(values []string) string {
-	candidates := map[string]bool{"number": true, "checkbox": true, "date": true, "url": true}
+	candidates := map[string]bool{"number": true, "checkbox": true, "date": true, "url": true, "email": true}
 	seen := false
 	for _, s := range values {
 		if s == "" {
@@ -228,7 +229,7 @@ func InferType(values []string) string {
 		}
 	}
 	if seen {
-		for _, typ := range []string{"checkbox", "number", "date", "url"} {
+		for _, typ := range []string{"checkbox", "number", "date", "url", "email"} {
 			if candidates[typ] {
 				return typ
 			}
@@ -239,6 +240,8 @@ func InferType(values []string) string {
 
 func CellValue(typ, s string) (any, error) {
 	switch typ {
+	case "email":
+		return fields.NormalizeEmail(s)
 	case "text", "select":
 		return s, nil
 	case "number":

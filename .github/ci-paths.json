@@ -18,6 +18,7 @@
   ],
   "backend": [
     "server/**",
+    "scripts/check-collection-db-compat.sql",
     "packages/core/runtimes/cli-version.ts",
     "scripts/agent-cli-command-names.txt",
     "scripts/go-test-with-agent-cli-guard.sh",
@@ -110,6 +111,7 @@
     "scripts/check-release*",
     "scripts/verify-release-assets*",
     "scripts/deploy-selfhost*",
+    "scripts/check-collection-db-compat.sql",
     ".github/workflows/release.yml",
     ".github/workflows/deploy.yml",
     ".goreleaser.yml"

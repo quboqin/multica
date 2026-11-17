@@ -26,7 +26,7 @@ import { useT } from "../i18n";
 import { useNavigation } from "../navigation";
 import { FieldTypeLabel } from "./collection-fields";
 
-const types = ["text", "number", "checkbox", "date", "url", "select"] as const;
+const types = ["text", "number", "checkbox", "date", "url", "email", "select"] as const;
 const selectClass =
   "h-8 min-w-0 rounded-md border bg-background px-2 text-label";
 
