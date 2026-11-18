@@ -79,7 +79,7 @@ export function ResourceSharing({
       <DialogTrigger render={<Button size="sm" disabled={disabled} />}>
         {t(($) => $.cortex_docs.share)}
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-[85%] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>
             {t(($) =>

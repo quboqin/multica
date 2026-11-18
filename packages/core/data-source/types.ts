@@ -15,6 +15,8 @@ export const FIELD_TYPES = [
   "url",
   "actor",
   "multi_actor",
+  "multi_text",
+  "multi_url",
 ] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 export type DataSourceFieldKind = FieldType | "readonly";

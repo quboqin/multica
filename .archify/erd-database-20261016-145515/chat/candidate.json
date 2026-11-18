@@ -1,0 +1,801 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 对话",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/chat/chat.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "chat_session",
+      "label": "chat_session",
+      "tag": "对话",
+      "row": 0,
+      "col": 0,
+      "width": 364,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent.id"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "session_id",
+          "type": "text"
+        },
+        {
+          "name": "work_dir",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "unread_since",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "runtime_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_runtime.id"
+        },
+        {
+          "name": "last_read_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "is_agent_intro",
+          "type": "boolean"
+        },
+        {
+          "name": "pinned_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid"
+        },
+        {
+          "name": "explicitly_created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/033_chat.up.sql",
+          "line": 4,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 527,
+          "end_line": 545
+        }
+      ]
+    },
+    {
+      "id": "chat_message",
+      "label": "chat_message",
+      "tag": "对话",
+      "row": 1,
+      "col": 0,
+      "width": 403,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "chat_session_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "chat_session.id"
+        },
+        {
+          "name": "role",
+          "type": "text"
+        },
+        {
+          "name": "content",
+          "type": "text"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "failure_reason",
+          "type": "text"
+        },
+        {
+          "name": "elapsed_ms",
+          "type": "bigint"
+        },
+        {
+          "name": "message_kind",
+          "type": "text"
+        },
+        {
+          "name": "channel_media_pending_until",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "channel_ingested",
+          "type": "boolean"
+        },
+        {
+          "name": "quick_actions",
+          "type": "jsonb"
+        },
+        {
+          "name": "channel_context_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "channel_outbound_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_outbound_installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_outbound_chat_id",
+          "type": "text"
+        },
+        {
+          "name": "channel_outbound_message_ids",
+          "type": "text[]"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/033_chat.up.sql",
+          "line": 21,
+          "end_line": 28
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 498,
+          "end_line": 516
+        }
+      ]
+    },
+    {
+      "id": "chat_pinned_agent",
+      "label": "chat_pinned_agent",
+      "tag": "对话",
+      "row": 2,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/152_chat_pinned_agent.up.sql",
+          "line": 5,
+          "end_line": 13
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 518,
+          "end_line": 525
+        }
+      ]
+    },
+    {
+      "id": "chat_draft_restore",
+      "label": "chat_draft_restore",
+      "tag": "对话",
+      "row": 3,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "chat_session_id",
+          "type": "uuid"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "content",
+          "type": "text"
+        },
+        {
+          "name": "attachment_ids",
+          "type": "uuid[]"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/182_chat_draft_restore.up.sql",
+          "line": 19,
+          "end_line": 24
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 489,
+          "end_line": 496
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "引用 · 工作区与成员",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "label": "agent",
+      "tag": "引用 · 智能体配置",
+      "row": 1,
+      "col": 1,
+      "width": 316,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "runtime_mode",
+          "type": "text"
+        },
+        {
+          "name": "runtime_config",
+          "type": "jsonb"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "max_concurrent_tasks",
+          "type": "integer"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "runtime_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_runtime.id"
+        },
+        {
+          "name": "instructions",
+          "type": "text"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_by",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "custom_env",
+          "type": "jsonb"
+        },
+        {
+          "name": "custom_args",
+          "type": "jsonb"
+        },
+        {
+          "name": "mcp_config",
+          "type": "jsonb"
+        },
+        {
+          "name": "model",
+          "type": "text"
+        },
+        {
+          "name": "thinking_level",
+          "type": "text"
+        },
+        {
+          "name": "composio_toolkit_allowlist",
+          "type": "text[]"
+        },
+        {
+          "name": "permission_mode",
+          "type": "text"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "system_key",
+          "type": "text"
+        },
+        {
+          "name": "disabled_runtime_skills",
+          "type": "jsonb"
+        },
+        {
+          "name": "service_tier",
+          "type": "text"
+        },
+        {
+          "name": "conversation_starters",
+          "type": "jsonb"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 36,
+          "end_line": 49
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 25,
+          "end_line": 57
+        }
+      ]
+    },
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "引用 · 账号与凭据",
+      "row": 2,
+      "col": 1,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    },
+    {
+      "id": "agent_runtime",
+      "label": "agent_runtime",
+      "tag": "引用 · 运行时与守护进程",
+      "row": 3,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "daemon_id",
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "runtime_mode",
+          "type": "text"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "device_info",
+          "type": "text"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "legacy_daemon_id",
+          "type": "text"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "profile_id",
+          "type": "uuid"
+        },
+        {
+          "name": "custom_name",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/004_agent_runtime_loop.up.sql",
+          "line": 1,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 83,
+          "end_line": 101
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "chat_message_chat_session_id_fkey",
+      "from": "chat_message",
+      "to": "chat_session",
+      "label": "chat_session_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "chat_session_workspace_id_fkey",
+      "from": "chat_session",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "chat_session_agent_id_fkey",
+      "from": "chat_session",
+      "to": "agent",
+      "label": "agent_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "chat_session_creator_id_fkey",
+      "from": "chat_session",
+      "to": "user",
+      "label": "creator_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "chat_session_runtime_id_fkey",
+      "from": "chat_session",
+      "to": "agent_runtime",
+      "label": "runtime_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 4 张表、46 个字段；另展开 4 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "chat_session.workspace_id → workspace.id",
+        "chat_session.agent_id → agent.id",
+        "chat_session.creator_id → user.id",
+        "chat_session.runtime_id → agent_runtime.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX chat_pinned_agent_workspace_id_user_id_agent_id_key ON public.chat_pinned_agent USING btree (workspace_id, user_id, agent_id)"
+      ]
+    }
+  ]
+}

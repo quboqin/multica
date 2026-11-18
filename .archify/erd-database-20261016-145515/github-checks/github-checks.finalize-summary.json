@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/candidate.json",
+    "sha256": "71c131b901a7384a9d637142add4a3ff9a9fad3195fb281b53c16f06b8b7fcc3",
+    "bytes": 46748
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.html",
+    "sha256": "fbf9de25c1500e05c2f117d5ff7ed259641b216968f644d6bd4f864752467714",
+    "bytes": 1028736
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/github-checks/github-checks.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2845
+}

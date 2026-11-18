@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/candidate.json",
+    "sha256": "9caa055cc99976901c59ff72f4d8edbed7fb1642dd00ebcd5b4017d91891ff7c",
+    "bytes": 37911
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.html",
+    "sha256": "63344be0b03bf7da5bd00180f0ec7288f6bb81e6dc35c8629591653f167896ea",
+    "bytes": 984399
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/autopilot/autopilot.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2918,
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedBends": 1,
+      "routesOverSuggestedStretch": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "autopilot_run_autopilot_id_fkey",
+            "from": "autopilot_run",
+            "to": "autopilot",
+            "label": "autopilot_id",
+            "collectionIndex": 1,
+            "artifactIndex": 2
+          },
+          "bends": 4,
+          "stretch": 1.37,
+          "directCorridorBlockers": [
+            {
+              "id": "autopilot_trigger",
+              "label": "autopilot_trigger",
+              "box": [
+                32,
+                771,
+                311,
+                416
+              ]
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

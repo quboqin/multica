@@ -1,0 +1,884 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 技能与团队",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/skills/skills.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "skill",
+      "label": "skill",
+      "tag": "技能与团队",
+      "row": 0,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "content",
+          "type": "text"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "plugin_installation_id",
+          "type": "uuid"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/008_structured_skills.up.sql",
+          "line": 4,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1520,
+          "end_line": 1531
+        }
+      ]
+    },
+    {
+      "id": "skill_file",
+      "label": "skill_file",
+      "tag": "技能与团队",
+      "row": 1,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "skill_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "skill.id"
+        },
+        {
+          "name": "path",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "content",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/008_structured_skills.up.sql",
+          "line": 17,
+          "end_line": 25
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1533,
+          "end_line": 1540
+        }
+      ]
+    },
+    {
+      "id": "agent_skill",
+      "label": "agent_skill",
+      "tag": "技能与团队",
+      "row": 2,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "agent_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "agent.id"
+        },
+        {
+          "name": "skill_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "skill.id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/008_structured_skills.up.sql",
+          "line": 27,
+          "end_line": 32
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 103,
+          "end_line": 108
+        }
+      ]
+    },
+    {
+      "id": "skill_to_label",
+      "label": "skill_to_label",
+      "tag": "技能与团队",
+      "row": 3,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "skill_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "label_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/162_resource_labels.up.sql",
+          "line": 17,
+          "end_line": 22
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1542,
+          "end_line": 1546
+        }
+      ]
+    },
+    {
+      "id": "squad",
+      "label": "squad",
+      "tag": "技能与团队",
+      "row": 4,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "leader_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent.id"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_by",
+          "type": "uuid"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "instructions",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/084_squad.up.sql",
+          "line": 2,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1548,
+          "end_line": 1561
+        }
+      ]
+    },
+    {
+      "id": "squad_member",
+      "label": "squad_member",
+      "tag": "技能与团队",
+      "row": 5,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "squad_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "squad.id"
+        },
+        {
+          "name": "member_type",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "member_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "role",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/084_squad.up.sql",
+          "line": 17,
+          "end_line": 25
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1563,
+          "end_line": 1570
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "引用 · 工作区与成员",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "label": "agent",
+      "tag": "引用 · 智能体配置",
+      "row": 1,
+      "col": 1,
+      "width": 316,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "runtime_mode",
+          "type": "text"
+        },
+        {
+          "name": "runtime_config",
+          "type": "jsonb"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "max_concurrent_tasks",
+          "type": "integer"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "runtime_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "agent_runtime.id"
+        },
+        {
+          "name": "instructions",
+          "type": "text"
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "archived_by",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "custom_env",
+          "type": "jsonb"
+        },
+        {
+          "name": "custom_args",
+          "type": "jsonb"
+        },
+        {
+          "name": "mcp_config",
+          "type": "jsonb"
+        },
+        {
+          "name": "model",
+          "type": "text"
+        },
+        {
+          "name": "thinking_level",
+          "type": "text"
+        },
+        {
+          "name": "composio_toolkit_allowlist",
+          "type": "text[]"
+        },
+        {
+          "name": "permission_mode",
+          "type": "text"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "system_key",
+          "type": "text"
+        },
+        {
+          "name": "disabled_runtime_skills",
+          "type": "jsonb"
+        },
+        {
+          "name": "service_tier",
+          "type": "text"
+        },
+        {
+          "name": "conversation_starters",
+          "type": "jsonb"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 36,
+          "end_line": 49
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 25,
+          "end_line": 57
+        }
+      ]
+    },
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "引用 · 账号与凭据",
+      "row": 2,
+      "col": 1,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    },
+    {
+      "id": "agent_runtime",
+      "label": "agent_runtime",
+      "tag": "引用 · 运行时与守护进程",
+      "row": 3,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "daemon_id",
+          "type": "text"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "runtime_mode",
+          "type": "text"
+        },
+        {
+          "name": "provider",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "device_info",
+          "type": "text"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "legacy_daemon_id",
+          "type": "text"
+        },
+        {
+          "name": "visibility",
+          "type": "text"
+        },
+        {
+          "name": "profile_id",
+          "type": "uuid"
+        },
+        {
+          "name": "custom_name",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/004_agent_runtime_loop.up.sql",
+          "line": 1,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 83,
+          "end_line": 101
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "skill_file_skill_id_fkey",
+      "from": "skill_file",
+      "to": "skill",
+      "label": "skill_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "agent_skill_skill_id_fkey",
+      "from": "agent_skill",
+      "to": "skill",
+      "label": "skill_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "squad_member_squad_id_fkey",
+      "from": "squad_member",
+      "to": "squad",
+      "label": "squad_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "skill_workspace_id_fkey",
+      "from": "skill",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "skill_created_by_fkey",
+      "from": "skill",
+      "to": "user",
+      "label": "created_by",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    },
+    {
+      "id": "agent_skill_agent_id_fkey",
+      "from": "agent_skill",
+      "to": "agent",
+      "label": "agent_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "squad_workspace_id_fkey",
+      "from": "squad",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "squad_leader_id_fkey",
+      "from": "squad",
+      "to": "agent",
+      "label": "leader_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 6 张表、41 个字段；另展开 4 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "agent_skill.agent_id → agent.id",
+        "skill.workspace_id → workspace.id",
+        "skill.created_by → user.id",
+        "squad.workspace_id → workspace.id",
+        "squad.leader_id → agent.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX skill_workspace_id_name_key ON public.skill USING btree (workspace_id, name)",
+        "CREATE UNIQUE INDEX skill_file_skill_id_path_key ON public.skill_file USING btree (skill_id, path)",
+        "CREATE UNIQUE INDEX agent_skill_pkey ON public.agent_skill USING btree (agent_id, skill_id)",
+        "CREATE UNIQUE INDEX skill_to_label_pkey ON public.skill_to_label USING btree (skill_id, label_id)",
+        "CREATE UNIQUE INDEX squad_member_squad_id_member_type_member_id_key ON public.squad_member USING btree (squad_id, member_type, member_id)"
+      ]
+    }
+  ]
+}

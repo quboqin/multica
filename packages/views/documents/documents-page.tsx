@@ -10,10 +10,10 @@ import {
   Pin,
   PinOff,
   Plus,
-  Share2,
+  Users as Share2,
   Star,
   Trash2,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import { api } from "@multica/core/api";
 import {
   documentAccessOptions,

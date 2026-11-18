@@ -1,0 +1,577 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 工作区与成员",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/workspaces/workspaces.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "工作区与成员",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "member",
+      "label": "member",
+      "tag": "工作区与成员",
+      "row": 1,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "user.id"
+        },
+        {
+          "name": "role",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 26,
+          "end_line": 33
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1262,
+          "end_line": 1268
+        }
+      ]
+    },
+    {
+      "id": "workspace_invitation",
+      "label": "workspace_invitation",
+      "tag": "工作区与成员",
+      "row": 2,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "inviter_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "invitee_email",
+          "type": "text"
+        },
+        {
+          "name": "invitee_user_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "role",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/041_workspace_invitation.up.sql",
+          "line": 1,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1843,
+          "end_line": 1854
+        }
+      ]
+    },
+    {
+      "id": "workspace_share_link",
+      "label": "workspace_share_link",
+      "tag": "工作区与成员",
+      "row": 3,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "created_by",
+          "type": "uuid"
+        },
+        {
+          "name": "role",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "max_uses",
+          "type": "integer"
+        },
+        {
+          "name": "use_count",
+          "type": "integer"
+        },
+        {
+          "name": "is_active",
+          "type": "boolean"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/327_workspace_share_link.up.sql",
+          "line": 9,
+          "end_line": 20
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1866,
+          "end_line": 1877
+        },
+        {
+          "path": "server/pkg/db/queries/share_link.sql",
+          "line": 31,
+          "end_line": 31
+        }
+      ]
+    },
+    {
+      "id": "seat_capacity_outbox",
+      "label": "seat_capacity_outbox",
+      "tag": "工作区与成员",
+      "row": 4,
+      "col": 0,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "operation_token",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "action",
+          "type": "text"
+        },
+        {
+          "name": "subject_id",
+          "type": "uuid"
+        },
+        {
+          "name": "member_id",
+          "type": "uuid"
+        },
+        {
+          "name": "invitation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "share_link_id",
+          "type": "uuid"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "delivered_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer"
+        },
+        {
+          "name": "next_attempt_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "lease_token",
+          "type": "uuid"
+        },
+        {
+          "name": "last_error",
+          "type": "text"
+        },
+        {
+          "name": "dead_lettered_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/415_seat_capacity_outbox.up.sql",
+          "line": 4,
+          "end_line": 34
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1500,
+          "end_line": 1518
+        },
+        {
+          "path": "server/pkg/db/queries/seat_capacity.sql",
+          "line": 167,
+          "end_line": 167
+        }
+      ]
+    },
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "引用 · 账号与凭据",
+      "row": 0,
+      "col": 1,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "member_workspace_id_fkey",
+      "from": "member",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "workspace_invitation_workspace_id_fkey",
+      "from": "workspace_invitation",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "logical_seat_capacity_outbox_member_id_member",
+      "from": "seat_capacity_outbox",
+      "to": "member",
+      "label": "member_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true,
+      "identifying": false
+    },
+    {
+      "id": "logical_workspace_share_link_workspace_id_workspace",
+      "from": "workspace_share_link",
+      "to": "workspace",
+      "label": "workspace_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "member_user_id_fkey",
+      "from": "member",
+      "to": "user",
+      "label": "user_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "workspace_invitation_inviter_id_fkey",
+      "from": "workspace_invitation",
+      "to": "user",
+      "label": "inviter_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "workspace_invitation_invitee_user_id_fkey",
+      "from": "workspace_invitation",
+      "to": "user",
+      "label": "invitee_user_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 5 张表、55 个字段；另展开 1 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "member.user_id → user.id",
+        "workspace_invitation.inviter_id → user.id",
+        "workspace_invitation.invitee_user_id → user.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX member_workspace_id_user_id_key ON public.member USING btree (workspace_id, user_id)",
+        "CREATE UNIQUE INDEX idx_invitation_unique_pending ON public.workspace_invitation USING btree (workspace_id, invitee_email) WHERE (status = 'pending'::text)",
+        "CREATE UNIQUE INDEX workspace_share_link_active_ws_uidx ON public.workspace_share_link USING btree (workspace_id) WHERE (is_active = true)",
+        "CREATE UNIQUE INDEX idx_seat_capacity_outbox_share_join ON public.seat_capacity_outbox USING btree (workspace_id, share_link_id, user_id) WHERE ((share_link_id IS NOT NULL) AND (user_id IS NOT NULL))"
+      ]
+    }
+  ]
+}

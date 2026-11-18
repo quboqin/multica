@@ -160,7 +160,7 @@ func init() {
 }
 
 func registerDocumentContentFlags(cmd *cobra.Command, what string) {
-	cmd.Flags().String("content", "", what+" (decodes \\n, \\r, \\t, \\\\; pipe via --content-stdin for multi-line bodies or to preserve literal backslashes)")
+	cmd.Flags().String("content", "", what+" (preserves literal backslashes; use --content-stdin for multi-line bodies)")
 	cmd.Flags().Bool("content-stdin", false, "Read the body from stdin (preserves multi-line content verbatim)")
 	cmd.Flags().String("content-file", "", "Read the body from a UTF-8 file (preserves multi-line content verbatim; use this on Windows when stdin piping mangles non-ASCII bytes). The path must be inside the current working directory unless --allow-external-file is set.")
 	cmd.Flags().Bool("allow-external-file", false, "Allow --content-file to read a path outside the current working directory. Off by default so a stale file from another run/environment can't be picked up (MUL-4252).")

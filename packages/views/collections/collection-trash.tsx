@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { RotateCcw, Trash2 } from "lucide-react";
+import { RotateCcw, Trash2 } from "@multica/ui/icons";
 import {api} from "@multica/core/api";
 import { collectionKeys, collectionTrashOptions } from "@multica/core/collections";
 import { Button } from "@multica/ui/components/ui/button";

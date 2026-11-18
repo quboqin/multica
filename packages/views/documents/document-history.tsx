@@ -7,7 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "@multica/ui/icons";
 import { api } from "@multica/core/api";
 import { documentKeys, useDocumentPreferences } from "@multica/core/documents";
 import {

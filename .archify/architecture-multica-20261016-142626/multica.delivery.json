@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "9eddf2eb-a0db-4cb2-b67a-bc12a0cc2c49",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/architecture-multica-20261016-142626/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/architecture-multica-20261016-142626/multica.html",
+  "specification": {
+    "sha256": "ea2cddd8c3413fa58e011dbc0e4e422cf949460f28935128ad645f554d805173",
+    "bytes": 9873
+  },
+  "artifact": {
+    "sha256": "4d37fbb473ff63a3c83bbf655622b32d32001e19bac94d3e1b5a733f7ddc3d19",
+    "bytes": 829932
+  }
+}

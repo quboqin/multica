@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 任务唤醒与子事件",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/wakeup/wakeup.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "issue_wakeup",
+      "label": "issue_wakeup",
+      "tag": "任务唤醒与子事件",
+      "row": 0,
+      "col": 0,
+      "width": 311,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_by",
+          "type": "uuid"
+        },
+        {
+          "name": "source_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "parent_comment_id",
+          "type": "uuid"
+        },
+        {
+          "name": "instruction",
+          "type": "text"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "mode",
+          "type": "text"
+        },
+        {
+          "name": "event_types",
+          "type": "text[]"
+        },
+        {
+          "name": "filter_agent_id",
+          "type": "uuid"
+        },
+        {
+          "name": "filter_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "interval_seconds",
+          "type": "bigint"
+        },
+        {
+          "name": "cron_expression",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        },
+        {
+          "name": "next_fire_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "disabled_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "last_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "last_error",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "filter_actor_type",
+          "type": "text"
+        },
+        {
+          "name": "filter_actor_id",
+          "type": "uuid"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "expiry_seconds",
+          "type": "bigint"
+        },
+        {
+          "name": "on_timeout",
+          "type": "text"
+        },
+        {
+          "name": "timed_out_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "system_rule",
+          "type": "text"
+        },
+        {
+          "name": "customized_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "condition",
+          "type": "jsonb"
+        },
+        {
+          "name": "condition_state",
+          "type": "text"
+        },
+        {
+          "name": "max_fires",
+          "type": "integer"
+        },
+        {
+          "name": "fire_count",
+          "type": "integer"
+        },
+        {
+          "name": "paused_reason",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/509_issue_wakeup.up.sql",
+          "line": 1,
+          "end_line": 13
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1107,
+          "end_line": 1145
+        }
+      ]
+    },
+    {
+      "id": "issue_wakeup_receipt",
+      "label": "issue_wakeup_receipt",
+      "tag": "任务唤醒与子事件",
+      "row": 0,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "wakeup_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "key": "uk"
+        },
+        {
+          "name": "event_key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "event_type",
+          "type": "text"
+        },
+        {
+          "name": "payload",
+          "type": "jsonb"
+        },
+        {
+          "name": "task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "coalesce_key",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/509_issue_wakeup.up.sql",
+          "line": 14,
+          "end_line": 19
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1147,
+          "end_line": 1158
+        },
+        {
+          "path": "server/pkg/db/queries/wakeup.sql",
+          "line": 245,
+          "end_line": 245
+        }
+      ]
+    },
+    {
+      "id": "issue_child_event",
+      "label": "issue_child_event",
+      "tag": "任务唤醒与子事件",
+      "row": 0,
+      "col": 2,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "parent_id",
+          "type": "uuid"
+        },
+        {
+          "name": "child_id",
+          "type": "uuid"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "source_task_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "claimed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/558_issue_child_event.up.sql",
+          "line": 13,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 929,
+          "end_line": 939
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "logical_issue_wakeup_receipt_wakeup_id_issue_wakeup",
+      "from": "issue_wakeup_receipt",
+      "to": "issue_wakeup",
+      "label": "wakeup_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 3 张表、56 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX issue_wakeup_system_rule_idx ON public.issue_wakeup USING btree (issue_id, system_rule) WHERE (system_rule IS NOT NULL)",
+        "CREATE UNIQUE INDEX issue_wakeup_receipt_key_idx ON public.issue_wakeup_receipt USING btree (wakeup_id, revision, event_key)",
+        "CREATE UNIQUE INDEX issue_wakeup_pending_event_idx ON public.issue_wakeup_receipt USING btree (wakeup_id, revision, coalesce_key) WHERE ((processed_at IS NULL) AND (coalesce_key IS NOT NULL))"
+      ]
+    }
+  ]
+}

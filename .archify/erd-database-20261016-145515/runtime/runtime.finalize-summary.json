@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/candidate.json",
+    "sha256": "466ed81814754c24719de3d706ebe622b46890398846dcbd1259d2a331839b8e",
+    "bytes": 16159
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.html",
+    "sha256": "71c5b3d12f35df2e30eb4a7400f02f9b5f59d59671a36d70a14e4f685a2b9a09",
+    "bytes": 875834
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2367
+}

@@ -21,3 +21,17 @@ func TestEmailValue(t *testing.T) {
 		}
 	}
 }
+
+func TestListFieldsUseIssuePropertyValidation(t *testing.T) {
+	for _, tc := range []struct{ kind, raw, want string }{
+		{"multi_text", `["one","two","one"]`, `["one","two"]`},
+		{"multi_url", `[" https://example.com/a ","https://example.com/b"]`, `["https://example.com/a","https://example.com/b"]`},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			got, err := ValidateValue(Definition{Type: tc.kind}, json.RawMessage(tc.raw))
+			if err != nil || string(got) != tc.want {
+				t.Fatalf("ValidateValue = %s, %v; want %s", got, err, tc.want)
+			}
+		})
+	}
+}

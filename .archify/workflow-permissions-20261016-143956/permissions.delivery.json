@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "db48de22-263b-4ee2-95c8-c7e9a00afea8",
+  "status": "current",
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/workflow-permissions-20261016-143956/permissions.html",
+  "specification": {
+    "sha256": "5840c00bc76734f55d9466a3f5e9c210fbb26d9be7ae17e907ebeb71f2e14f31",
+    "bytes": 20090
+  },
+  "artifact": {
+    "sha256": "b3921b9405decd3768563e24edfe8cda8e462831b5154a414400b00b67c6376e",
+    "bytes": 858473
+  }
+}

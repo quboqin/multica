@@ -90,7 +90,7 @@ func (q *Queries) GetCollectionAccess(ctx context.Context, arg GetCollectionAcce
 const getCollectionPermission = `-- name: GetCollectionPermission :one
 SELECT CASE WHEN NOT collection_can_read(d.collection_id,$1::uuid) THEN ''
     WHEN d.owner_id=$1::uuid THEN 'owner'
-    WHEN d.scope_role='edit' AND (d.scope='workspace' OR (d.scope='project' AND EXISTS (SELECT 1 FROM project p WHERE p.id=d.project_id AND p.workspace_id=d.workspace_id))) THEN 'edit'
+    WHEN d.scope_role='edit' AND (d.scope='workspace' OR (d.scope='project' AND EXISTS (SELECT 1 FROM project p WHERE p.id=d.project_id AND p.workspace_id=d.workspace_id AND (p.visibility='workspace' OR EXISTS (SELECT 1 FROM project_member pm WHERE pm.project_id=p.id AND pm.workspace_id=p.workspace_id AND pm.user_id=$1::uuid))))) THEN 'edit'
     WHEN EXISTS (SELECT 1 FROM collection_collaborator c WHERE c.collection_id=d.collection_id AND c.workspace_id=d.workspace_id AND c.user_id=$1::uuid AND c.role='edit') THEN 'edit'
     ELSE 'view' END::text AS permission
 FROM collection_access d WHERE d.collection_id=$2 AND d.workspace_id=$3

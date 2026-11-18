@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "926e27bc-19f4-43b4-87d5-ffb3e0faa75d",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark-messages/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark-messages/lark-messages.html",
+  "specification": {
+    "sha256": "9316845925dea9233bca28792baa093ded1a1a5cf3b7d686233aed7b079bbfed",
+    "bytes": 41454
+  },
+  "artifact": {
+    "sha256": "70dabea303068ce779ef39851fe9063d30cbf152ce7f3cade7a3735f653d01ac",
+    "bytes": 1003502
+  }
+}

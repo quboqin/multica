@@ -6,7 +6,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Link2, Plus, Save, Search } from "lucide-react";
+import { Link2, Plus, Save, Search } from "@multica/ui/icons";
 import { toast } from "sonner";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";

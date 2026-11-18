@@ -1,0 +1,266 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 自动化权限与配额",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/autopilot-access/autopilot-access.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "autopilot_collaborator",
+      "label": "autopilot_collaborator",
+      "tag": "自动化权限与配额",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "autopilot_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "user_type",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "granted_by",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/128_autopilot_collaborator.up.sql",
+          "line": 11,
+          "end_line": 18
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 226,
+          "end_line": 232
+        }
+      ]
+    },
+    {
+      "id": "autopilot_subscriber",
+      "label": "autopilot_subscriber",
+      "tag": "自动化权限与配额",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "autopilot_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "user_type",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/120_autopilot_subscriber.up.sql",
+          "line": 8,
+          "end_line": 14
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 292,
+          "end_line": 297
+        }
+      ]
+    },
+    {
+      "id": "autopilot_quota_period",
+      "label": "autopilot_quota_period",
+      "tag": "自动化权限与配额",
+      "row": 1,
+      "col": 0,
+      "width": 364,
+      "attributes": [
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "period_start",
+          "type": "timestamp with time zone",
+          "key": "pk"
+        },
+        {
+          "name": "period_end",
+          "type": "timestamp with time zone",
+          "key": "pk"
+        },
+        {
+          "name": "used_count",
+          "type": "bigint"
+        },
+        {
+          "name": "reserved_count",
+          "type": "bigint"
+        },
+        {
+          "name": "blocked_counts",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "rejection_notified_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/352_autopilot_quota_execution.up.sql",
+          "line": 5,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 234,
+          "end_line": 244
+        }
+      ]
+    },
+    {
+      "id": "autopilot_quota_reservation",
+      "label": "autopilot_quota_reservation",
+      "tag": "自动化权限与配额",
+      "row": 1,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "period_start",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "period_end",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "policy_revision",
+          "type": "bigint"
+        },
+        {
+          "name": "subscription_version",
+          "type": "bigint"
+        },
+        {
+          "name": "source",
+          "type": "text"
+        },
+        {
+          "name": "idempotency_key",
+          "type": "text"
+        },
+        {
+          "name": "state",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "finalized_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/352_autopilot_quota_execution.up.sql",
+          "line": 17,
+          "end_line": 31
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 246,
+          "end_line": 258
+        }
+      ]
+    }
+  ],
+  "relationships": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 4 张表、29 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX autopilot_collaborator_pkey ON public.autopilot_collaborator USING btree (autopilot_id, user_type, user_id)",
+        "CREATE UNIQUE INDEX autopilot_subscriber_pkey ON public.autopilot_subscriber USING btree (autopilot_id, user_type, user_id)",
+        "CREATE UNIQUE INDEX autopilot_quota_period_pkey ON public.autopilot_quota_period USING btree (workspace_id, period_start, period_end)",
+        "CREATE UNIQUE INDEX uq_autopilot_quota_reservation_key ON public.autopilot_quota_reservation USING btree (workspace_id, period_start, period_end, idempotency_key) WHERE (state <> 'released'::text)"
+      ]
+    }
+  ]
+}

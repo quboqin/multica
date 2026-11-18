@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "ec2a574e-640a-4449-8d15-ff3a30dd40fa",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/skills/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/skills/skills.html",
+  "specification": {
+    "sha256": "3a153aaa924b0df866a7a78775b59be76c44db36efeaa691b1d7296c6e2f9378",
+    "bytes": 20121
+  },
+  "artifact": {
+    "sha256": "f736c369aa564a0bc4d5b9b18d44207e4db4100620469a4d1c10e57eec5d2ced",
+    "bytes": 893292
+  }
+}

@@ -28,6 +28,7 @@ vi.mock("../issues/hooks", () => ({
 }));
 
 vi.mock("../issues/components/issue-chip", () => ({
+  useChipIssue: () => undefined,
   IssueChip: ({
     issueId,
     children,

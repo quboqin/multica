@@ -1,0 +1,246 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 账号与凭据",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/accounts/accounts.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "账号与凭据",
+      "row": 0,
+      "col": 0,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    },
+    {
+      "id": "personal_access_token",
+      "label": "personal_access_token",
+      "tag": "账号与凭据",
+      "row": 0,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "token_hash",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "token_prefix",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_used_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "revoked",
+          "type": "boolean"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/011_personal_access_tokens.up.sql",
+          "line": 1,
+          "end_line": 11
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1278,
+          "end_line": 1288
+        }
+      ]
+    },
+    {
+      "id": "verification_code",
+      "label": "verification_code",
+      "tag": "账号与凭据",
+      "row": 0,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "email",
+          "type": "text"
+        },
+        {
+          "name": "code",
+          "type": "text"
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "used",
+          "type": "boolean"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "attempts",
+          "type": "integer"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/009_verification_code.up.sql",
+          "line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1785,
+          "end_line": 1793
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "personal_access_token_user_id_fkey",
+      "from": "personal_access_token",
+      "to": "user",
+      "label": "user_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 3 张表、30 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    }
+  ]
+}

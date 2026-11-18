@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Unlink } from "lucide-react";
+import { Unlink } from "@multica/ui/icons";
 import { api } from "@multica/core/api";
 import {
   collectionListOptions,

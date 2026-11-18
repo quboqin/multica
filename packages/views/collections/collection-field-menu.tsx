@@ -6,9 +6,9 @@ import {
   ArrowUp,
   EyeOff,
   Filter,
-  Group,
+  Rows3 as Group,
   Pencil,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import type { CollectionField } from "@multica/core/collections";
 import {
   DropdownMenuGroup,

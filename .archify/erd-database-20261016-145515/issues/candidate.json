@@ -1,0 +1,589 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 任务与标签",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/issues/issues.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "issue",
+      "label": "issue",
+      "tag": "任务与标签",
+      "row": 0,
+      "col": 0,
+      "width": 356,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "assignee_type",
+          "type": "text"
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid"
+        },
+        {
+          "name": "creator_type",
+          "type": "text"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid"
+        },
+        {
+          "name": "parent_issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "acceptance_criteria",
+          "type": "jsonb"
+        },
+        {
+          "name": "context_refs",
+          "type": "jsonb"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "project.id"
+        },
+        {
+          "name": "origin_type",
+          "type": "text"
+        },
+        {
+          "name": "origin_id",
+          "type": "uuid"
+        },
+        {
+          "name": "first_executed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "stage",
+          "type": "integer"
+        },
+        {
+          "name": "properties",
+          "type": "jsonb"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "last_activity_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "triage_state",
+          "type": "text"
+        },
+        {
+          "name": "duplicate_of_issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "document_revision",
+          "type": "bigint"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 52,
+          "end_line": 72
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 894,
+          "end_line": 927
+        }
+      ]
+    },
+    {
+      "id": "issue_label",
+      "label": "issue_label",
+      "tag": "任务与标签",
+      "row": 1,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "color",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 75,
+          "end_line": 80
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 948,
+          "end_line": 957
+        }
+      ]
+    },
+    {
+      "id": "issue_to_label",
+      "label": "issue_to_label",
+      "tag": "任务与标签",
+      "row": 2,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "issue.id"
+        },
+        {
+          "name": "label_id",
+          "type": "uuid",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "issue_label.id"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 82,
+          "end_line": 86
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1066,
+          "end_line": 1069
+        }
+      ]
+    },
+    {
+      "id": "issue_dependency",
+      "label": "issue_dependency",
+      "tag": "任务与标签",
+      "row": 3,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "depends_on_issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 89,
+          "end_line": 94
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 941,
+          "end_line": 946
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "引用 · 工作区与成员",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "project",
+      "label": "project",
+      "tag": "引用 · 项目",
+      "row": 1,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "lead_type",
+          "type": "text"
+        },
+        {
+          "name": "lead_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/034_projects.up.sql",
+          "line": 2,
+          "end_line": 14
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1401,
+          "end_line": 1415
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "issue_to_label_issue_id_fkey",
+      "from": "issue_to_label",
+      "to": "issue",
+      "label": "issue_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "issue_to_label_label_id_fkey",
+      "from": "issue_to_label",
+      "to": "issue_label",
+      "label": "label_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "issue_dependency_issue_id_fkey",
+      "from": "issue_dependency",
+      "to": "issue",
+      "label": "issue_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "issue_dependency_depends_on_issue_id_fkey",
+      "from": "issue_dependency",
+      "to": "issue",
+      "label": "depends_on_issue_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "issue_workspace_id_fkey",
+      "from": "issue",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "issue_project_id_fkey",
+      "from": "issue",
+      "to": "project",
+      "label": "project_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    },
+    {
+      "id": "issue_label_workspace_id_fkey",
+      "from": "issue_label",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 4 张表、46 个字段；另展开 2 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "issue.workspace_id → workspace.id",
+        "issue.project_id → project.id",
+        "issue_label.workspace_id → workspace.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX uq_issue_workspace_number ON public.issue USING btree (workspace_id, number)",
+        "CREATE UNIQUE INDEX issue_label_workspace_type_name_lower_idx ON public.issue_label USING btree (workspace_id, resource_type, lower(name))",
+        "CREATE UNIQUE INDEX issue_to_label_pkey ON public.issue_to_label USING btree (issue_id, label_id)"
+      ]
+    }
+  ]
+}

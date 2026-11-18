@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "5ca34715-4d94-495f-a69f-be2de310b3c0",
+  "status": "current",
+  "command": "deliver",
+  "type": "erd",
+  "input": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/candidate.json",
+  "output": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/runtime/runtime.html",
+  "specification": {
+    "sha256": "466ed81814754c24719de3d706ebe622b46890398846dcbd1259d2a331839b8e",
+    "bytes": 16159
+  },
+  "artifact": {
+    "sha256": "71c5b3d12f35df2e30eb4a7400f02f9b5f59d59671a36d70a14e4f685a2b9a09",
+    "bytes": 875834
+  }
+}

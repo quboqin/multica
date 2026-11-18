@@ -3,7 +3,6 @@ package migrations
 import (
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,10 +16,48 @@ func TestMigrationNumericPrefixesAreUnique(t *testing.T) {
 	// From 129 onward, keep the numeric sequence unique so release tooling and
 	// operators can identify one schema change unambiguously by its number.
 	const firstUniqueMigrationNumber = 129
+
+	// These fork migrations shipped before the upstream merge. The runner
+	// records full filename stems, so renumbering would apply deployed DDL twice.
+	// Keep this exact allowlist frozen; all new prefixes remain unique.
+	historicalForkMigrations := map[string]bool{
+		"564_cortex_documents":               true,
+		"565_document_tree_index":            true,
+		"566_document_publication_index":     true,
+		"567_cortex_collections":             true,
+		"568_collection_id_index":            true,
+		"569_collection_field_id_index":      true,
+		"570_record_id_index":                true,
+		"571_record_page_index":              true,
+		"572_collection_field_name_index":    true,
+		"573_document_tree_guard":            true,
+		"574_collection_title_name":          true,
+		"575_record_link":                    true,
+		"576_record_link_id_index":           true,
+		"577_record_link_edge_index":         true,
+		"578_record_link_target_index":       true,
+		"579_collection_field_relation_type": true,
+		"580_collection_formula":             true,
+		"581_document_sharing_versions":      true,
+		"582_document_access_index":          true,
+		"583_document_collaborator_index":    true,
+		"584_document_version_index":         true,
+		"585_document_private_lifecycle":     true,
+		"586_collection_sharing":             true,
+		"587_collection_access_index":        true,
+		"588_collection_collaborator_index":  true,
+		"589_comment_agent_grant":            true,
+		"590_collection_record_parent":       true,
+		"591_collection_record_parent_index": true,
+		"592_collection_email_field":         true,
+	}
 	stemByNumber := make(map[int]string)
 	for _, file := range files {
 		stem, _, ok := splitMigrationFilename(filepath.Base(file))
 		if !ok {
+			continue
+		}
+		if historicalForkMigrations[stem] {
 			continue
 		}
 		prefix, _, ok := strings.Cut(stem, "_")
@@ -79,11 +116,13 @@ func migrationFilesForLint(t *testing.T, pattern string) []string {
 func realMigrationsDir(t *testing.T) string {
 	t.Helper()
 
-	_, self, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve migration lint test path")
+	// Relative to the package directory go test runs in; runtime.Caller
+	// would return a module path under -trimpath.
+	dir, err := filepath.Abs(filepath.Join("..", "..", "migrations"))
+	if err != nil {
+		t.Fatalf("resolve migrations dir: %v", err)
 	}
-	return filepath.Clean(filepath.Join(filepath.Dir(self), "..", "..", "migrations"))
+	return dir
 }
 
 func splitMigrationFilename(name string) (stem, direction string, ok bool) {

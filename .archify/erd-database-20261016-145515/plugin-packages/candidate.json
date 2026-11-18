@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 插件包与安装",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/plugin-packages/plugin-packages.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "plugin_package",
+      "label": "plugin_package",
+      "tag": "插件包与安装",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "plugin_key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "created_by",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/392_plugin_package_publishing.up.sql",
+          "line": 22,
+          "end_line": 30
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1349,
+          "end_line": 1357
+        }
+      ]
+    },
+    {
+      "id": "plugin_package_version",
+      "label": "plugin_package_version",
+      "tag": "插件包与安装",
+      "row": 0,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "package_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "version",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "manifest",
+          "type": "jsonb"
+        },
+        {
+          "name": "digest",
+          "type": "text"
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint"
+        },
+        {
+          "name": "published_by",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/392_plugin_package_publishing.up.sql",
+          "line": 40,
+          "end_line": 52
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1369,
+          "end_line": 1379
+        },
+        {
+          "path": "server/internal/service/plugin_package.go",
+          "line": 133,
+          "end_line": 150
+        }
+      ]
+    },
+    {
+      "id": "plugin_package_file",
+      "label": "plugin_package_file",
+      "tag": "插件包与安装",
+      "row": 1,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "version_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "path",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "content",
+          "type": "bytea"
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint"
+        },
+        {
+          "name": "sha256",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/392_plugin_package_publishing.up.sql",
+          "line": 61,
+          "end_line": 69
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1359,
+          "end_line": 1367
+        },
+        {
+          "path": "server/internal/service/plugin_package.go",
+          "line": 157,
+          "end_line": 167
+        }
+      ]
+    },
+    {
+      "id": "plugin_installation",
+      "label": "plugin_installation",
+      "tag": "插件包与安装",
+      "row": 1,
+      "col": 1,
+      "width": 331,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "plugin_key",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "version",
+          "type": "text"
+        },
+        {
+          "name": "manifest",
+          "type": "jsonb"
+        },
+        {
+          "name": "granted_scopes",
+          "type": "jsonb"
+        },
+        {
+          "name": "config",
+          "type": "jsonb"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "installed_by",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "token_hash",
+          "type": "text"
+        },
+        {
+          "name": "token_rotated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "mcp_approvals",
+          "type": "jsonb"
+        },
+        {
+          "name": "package_version_id",
+          "type": "uuid"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/344_plugin_v2_reset.up.sql",
+          "line": 50,
+          "end_line": 63
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1315,
+          "end_line": 1331
+        },
+        {
+          "path": "server/pkg/db/queries/plugin.sql",
+          "line": 66,
+          "end_line": 72
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "logical_plugin_package_version_package_id_plugin_package",
+      "from": "plugin_package_version",
+      "to": "plugin_package",
+      "label": "package_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_plugin_package_file_version_id_plugin_package_version",
+      "from": "plugin_package_file",
+      "to": "plugin_package_version",
+      "label": "version_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    },
+    {
+      "id": "logical_plugin_installation_package_version_id_plugin_package_version",
+      "from": "plugin_installation",
+      "to": "plugin_package_version",
+      "label": "package_version_id · 应用关联",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false,
+      "identifying": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 4 张表、38 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX idx_plugin_package_workspace_key ON public.plugin_package USING btree (workspace_id, plugin_key)",
+        "CREATE UNIQUE INDEX idx_plugin_package_version_unique ON public.plugin_package_version USING btree (package_id, version)",
+        "CREATE UNIQUE INDEX idx_plugin_package_file_path ON public.plugin_package_file USING btree (version_id, path)",
+        "CREATE UNIQUE INDEX idx_plugin_installation_workspace_key ON public.plugin_installation USING btree (workspace_id, plugin_key)"
+      ]
+    }
+  ]
+}

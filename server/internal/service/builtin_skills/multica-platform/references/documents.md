@@ -97,8 +97,9 @@ history still attributes their writes to the agent.
 The human document owner manages sharing in Publish or with `document share`.
 A direct collaborator, project audience, or workspace audience can receive
 `view` or `edit`; all new grants default to `view`. Grants are additive, so a
-wider read grant does not remove a collaborator's edit grant. Projects currently
-have the workspace's audience; project sharing is not a private project team.
+wider read grant does not remove a collaborator's edit grant. Workspace-visible
+projects include workspace members; private projects include only their project
+members. Workspace administrators do not implicitly join a private project.
 
 ```bash
 multica document share <document> --collaborator <user-uuid>:edit

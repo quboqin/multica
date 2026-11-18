@@ -1,6 +1,6 @@
 "use client";
 
-import { MoreHorizontal } from "lucide-react";
+import { MoreHorizontal } from "@multica/ui/icons";
 import type { Issue } from "@multica/core/types";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";

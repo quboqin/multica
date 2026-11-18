@@ -1,0 +1,2252 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "erd",
+  "quality": "standard",
+  "startedAt": "2026-10-16T07:08:07.158Z",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/candidate.json",
+    "sha256": "d34c8eab0c4a40d8552b4e2e77fc9aa5301657dc05b6897728aa80f8cd1b09ba",
+    "bytes": 23388
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+    "sha256": "f2228d7e3bc4c222e6202bd2c2fd7ae81ffccf710252cde0a2cc900b27db42b5",
+    "bytes": 906654
+  },
+  "stages": {
+    "validate": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": null,
+      "execution": "embedded-in-deliver",
+      "command": [
+        "/Applications/ServBay/package/node/22/22.17.0/bin/node",
+        "/Users/qinqubo/.agents/skills/archify/bin/archify.mjs",
+        "deliver",
+        "erd",
+        "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/candidate.json",
+        "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+        "--quality",
+        "standard",
+        "--repo-root",
+        "/Users/qinqubo/magic/projects/multica",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "validate",
+        "specification": {
+          "sha256": "d34c8eab0c4a40d8552b4e2e77fc9aa5301657dc05b6897728aa80f8cd1b09ba",
+          "bytes": 23388
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "standard",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 14,
+          "compositionIssues": [
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                531,
+                194
+              ],
+              "to": [
+                531,
+                838
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                527,
+                218
+              ],
+              "to": [
+                527,
+                1361
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                519.8,
+                242
+              ],
+              "to": [
+                519.8,
+                1882
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                500.3,
+                1151
+              ],
+              "to": [
+                500.3,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                531,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                531,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                527,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "point": [
+                527,
+                790
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                527,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                519.8,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "point": [
+                519.8,
+                790
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                242
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                559
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                790
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "deliver": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 512,
+      "command": [
+        "/Applications/ServBay/package/node/22/22.17.0/bin/node",
+        "/Users/qinqubo/.agents/skills/archify/bin/archify.mjs",
+        "deliver",
+        "erd",
+        "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/candidate.json",
+        "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+        "--quality",
+        "standard",
+        "--repo-root",
+        "/Users/qinqubo/magic/projects/multica",
+        "--json"
+      ],
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "0b7c005e-a952-4764-976c-d855fe4ba857",
+        "ok": true,
+        "command": "deliver",
+        "type": "erd",
+        "input": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/candidate.json",
+        "output": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+        "specification": {
+          "sha256": "d34c8eab0c4a40d8552b4e2e77fc9aa5301657dc05b6897728aa80f8cd1b09ba",
+          "bytes": 23388
+        },
+        "artifact": {
+          "sha256": "f2228d7e3bc4c222e6202bd2c2fd7ae81ffccf710252cde0a2cc900b27db42b5",
+          "bytes": 906654
+        },
+        "validation": {
+          "checksPassed": 9,
+          "checkCount": 9,
+          "compositionProfile": "standard",
+          "compositionStatus": "pass",
+          "errors": 0,
+          "warnings": 14,
+          "compositionIssues": [
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                531,
+                194
+              ],
+              "to": [
+                531,
+                838
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                527,
+                218
+              ],
+              "to": [
+                527,
+                1361
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                519.8,
+                242
+              ],
+              "to": [
+                519.8,
+                1882
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                500.3,
+                1151
+              ],
+              "to": [
+                500.3,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                531,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                531,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                527,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "point": [
+                527,
+                790
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                527,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                519.8,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "point": [
+                519.8,
+                790
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                242
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                559
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                790
+              ]
+            }
+          ]
+        },
+        "evidence": {
+          "verified": true,
+          "repository": "git@github.com:quboqin/multica",
+          "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+          "references": 20,
+          "linkMode": "local-only"
+        },
+        "update": {
+          "status": "unavailable",
+          "installedVersion": null,
+          "availableVersion": null,
+          "releaseNotes": null,
+          "checkedAt": null,
+          "source": null,
+          "noticeRequired": false,
+          "noticeText": null,
+          "reason": "disabled"
+        }
+      }
+    },
+    "check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 118,
+      "command": [
+        "/Applications/ServBay/package/node/22/22.17.0/bin/node",
+        "/Users/qinqubo/.agents/skills/archify/bin/archify.mjs",
+        "check",
+        "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+        "--require-provenance"
+      ],
+      "receipt": {
+        "ok": true,
+        "file": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+        "artifact": {
+          "sha256": "f2228d7e3bc4c222e6202bd2c2fd7ae81ffccf710252cde0a2cc900b27db42b5",
+          "bytes": 906654
+        },
+        "checks": [
+          {
+            "name": "single_svg",
+            "ok": true,
+            "details": [
+              "found 1 <svg> block(s)"
+            ]
+          },
+          {
+            "name": "finite_svg",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "orthogonal_arrows",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "label_route_clearance",
+            "ok": true,
+            "details": [
+              "[composition/label-route-clearance] standard label \"workspace_id, multica_user_id\" on relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") is 0px from relationship id \"lark_installation_workspace_id_fkey\" (\"lark_installation\" -> \"workspace\") segment 1 [531, 194] -> [531, 838] with 14px hidden by the mask (minimum 2px) — use renderer-supported label controls (message y for sequence; otherwise labelAt, labelDx, labelDy, or labelSegment), or adjust the other relationship route/via/channel.",
+              "[composition/label-route-clearance] standard label \"workspace_id, multica_user_id\" on relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") is 0px from relationship id \"lark_installation_agent_id_fkey\" (\"lark_installation\" -> \"agent\") segment 1 [527, 218] -> [527, 1361] with 14px hidden by the mask (minimum 2px) — use renderer-supported label controls (message y for sequence; otherwise labelAt, labelDx, labelDy, or labelSegment), or adjust the other relationship route/via/channel.",
+              "[composition/label-route-clearance] standard label \"workspace_id, multica_user_id\" on relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") is 0px from relationship id \"lark_installation_installer_user_id_fkey\" (\"lark_installation\" -> \"user\") segment 1 [519.8, 242] -> [519.8, 1882] with 14px hidden by the mask (minimum 2px) — use renderer-supported label controls (message y for sequence; otherwise labelAt, labelDx, labelDy, or labelSegment), or adjust the other relationship route/via/channel.",
+              "[composition/label-route-clearance] standard label \"workspace_id, multica_user_id\" on relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") is 0px from relationship id \"lark_chat_session_binding_chat_session_id_fkey\" (\"lark_chat_session_binding\" -> \"chat_session\") segment 1 [500.3, 1151] -> [500.3, 228] with 14px hidden by the mask (minimum 2px) — use renderer-supported label controls (message y for sequence; otherwise labelAt, labelDx, labelDy, or labelSegment), or adjust the other relationship route/via/channel."
+            ]
+          },
+          {
+            "name": "relationship_crossings",
+            "ok": true,
+            "details": [
+              "[composition/proper-crossing] standard relationship id \"lark_installation_workspace_id_fkey\" (\"lark_installation\" -> \"workspace\") crosses relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") at [531, 539]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_workspace_id_fkey\" (\"lark_installation\" -> \"workspace\") crosses relationship id \"lark_chat_session_binding_chat_session_id_fkey\" (\"lark_chat_session_binding\" -> \"chat_session\") at [531, 228]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_agent_id_fkey\" (\"lark_installation\" -> \"agent\") crosses relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") at [527, 539]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_agent_id_fkey\" (\"lark_installation\" -> \"agent\") crosses relationship id \"lark_binding_token_workspace_id_fkey\" (\"lark_binding_token\" -> \"workspace\") at [527, 790]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_agent_id_fkey\" (\"lark_installation\" -> \"agent\") crosses relationship id \"lark_chat_session_binding_chat_session_id_fkey\" (\"lark_chat_session_binding\" -> \"chat_session\") at [527, 228]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_installer_user_id_fkey\" (\"lark_installation\" -> \"user\") crosses relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") at [519.8, 539]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_installer_user_id_fkey\" (\"lark_installation\" -> \"user\") crosses relationship id \"lark_binding_token_workspace_id_fkey\" (\"lark_binding_token\" -> \"workspace\") at [519.8, 790]",
+              "[composition/proper-crossing] standard relationship id \"lark_installation_installer_user_id_fkey\" (\"lark_installation\" -> \"user\") crosses relationship id \"lark_chat_session_binding_chat_session_id_fkey\" (\"lark_chat_session_binding\" -> \"chat_session\") at [500.3, 242]",
+              "[composition/proper-crossing] standard relationship id \"lark_user_binding_member_fk\" (\"lark_user_binding\" -> \"member\") crosses relationship id \"lark_chat_session_binding_chat_session_id_fkey\" (\"lark_chat_session_binding\" -> \"chat_session\") at [500.3, 559]",
+              "[composition/proper-crossing] standard relationship id \"lark_binding_token_workspace_id_fkey\" (\"lark_binding_token\" -> \"workspace\") crosses relationship id \"lark_chat_session_binding_chat_session_id_fkey\" (\"lark_chat_session_binding\" -> \"chat_session\") at [500.3, 790]"
+            ]
+          },
+          {
+            "name": "relationship_corridors",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "container_border_runs",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "route_rhythm",
+            "ok": true,
+            "details": []
+          },
+          {
+            "name": "legend_clearance",
+            "ok": true,
+            "details": []
+          }
+        ],
+        "composition": {
+          "schemaVersion": 1,
+          "profile": "standard",
+          "status": "pass",
+          "summary": {
+            "errors": 0,
+            "warnings": 14
+          },
+          "metrics": {
+            "properCrossings": 10,
+            "resolvedCrossovers": 0,
+            "ambiguousCorridors": 0,
+            "arrowheadCollisions": 0,
+            "containerBorderRuns": 0,
+            "labelRouteClearanceIssues": 4,
+            "labelCanvasOverflowIssues": 0,
+            "minLabelRouteClearance": 0,
+            "desktopReadabilityIssues": 0,
+            "viewportHeightIssues": 0,
+            "minProjectedNodeTextPx": 8.230088495575222,
+            "maxBends": 3,
+            "routesOverSuggestedBends": 2,
+            "maxStretch": 1.088,
+            "routesOverSuggestedStretch": 0,
+            "minSegmentPx": 16,
+            "minInteriorSegmentPx": 20,
+            "shortSegmentCount": 0,
+            "shortEndpointSegmentCount": 0,
+            "shortInteriorSegmentCount": 0,
+            "microSegmentCount": 0
+          },
+          "suggestedLimits": {
+            "bendsPerRelationship": 2,
+            "stretch": 1.35,
+            "segmentPx": 16,
+            "microSegmentPx": 8
+          },
+          "routeReview": {
+            "crossings": [],
+            "detours": [
+              {
+                "relationship": {
+                  "id": "lark_binding_token_installation_id_fkey",
+                  "from": "lark_binding_token",
+                  "to": "lark_installation",
+                  "label": "installation_id",
+                  "collectionIndex": 1,
+                  "artifactIndex": 2
+                },
+                "bends": 3,
+                "stretch": 1.088,
+                "directCorridorBlockers": [
+                  {
+                    "id": "lark_user_binding",
+                    "label": "lark_user_binding",
+                    "box": [
+                      66.5,
+                      471,
+                      300,
+                      176
+                    ]
+                  }
+                ]
+              },
+              {
+                "relationship": {
+                  "id": "lark_chat_session_binding_installation_id_fkey",
+                  "from": "lark_chat_session_binding",
+                  "to": "lark_installation",
+                  "label": "installation_id",
+                  "collectionIndex": 2,
+                  "artifactIndex": 3
+                },
+                "bends": 3,
+                "stretch": 1.053,
+                "directCorridorBlockers": [
+                  {
+                    "id": "lark_user_binding",
+                    "label": "lark_user_binding",
+                    "box": [
+                      66.5,
+                      471,
+                      300,
+                      176
+                    ]
+                  },
+                  {
+                    "id": "lark_binding_token",
+                    "label": "lark_binding_token",
+                    "box": [
+                      66.5,
+                      702,
+                      300,
+                      176
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "leadingSpace": {
+            "measured": false,
+            "reviewSuggested": false
+          },
+          "desktopReadability": {
+            "budgetBasis": "legacy-930",
+            "readerContract": "declared-wide-v1",
+            "availableDiagramWidth": 930,
+            "actualBudgetPx": 930,
+            "limit": "legacy",
+            "requestedTargetPx": 7.5,
+            "requestedTargetMet": true,
+            "hardFloorPx": 6,
+            "hardFloorMet": true,
+            "minimumOwner": {
+              "kind": "node",
+              "id": "lark_installation"
+            },
+            "minimumSourceTextPx": 9,
+            "minimumProjectedTextPx": 8.230088495575222,
+            "semanticTextCount": 332
+          },
+          "issues": [
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                531,
+                194
+              ],
+              "to": [
+                531,
+                838
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                527,
+                218
+              ],
+              "to": [
+                527,
+                1361
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                519.8,
+                242
+              ],
+              "to": [
+                519.8,
+                1882
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/label-route-clearance",
+              "label": "workspace_id, multica_user_id",
+              "labelRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "segmentIndex": 1,
+              "labelRect": {
+                "x": 425.3,
+                "y": 529,
+                "width": 171.8,
+                "height": 14
+              },
+              "clearance": 0,
+              "intersectionLength": 14,
+              "threshold": 2,
+              "from": [
+                500.3,
+                1151
+              ],
+              "to": [
+                500.3,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                531,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_workspace_id_fkey",
+                "from": "lark_installation",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 3,
+                "artifactIndex": 4
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                531,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                527,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "point": [
+                527,
+                790
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_agent_id_fkey",
+                "from": "lark_installation",
+                "to": "agent",
+                "label": "agent_id",
+                "collectionIndex": 4,
+                "artifactIndex": 5
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                527,
+                228
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "point": [
+                519.8,
+                539
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "point": [
+                519.8,
+                790
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_installation_installer_user_id_fkey",
+                "from": "lark_installation",
+                "to": "user",
+                "label": "installer_user_id",
+                "collectionIndex": 5,
+                "artifactIndex": 6
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                242
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_user_binding_member_fk",
+                "from": "lark_user_binding",
+                "to": "member",
+                "label": "workspace_id, multica_user_id",
+                "collectionIndex": 6,
+                "artifactIndex": 7
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                559
+              ]
+            },
+            {
+              "severity": "warning",
+              "code": "composition/proper-crossing",
+              "relationship": {
+                "id": "lark_binding_token_workspace_id_fkey",
+                "from": "lark_binding_token",
+                "to": "workspace",
+                "label": "workspace_id",
+                "collectionIndex": 7,
+                "artifactIndex": 8
+              },
+              "otherRelationship": {
+                "id": "lark_chat_session_binding_chat_session_id_fkey",
+                "from": "lark_chat_session_binding",
+                "to": "chat_session",
+                "label": "chat_session_id",
+                "collectionIndex": 8,
+                "artifactIndex": 9
+              },
+              "point": [
+                500.3,
+                790
+              ]
+            }
+          ]
+        },
+        "provenance": "current",
+        "deliveryReceiptId": "0b7c005e-a952-4764-976c-d855fe4ba857"
+      }
+    },
+    "browser-check": {
+      "status": "pass",
+      "exitCode": 0,
+      "durationMs": 1731,
+      "command": [
+        "/Applications/ServBay/package/node/22/22.17.0/bin/node",
+        "/Users/qinqubo/.agents/skills/archify/bin/archify.mjs",
+        "browser-check",
+        "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+        "--json",
+        "--require-provenance"
+      ],
+      "execution": "in-process",
+      "receipt": {
+        "schemaVersion": 1,
+        "ok": true,
+        "command": "browser-check",
+        "evidenceKind": "automated-browser",
+        "status": "pass",
+        "visualReview": "not-requested",
+        "provenance": "current",
+        "deliveryReceiptId": "0b7c005e-a952-4764-976c-d855fe4ba857",
+        "artifact": {
+          "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.html",
+          "sha256": "f2228d7e3bc4c222e6202bd2c2fd7ae81ffccf710252cde0a2cc900b27db42b5",
+          "bytes": 906654
+        },
+        "state": {
+          "detail": "read",
+          "motion": "still"
+        },
+        "chrome": {
+          "status": "available",
+          "executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        },
+        "diagnostics": [],
+        "containment": {
+          "status": "pass",
+          "policy": "fit-or-reader-declared-readable-vertical-scroll",
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "theme": "light",
+              "innerWidth": 1440,
+              "innerHeight": 900,
+              "scrollWidth": 1440,
+              "scrollHeight": 2251,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 12,
+                "headerPx": 52,
+                "diagramChromePx": 78,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "theme": "light",
+              "innerWidth": 1600,
+              "innerHeight": 1000,
+              "scrollWidth": 1600,
+              "scrollHeight": 2317,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "theme": "light",
+              "innerWidth": 1920,
+              "innerHeight": 1080,
+              "scrollWidth": 1920,
+              "scrollHeight": 2317,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "theme": "light",
+              "innerWidth": 2048,
+              "innerHeight": 1320,
+              "scrollWidth": 2048,
+              "scrollHeight": 2335,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 68,
+                "diagramChromePx": 94,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 44,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            }
+          ]
+        },
+        "themeStates": {
+          "status": "pass",
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "requestedTheme": "light",
+              "resolvedTheme": "light",
+              "ok": true
+            },
+            {
+              "width": 1440,
+              "height": 900,
+              "requestedTheme": "dark",
+              "resolvedTheme": "dark",
+              "ok": true
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "requestedTheme": "dark",
+              "resolvedTheme": "dark",
+              "ok": true
+            }
+          ]
+        },
+        "readability": {
+          "status": "pass",
+          "minimumProjectedNodeTextPx": 6,
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "theme": "light",
+              "innerWidth": 1440,
+              "innerHeight": 900,
+              "scrollWidth": 1440,
+              "scrollHeight": 2251,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 12,
+                "headerPx": 52,
+                "diagramChromePx": 78,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "theme": "light",
+              "innerWidth": 1600,
+              "innerHeight": 1000,
+              "scrollWidth": 1600,
+              "scrollHeight": 2317,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "theme": "light",
+              "innerWidth": 1920,
+              "innerHeight": 1080,
+              "scrollWidth": 1920,
+              "scrollHeight": 2317,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "theme": "light",
+              "innerWidth": 2048,
+              "innerHeight": 1320,
+              "scrollWidth": 2048,
+              "scrollHeight": 2335,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 68,
+                "diagramChromePx": 94,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 44,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            }
+          ]
+        },
+        "viewerChrome": {
+          "status": "pass",
+          "viewports": [
+            {
+              "width": 1440,
+              "height": 900,
+              "theme": "light",
+              "innerWidth": 1440,
+              "innerHeight": 900,
+              "scrollWidth": 1440,
+              "scrollHeight": 2251,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 12,
+                "headerPx": 52,
+                "diagramChromePx": 78,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1600,
+              "height": 1000,
+              "theme": "light",
+              "innerWidth": 1600,
+              "innerHeight": 1000,
+              "scrollWidth": 1600,
+              "scrollHeight": 2317,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 1920,
+              "height": 1080,
+              "theme": "light",
+              "innerWidth": 1920,
+              "innerHeight": 1080,
+              "scrollWidth": 1920,
+              "scrollHeight": 2317,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 60,
+                "diagramChromePx": 84,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 54,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            },
+            {
+              "width": 2048,
+              "height": 1320,
+              "theme": "light",
+              "innerWidth": 2048,
+              "innerHeight": 1320,
+              "scrollWidth": 2048,
+              "scrollHeight": 2335,
+              "overflowX": false,
+              "overflowY": true,
+              "verticalScrollAccepted": true,
+              "overflowDisposition": "readable-vertical-scroll",
+              "readerLayout": "adaptive",
+              "readerOverflow": "authored",
+              "readerFit": "intrinsic-height",
+              "ok": true,
+              "readerWidth": 960,
+              "diagramWidth": 848,
+              "pageComposition": {
+                "bodyPaddingPx": 64,
+                "headerPx": 68,
+                "diagramChromePx": 94,
+                "svgPx": 2109,
+                "cardsPx": 0,
+                "viewBoxHeight": 2529
+              },
+              "viewBoxWidth": 1017,
+              "minimumProjectedNodeTextPx": 7.504424778761062,
+              "minimumProjectedNonEdgeTextPx": 7.504424778761062,
+              "minimumProjectedEdgeTextPx": 7.504424778761062,
+              "minimumProjectedNodeText": "PK",
+              "minimumProjectedNodeTextDetail": "context",
+              "minimumProjectedNodeTextOwner": {
+                "kind": "node",
+                "id": "lark_installation"
+              },
+              "minimumRequiredNodeTextPx": 6,
+              "readabilityOk": true,
+              "hasLegend": true,
+              "hasNavigationDock": true,
+              "legendDockIntersectionArea": 0,
+              "dockStageIntersectionArea": 0,
+              "dockStageGap": 10,
+              "requiredDockStageGap": 10,
+              "viewerChromeStageOk": true,
+              "viewerChromeReserve": 44,
+              "viewerChromeActive": true,
+              "viewerChromeOk": true,
+              "resolvedTheme": "light"
+            }
+          ]
+        },
+        "captures": {
+          "status": "not-requested",
+          "screenshots": [],
+          "contactSheet": null
+        },
+        "sidecars": {
+          "receipt": "lark.browser-check.json",
+          "files": []
+        }
+      }
+    }
+  },
+  "diagnostics": [],
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/lark/lark.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "finishedAt": "2026-10-16T07:08:09.712Z",
+  "durationMs": 2554,
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  }
+}

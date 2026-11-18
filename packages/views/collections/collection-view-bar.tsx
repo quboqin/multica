@@ -2,20 +2,20 @@
 
 import { useRef, useState, type ReactNode } from "react";
 import {
-  ArrowDownUp,
+  ArrowUpDown as ArrowDownUp,
   CalendarDays,
   Check,
   Eye,
   Filter,
-  Group,
-  Kanban,
+  Rows3 as Group,
+  Columns3 as Kanban,
   LayoutGrid,
   Pencil,
   Plus,
   Table2,
-  TableProperties,
+  Table2 as TableProperties,
   X,
-} from "lucide-react";
+} from "@multica/ui/icons";
 import type { CollectionField } from "@multica/core/collections";
 import type {
   DataViewFilter,

@@ -149,7 +149,7 @@ it("narrows the tables by name", async () => {
   expect(screen.getByText("No tables")).toBeInTheDocument();
 });
 
-it("keeps the way back to a collapsed app sidebar at the top of the column", async () => {
+it("keeps its panel toggle at the top of the column", async () => {
   mount(
     <SidebarProvider>
       <CollectionNavigator activeCollectionId="c1" />
@@ -157,7 +157,7 @@ it("keeps the way back to a collapsed app sidebar at the top of the column", asy
   );
   const column = screen.getByRole("complementary", { name: "Tables" });
   await screen.findByRole("link", { name: /Backlog/ });
-  expect(column.querySelector("[data-slot='sidebar-trigger']")).not.toBeNull();
+  expect(within(column).getByRole("button", { name: "Collapse panel" })).toBeVisible();
 });
 
 it("filters to favorites through the filter menu state", async () => {

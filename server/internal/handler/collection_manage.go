@@ -193,11 +193,11 @@ func (h *Handler) UpdateCollectionField(w http.ResponseWriter, r *http.Request) 
 		}
 		nextConfig, err = validateFormulaConfig(catalog, collection, uuidToString(fieldID), req.Config)
 	case req.Config != nil:
-		nextConfig, err = fields.ValidateConfig(targetType, req.Config, validateLabelName, normalizeColor)
+		nextConfig, err = fields.ValidateConfig(targetType, req.Config, 50, validateLabelName, normalizeColor)
 	case targetType != existing.Type:
 		if propertyTypeHasOptions(targetType) {
 			current := parsePropertyConfig(existing.Config)
-			nextConfig, err = fields.ValidateConfig(targetType, &current, validateLabelName, normalizeColor)
+			nextConfig, err = fields.ValidateConfig(targetType, &current, 50, validateLabelName, normalizeColor)
 		} else {
 			nextConfig = []byte(`{}`)
 		}

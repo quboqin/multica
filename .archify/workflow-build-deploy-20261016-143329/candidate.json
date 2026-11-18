@@ -1,0 +1,512 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Multica 构建与发布流程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/workflow-build-deploy-20261016-143329/build-release.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "prepare",
+      "label": "本地准备与提交验证"
+    },
+    {
+      "id": "apple",
+      "label": "macOS 可选发布"
+    },
+    {
+      "id": "publish",
+      "label": "发布校验与必需产物"
+    },
+    {
+      "id": "containers",
+      "label": "容器、Helm 与部署调用"
+    },
+    {
+      "id": "optional",
+      "label": "失败与可选分支"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "local",
+      "lane": "prepare",
+      "col": 0,
+      "type": "backend",
+      "label": "本地构建与验证",
+      "sublabel": "make / pnpm",
+      "sources": [
+        {
+          "path": "Makefile",
+          "line": 157,
+          "end_line": 167
+        },
+        {
+          "path": "Makefile",
+          "line": 341,
+          "end_line": 345
+        },
+        {
+          "path": "package.json",
+          "line": 22,
+          "end_line": 25
+        }
+      ]
+    },
+    {
+      "id": "merge",
+      "lane": "prepare",
+      "col": 1,
+      "type": "external",
+      "label": "审查并合并",
+      "sublabel": "qqb_main",
+      "sources": [
+        {
+          "path": ".github/RELEASING.md",
+          "line": 184,
+          "end_line": 189
+        }
+      ]
+    },
+    {
+      "id": "ci",
+      "lane": "prepare",
+      "col": 2,
+      "type": "security",
+      "label": "提交检查通过",
+      "sublabel": "CI + Mobile Verify",
+      "sources": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 938,
+          "end_line": 951
+        },
+        {
+          "path": ".github/workflows/mobile-verify.yml",
+          "line": 1,
+          "end_line": 36
+        },
+        {
+          "path": "scripts/check-release-ci.mjs",
+          "line": 5,
+          "end_line": 30
+        }
+      ],
+      "tag": "同一 SHA 的 push 结果"
+    },
+    {
+      "id": "tag",
+      "lane": "prepare",
+      "col": 3,
+      "type": "external",
+      "label": "推送稳定标签",
+      "sublabel": "vX.Y.Z",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 3,
+          "end_line": 9
+        },
+        {
+          "path": "scripts/check-release-origin.sh",
+          "line": 4,
+          "end_line": 23
+        }
+      ],
+      "tag": "人工触发发布"
+    },
+    {
+      "id": "verify",
+      "lane": "publish",
+      "col": 0,
+      "type": "security",
+      "label": "发布前置校验",
+      "sublabel": "来源 / 凭据 / Go 检查",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 23,
+          "end_line": 91
+        },
+        {
+          "path": "scripts/check-release-origin.sh",
+          "line": 4,
+          "end_line": 23
+        },
+        {
+          "path": "scripts/check-release-ci.mjs",
+          "line": 5,
+          "end_line": 30
+        }
+      ],
+      "tag": "失败即停止"
+    },
+    {
+      "id": "cli",
+      "lane": "publish",
+      "col": 1,
+      "type": "backend",
+      "label": "CLI 与 Homebrew",
+      "sublabel": "GoReleaser",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 93,
+          "end_line": 123
+        },
+        {
+          "path": ".goreleaser.yml",
+          "line": 11,
+          "end_line": 29
+        },
+        {
+          "path": ".goreleaser.yml",
+          "line": 62,
+          "end_line": 91
+        }
+      ]
+    },
+    {
+      "id": "desktop",
+      "lane": "publish",
+      "col": 2,
+      "type": "backend",
+      "label": "桌面端打包发布",
+      "sublabel": "Windows / Linux",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 404,
+          "end_line": 464
+        }
+      ],
+      "tag": "x64 + arm64；未签名"
+    },
+    {
+      "id": "complete",
+      "lane": "publish",
+      "col": 4,
+      "type": "security",
+      "label": "发布完整性校验",
+      "sublabel": "release-complete",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 517,
+          "end_line": 543
+        }
+      ],
+      "tag": "必需任务全部成功"
+    },
+    {
+      "id": "switch",
+      "lane": "publish",
+      "col": 5,
+      "type": "security",
+      "label": "自动部署开关",
+      "sublabel": "启用值必须为 true",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 545,
+          "end_line": 551
+        },
+        {
+          "path": ".github/RELEASING.md",
+          "line": 127,
+          "end_line": 156
+        }
+      ]
+    },
+    {
+      "id": "images",
+      "lane": "containers",
+      "col": 1,
+      "type": "backend",
+      "label": "镜像并行构建",
+      "sublabel": "后端 + Web；双架构",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 125,
+          "end_line": 182
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 246,
+          "end_line": 299
+        },
+        {
+          "path": "Dockerfile.web",
+          "line": 44,
+          "end_line": 52
+        }
+      ],
+      "tag": "原生 amd64 / arm64"
+    },
+    {
+      "id": "manifest",
+      "lane": "containers",
+      "col": 2,
+      "type": "cloud",
+      "label": "合并并发布镜像",
+      "sublabel": "GHCR 多架构清单",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 198,
+          "end_line": 244
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 315,
+          "end_line": 361
+        }
+      ]
+    },
+    {
+      "id": "helm",
+      "lane": "containers",
+      "col": 3,
+      "type": "cloud",
+      "label": "打包发布 Helm",
+      "sublabel": "OCI / charts / multica",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 363,
+          "end_line": 402
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "lane": "containers",
+      "col": 5,
+      "type": "backend",
+      "label": "调用生产部署",
+      "sublabel": "deploy.yml",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 545,
+          "end_line": 551
+        },
+        {
+          "path": ".github/workflows/deploy.yml",
+          "line": 18,
+          "end_line": 60
+        }
+      ],
+      "tag": "继续查看部署流程图"
+    },
+    {
+      "id": "blocked",
+      "lane": "containers",
+      "col": 0,
+      "type": "security",
+      "label": "发布校验失败",
+      "sublabel": "修复后重新验证",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 40,
+          "end_line": 87
+        }
+      ],
+      "tag": "不进入产物发布"
+    },
+    {
+      "id": "mac",
+      "lane": "apple",
+      "col": 1,
+      "type": "backend",
+      "label": "macOS 独立发布",
+      "sublabel": "签名 / 公证 / 上传",
+      "sources": [
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 466,
+          "end_line": 515
+        },
+        {
+          "path": ".github/RELEASING.md",
+          "line": 62,
+          "end_line": 88
+        }
+      ],
+      "tag": "可选，不阻塞部署"
+    },
+    {
+      "id": "skip",
+      "lane": "optional",
+      "col": 5,
+      "type": "external",
+      "label": "不自动升级服务器",
+      "sublabel": "可按固定标签手动部署",
+      "sources": [
+        {
+          "path": ".github/RELEASING.md",
+          "line": 199,
+          "end_line": 206
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "line": 545,
+          "end_line": 551
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "local-to-merge",
+      "to": "merge",
+      "from": "local",
+      "label": "验证后"
+    },
+    {
+      "id": "merge-to-ci",
+      "to": "ci",
+      "from": "merge"
+    },
+    {
+      "id": "ci-to-tag",
+      "to": "tag",
+      "from": "ci",
+      "label": "通过后人工操作"
+    },
+    {
+      "id": "tag-to-verify",
+      "to": "verify",
+      "from": "tag",
+      "label": "触发 Release"
+    },
+    {
+      "id": "verify-to-cli",
+      "to": "cli",
+      "variant": "emphasis",
+      "from": "verify",
+      "label": "通过"
+    },
+    {
+      "id": "verify-to-images",
+      "to": "images",
+      "from": "verify",
+      "label": "通过后并行"
+    },
+    {
+      "id": "verify-to-blocked",
+      "to": "blocked",
+      "role": "error",
+      "variant": "security",
+      "from": "verify",
+      "label": "失败",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "cli-to-desktop",
+      "to": "desktop",
+      "from": "cli"
+    },
+    {
+      "id": "cli-to-mac",
+      "to": "mac",
+      "role": "branch",
+      "from": "cli",
+      "label": "独立分支",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight"
+    },
+    {
+      "id": "images-to-manifest",
+      "to": "manifest",
+      "from": "images"
+    },
+    {
+      "id": "manifest-to-helm",
+      "to": "helm",
+      "from": "manifest"
+    },
+    {
+      "id": "desktop-to-complete",
+      "to": "complete",
+      "from": "desktop",
+      "label": "必需"
+    },
+    {
+      "id": "helm-to-complete",
+      "to": "complete",
+      "from": "helm",
+      "label": "必需"
+    },
+    {
+      "id": "complete-to-switch",
+      "to": "switch",
+      "from": "complete",
+      "label": "校验通过"
+    },
+    {
+      "id": "switch-to-deploy",
+      "to": "deploy",
+      "variant": "emphasis",
+      "from": "switch",
+      "label": "true"
+    },
+    {
+      "id": "switch-to-skip",
+      "to": "skip",
+      "role": "branch",
+      "from": "switch",
+      "label": "未启用"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "本地入口",
+      "items": [
+        "make build 生成 server/bin 下的 server、multica、migrate；pnpm build 运行 Turbo，排除 mobile。",
+        "make preview 启动生产模式 Web 预览、API 和守护进程；make check 运行本地验证。来源：Makefile:160-161、235-237。",
+        "make selfhost-build 从当前源码构建并启动容器；make selfhost 拉取已发布镜像。来源：Makefile:82-138。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "检查与发布不是同一个事件",
+      "items": [
+        "CI 按变更范围选取检查，ci-gate 汇总所选任务；Mobile Verify 独立执行类型检查、lint 和测试。",
+        "Release 不自动触发或等待 CI：发布校验查询相同 SHA 的最新 qqb_main push 结果，PR 或手动结果不计入。",
+        "发布检查包含 Go race 测试与 govulncheck；仅管理员为当前标签配置 ALLOW_VULN_BYPASS_FOR_TAG 时跳过漏洞扫描。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "构建产物",
+      "items": [
+        "CLI 覆盖 macOS、Linux、Windows 的 amd64 / arm64；GoReleaser 发布归档、checksums 和 Homebrew 配方。",
+        "后端镜像编译 Go 二进制并携带 migrations；Web 镜像执行 Next.js build，运行 standalone 输出。来源：Dockerfile:15-46、Dockerfile.web:44-85。",
+        "release-complete 检查必需下载、校验和、更新器引用和两种镜像架构；macOS 下载由独立任务检查。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "范围与完成条件",
+      "items": [
+        "GitHub Release 页面可能早于桌面附件上传完成；发布门槛是 release-complete。",
+        "macOS 失败不阻塞必需发布，但仍可能延长整个工作流及发布并发锁的占用时间。",
+        "Mobile Verify 不生成或发布移动安装包；移动商店发布是独立流程。此图依据已提交配置，不表示本次执行了发布。"
+      ]
+    }
+  ]
+}

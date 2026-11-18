@@ -1,0 +1,967 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 个人状态与通知",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/personal/personal.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "inbox_item",
+      "label": "inbox_item",
+      "tag": "个人状态与通知",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "recipient_type",
+          "type": "text"
+        },
+        {
+          "name": "recipient_id",
+          "type": "uuid"
+        },
+        {
+          "name": "type",
+          "type": "text"
+        },
+        {
+          "name": "severity",
+          "type": "text"
+        },
+        {
+          "name": "issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "body",
+          "type": "text"
+        },
+        {
+          "name": "read",
+          "type": "boolean"
+        },
+        {
+          "name": "archived",
+          "type": "boolean"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "actor_type",
+          "type": "text"
+        },
+        {
+          "name": "actor_id",
+          "type": "uuid"
+        },
+        {
+          "name": "details",
+          "type": "jsonb"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 110,
+          "end_line": 124
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 865,
+          "end_line": 881
+        }
+      ]
+    },
+    {
+      "id": "pinned_item",
+      "label": "pinned_item",
+      "tag": "个人状态与通知",
+      "row": 1,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "user.id"
+        },
+        {
+          "name": "item_type",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "item_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/038_pinned_items.up.sql",
+          "line": 2,
+          "end_line": 11
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1290,
+          "end_line": 1298
+        }
+      ]
+    },
+    {
+      "id": "notification_preference",
+      "label": "notification_preference",
+      "tag": "个人状态与通知",
+      "row": 2,
+      "col": 0,
+      "width": 310,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "user.id"
+        },
+        {
+          "name": "preferences",
+          "type": "jsonb"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/064_notification_preference.up.sql",
+          "line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1270,
+          "end_line": 1276
+        }
+      ]
+    },
+    {
+      "id": "feedback",
+      "label": "feedback",
+      "tag": "个人状态与通知",
+      "row": 3,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "user.id"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "message",
+          "type": "text"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/057_feedback.up.sql",
+          "line": 1,
+          "end_line": 8
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 768,
+          "end_line": 775
+        }
+      ]
+    },
+    {
+      "id": "client_usage_daily",
+      "label": "client_usage_daily",
+      "tag": "个人状态与通知",
+      "row": 4,
+      "col": 0,
+      "width": 337,
+      "attributes": [
+        {
+          "name": "user_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "client_type",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "install_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "activity_date",
+          "type": "date",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "client_version",
+          "type": "text"
+        },
+        {
+          "name": "os",
+          "type": "text"
+        },
+        {
+          "name": "first_active_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_active_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "runtime_probed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "probe_result",
+          "type": "text"
+        },
+        {
+          "name": "runtime_count",
+          "type": "integer"
+        },
+        {
+          "name": "provider_summary",
+          "type": "jsonb"
+        },
+        {
+          "name": "online_count",
+          "type": "integer"
+        },
+        {
+          "name": "offline_count",
+          "type": "integer"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/207_client_usage_daily.up.sql",
+          "line": 1,
+          "end_line": 27
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 547,
+          "end_line": 565
+        }
+      ]
+    },
+    {
+      "id": "contact_sales_inquiry",
+      "label": "contact_sales_inquiry",
+      "tag": "个人状态与通知",
+      "row": 5,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "first_name",
+          "type": "text"
+        },
+        {
+          "name": "last_name",
+          "type": "text"
+        },
+        {
+          "name": "business_email",
+          "type": "text"
+        },
+        {
+          "name": "company_name",
+          "type": "text"
+        },
+        {
+          "name": "company_size",
+          "type": "text"
+        },
+        {
+          "name": "country_region",
+          "type": "text"
+        },
+        {
+          "name": "use_case",
+          "type": "text"
+        },
+        {
+          "name": "goals",
+          "type": "text"
+        },
+        {
+          "name": "consent_outreach",
+          "type": "boolean"
+        },
+        {
+          "name": "consent_updates",
+          "type": "boolean"
+        },
+        {
+          "name": "submitter_ip",
+          "type": "inet"
+        },
+        {
+          "name": "user_agent",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/098_contact_sales_inquiries.up.sql",
+          "line": 8,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 654,
+          "end_line": 669
+        }
+      ]
+    },
+    {
+      "id": "issue",
+      "label": "issue",
+      "tag": "引用 · 任务与标签",
+      "row": 0,
+      "col": 1,
+      "width": 356,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": [
+            "uk",
+            "fk"
+          ],
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "assignee_type",
+          "type": "text"
+        },
+        {
+          "name": "assignee_id",
+          "type": "uuid"
+        },
+        {
+          "name": "creator_type",
+          "type": "text"
+        },
+        {
+          "name": "creator_id",
+          "type": "uuid"
+        },
+        {
+          "name": "parent_issue_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "issue.id"
+        },
+        {
+          "name": "acceptance_criteria",
+          "type": "jsonb"
+        },
+        {
+          "name": "context_refs",
+          "type": "jsonb"
+        },
+        {
+          "name": "position",
+          "type": "double precision"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "number",
+          "type": "integer",
+          "key": "uk"
+        },
+        {
+          "name": "project_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "project.id"
+        },
+        {
+          "name": "origin_type",
+          "type": "text"
+        },
+        {
+          "name": "origin_id",
+          "type": "uuid"
+        },
+        {
+          "name": "first_executed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb"
+        },
+        {
+          "name": "stage",
+          "type": "integer"
+        },
+        {
+          "name": "properties",
+          "type": "jsonb"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "last_activity_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "triage_state",
+          "type": "text"
+        },
+        {
+          "name": "duplicate_of_issue_id",
+          "type": "uuid"
+        },
+        {
+          "name": "kind",
+          "type": "text"
+        },
+        {
+          "name": "document_revision",
+          "type": "bigint"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 52,
+          "end_line": 72
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 894,
+          "end_line": 927
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "label": "workspace",
+      "tag": "引用 · 工作区与成员",
+      "row": 1,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "settings",
+          "type": "jsonb"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "context",
+          "type": "text"
+        },
+        {
+          "name": "repos",
+          "type": "jsonb"
+        },
+        {
+          "name": "issue_prefix",
+          "type": "text"
+        },
+        {
+          "name": "issue_counter",
+          "type": "integer"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "attribution_fail_closed",
+          "type": "boolean"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 15,
+          "end_line": 23
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1826,
+          "end_line": 1841
+        }
+      ]
+    },
+    {
+      "id": "user",
+      "label": "user",
+      "tag": "引用 · 账号与凭据",
+      "row": 2,
+      "col": 1,
+      "width": 345,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "name",
+          "type": "text"
+        },
+        {
+          "name": "email",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "avatar_url",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarded_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "onboarding_questionnaire",
+          "type": "jsonb"
+        },
+        {
+          "name": "cloud_waitlist_email",
+          "type": "character varying(254)"
+        },
+        {
+          "name": "cloud_waitlist_reason",
+          "type": "text"
+        },
+        {
+          "name": "starter_content_state",
+          "type": "text"
+        },
+        {
+          "name": "language",
+          "type": "character varying(20)"
+        },
+        {
+          "name": "profile_description",
+          "type": "text"
+        },
+        {
+          "name": "timezone",
+          "type": "text"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/001_init.up.sql",
+          "line": 5,
+          "end_line": 12
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1704,
+          "end_line": 1720
+        }
+      ]
+    },
+    {
+      "id": "project",
+      "label": "project",
+      "tag": "引用 · 项目",
+      "row": 3,
+      "col": 1,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "key": "fk",
+          "references": "workspace.id"
+        },
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "description",
+          "type": "text"
+        },
+        {
+          "name": "icon",
+          "type": "text"
+        },
+        {
+          "name": "status",
+          "type": "text"
+        },
+        {
+          "name": "lead_type",
+          "type": "text"
+        },
+        {
+          "name": "lead_id",
+          "type": "uuid"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "priority",
+          "type": "text"
+        },
+        {
+          "name": "start_date",
+          "type": "date"
+        },
+        {
+          "name": "due_date",
+          "type": "date"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/034_projects.up.sql",
+          "line": 2,
+          "end_line": 14
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 1401,
+          "end_line": 1415
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "inbox_item_workspace_id_fkey",
+      "from": "inbox_item",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "inbox_item_issue_id_fkey",
+      "from": "inbox_item",
+      "to": "issue",
+      "label": "issue_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    },
+    {
+      "id": "pinned_item_workspace_id_fkey",
+      "from": "pinned_item",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "pinned_item_user_id_fkey",
+      "from": "pinned_item",
+      "to": "user",
+      "label": "user_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "notification_preference_workspace_id_fkey",
+      "from": "notification_preference",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "notification_preference_user_id_fkey",
+      "from": "notification_preference",
+      "to": "user",
+      "label": "user_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "feedback_user_id_fkey",
+      "from": "feedback",
+      "to": "user",
+      "label": "user_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": false
+    },
+    {
+      "id": "feedback_workspace_id_fkey",
+      "from": "feedback",
+      "to": "workspace",
+      "label": "workspace_id",
+      "fromCardinality": "many",
+      "toCardinality": "one",
+      "fromOptional": true,
+      "toOptional": true
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本域 6 张表、64 个字段；另展开 4 张外键目标表作为上下文，全部保留完整字段。",
+        "引用域的表可在各自分图单独查看。连线展开本域的外键，引用域自身的外键保留在字段 references 和总览字典中。来自 615 份迁移在隔离 PostgreSQL 17 中重放后的最终 schema。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "跨域数据库外键",
+      "items": [
+        "feedback.user_id → user.id",
+        "feedback.workspace_id → workspace.id",
+        "inbox_item.workspace_id → workspace.id",
+        "inbox_item.issue_id → issue.id",
+        "notification_preference.workspace_id → workspace.id",
+        "notification_preference.user_id → user.id",
+        "pinned_item.workspace_id → workspace.id",
+        "pinned_item.user_id → user.id"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX pinned_item_workspace_id_user_id_item_type_item_id_key ON public.pinned_item USING btree (workspace_id, user_id, item_type, item_id)",
+        "CREATE UNIQUE INDEX notification_preference_workspace_id_user_id_key ON public.notification_preference USING btree (workspace_id, user_id)",
+        "CREATE UNIQUE INDEX client_usage_daily_pkey ON public.client_usage_daily USING btree (user_id, client_type, install_id, activity_date)"
+      ]
+    }
+  ]
+}

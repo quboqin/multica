@@ -1,0 +1,330 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "Multica 数据库 · 渠道审计与钉钉",
+    "locale": "zh-CN",
+    "quality_profile": "standard",
+    "output": ".archify/erd-database-20261016-145515/channel-audit/channel-audit.html",
+    "repository": {
+      "url": "git@github.com:quboqin/multica.git",
+      "revision": "12724238803781e4a0800e3f5c7fd3cdc5cf7d1e",
+      "link_mode": "local-only"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 95,
+    "gapY": 55
+  },
+  "entities": [
+    {
+      "id": "channel_inbound_audit",
+      "label": "channel_inbound_audit",
+      "tag": "渠道审计与钉钉",
+      "row": 0,
+      "col": 0,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid"
+        },
+        {
+          "name": "channel_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_chat_id",
+          "type": "text"
+        },
+        {
+          "name": "event_type",
+          "type": "text"
+        },
+        {
+          "name": "channel_event_id",
+          "type": "text"
+        },
+        {
+          "name": "channel_message_id",
+          "type": "text"
+        },
+        {
+          "name": "drop_reason",
+          "type": "text"
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 221,
+          "end_line": 231
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 370,
+          "end_line": 380
+        }
+      ]
+    },
+    {
+      "id": "channel_inbound_message_dedup",
+      "label": "channel_inbound_message_dedup",
+      "tag": "渠道审计与钉钉",
+      "row": 0,
+      "col": 1,
+      "width": 304,
+      "attributes": [
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "pk"
+        },
+        {
+          "name": "message_id",
+          "type": "text",
+          "key": "pk"
+        },
+        {
+          "name": "received_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "processed_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "claim_token",
+          "type": "uuid"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/124_channel_generalization.up.sql",
+          "line": 198,
+          "end_line": 205
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 382,
+          "end_line": 388
+        }
+      ]
+    },
+    {
+      "id": "dingtalk_bot_identity",
+      "label": "dingtalk_bot_identity",
+      "tag": "渠道审计与钉钉",
+      "row": 0,
+      "col": 2,
+      "width": 300,
+      "attributes": [
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "bot_name",
+          "type": "text"
+        },
+        {
+          "name": "bot_identity_issue",
+          "type": "text"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/387_create_dingtalk_bot_identity.up.sql",
+          "line": 4,
+          "end_line": 11
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 691,
+          "end_line": 698
+        }
+      ]
+    },
+    {
+      "id": "dingtalk_group_presence",
+      "label": "dingtalk_group_presence",
+      "tag": "渠道审计与钉钉",
+      "row": 0,
+      "col": 3,
+      "width": 318,
+      "attributes": [
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "conversation_id",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "conversation_title",
+          "type": "text"
+        },
+        {
+          "name": "bot_name",
+          "type": "text"
+        },
+        {
+          "name": "bot_identity_issue",
+          "type": "text"
+        },
+        {
+          "name": "first_seen_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "last_active_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "mention_count",
+          "type": "bigint"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/383_create_dingtalk_group_presence.up.sql",
+          "line": 4,
+          "end_line": 16
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 700,
+          "end_line": 712
+        }
+      ]
+    },
+    {
+      "id": "dingtalk_group_route",
+      "label": "dingtalk_group_route",
+      "tag": "渠道审计与钉钉",
+      "row": 0,
+      "col": 4,
+      "width": 311,
+      "attributes": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid"
+        },
+        {
+          "name": "installation_id",
+          "type": "uuid",
+          "key": "uk"
+        },
+        {
+          "name": "conversation_id",
+          "type": "text",
+          "key": "uk"
+        },
+        {
+          "name": "conversation_title",
+          "type": "text"
+        },
+        {
+          "name": "agent_id",
+          "type": "uuid"
+        },
+        {
+          "name": "revision",
+          "type": "bigint"
+        },
+        {
+          "name": "discovered_at",
+          "type": "timestamp with time zone"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamp with time zone"
+        }
+      ],
+      "sources": [
+        {
+          "path": "server/migrations/304_dingtalk_group_route.up.sql",
+          "line": 5,
+          "end_line": 15
+        },
+        {
+          "path": "server/pkg/db/generated/models.go",
+          "line": 714,
+          "end_line": 724
+        }
+      ]
+    }
+  ],
+  "relationships": [],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "范围与来源",
+      "items": [
+        "本分图完整展示 5 张表、40 个物理字段。来自当前提交的 615 份迁移在隔离 PostgreSQL 17 中重放后的 schema。",
+        "跨域外键保留在字段 references 中；其他业务域见总览。字典另含 NULL、默认值、注释、索引及约束定义。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "如何阅读键与连线",
+      "items": [
+        "PK 为真实主键；FK 为实际数据库外键；UK 为无条件唯一键或复合唯一键的组成字段，不表示复合键的每个字段单独唯一。",
+        "实线表示实际 FK；虚线仅表示 SQL 中已核实的应用关联，数据库不保证引用完整性。关系端点表示业务上限；逻辑引用仍可能出现悬空值。",
+        "部分唯一索引不标为无条件 UK，其完整谓词保留在数据字典中。自引用保留在字段信息中，不绘制回环。"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "复合键与条件唯一性",
+      "items": [
+        "CREATE UNIQUE INDEX channel_inbound_message_dedup_pkey ON public.channel_inbound_message_dedup USING btree (installation_id, message_id)",
+        "CREATE UNIQUE INDEX idx_dingtalk_group_presence_installation_conversation ON public.dingtalk_group_presence USING btree (installation_id, conversation_id)",
+        "CREATE UNIQUE INDEX idx_dingtalk_group_route_installation_conversation ON public.dingtalk_group_route USING btree (installation_id, conversation_id)"
+      ]
+    }
+  ]
+}

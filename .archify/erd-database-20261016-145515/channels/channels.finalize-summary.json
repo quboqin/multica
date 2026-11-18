@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "finalize",
+  "status": "fail",
+  "type": "erd",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/candidate.json",
+    "sha256": "6363b4df522ba521de2cb81d19cc7763e394443f206857cfe147f28561f2c1e4",
+    "bytes": 10464
+  },
+  "artifact": {
+    "path": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/channels.html",
+    "sha256": "ba772e915b9cfc1964320048a483079796ef33cafd9954beaf0e41c353cddd48",
+    "bytes": 845272
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "fail"
+  },
+  "failedStage": "browser-check",
+  "diagnostics": [
+    {
+      "code": "viewer/projected-text-readability",
+      "severity": "error",
+      "message": "Projected context text is below the readability floor at 1440x900.",
+      "subject": {
+        "artifact": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/channels.html",
+        "viewport": {
+          "width": 1440,
+          "height": 900,
+          "theme": "light"
+        }
+      },
+      "evidence": {
+        "text": "PK",
+        "detail": "context",
+        "owner": {
+          "kind": "node",
+          "id": "channel_installation"
+        },
+        "minimumProjectedNodeTextPx": 5.757604562737642,
+        "minimumRequiredNodeTextPx": 6
+      },
+      "supportedFixes": [
+        "increase projected node text to at least 6px at 1440x900, then rerun browser-check"
+      ]
+    }
+  ],
+  "diagnosticSummary": {
+    "total": 1,
+    "shown": 1,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/channels.finalize.json",
+    "summaryReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/channels.finalize-summary.json",
+    "browserCheckReceipt": "/Users/qinqubo/magic/projects/multica/.archify/erd-database-20261016-145515/channels/channels.browser-check.json"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.1.0",
+    "availableVersion": "3.1.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-10-16T06:29:28.615Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2045
+}
