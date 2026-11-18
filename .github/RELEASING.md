@@ -20,8 +20,13 @@ The release then checks Homebrew publisher credentials, runs Go tests and
 Helm, and Windows/Linux Desktop. macOS Desktop publication is optional and runs
 alongside the required publishers; its Apple credentials are checked only in
 `desktop-mac`. The vulnerability scan is fail-closed by default.
-GoReleaser is pinned to v2.8.2, which accepts the current `brews` configuration;
-run its `check` command and a snapshot build before changing that pin/schema.
+GoReleaser is pinned to v2.20.2 for the changelog author/co-author fields and
+template helpers. It still accepts the current `brews` formula configuration
+with a deprecation warning; keep it to preserve the existing macOS/Linux
+Homebrew formula channel. Its `check` command exits 2 for that known deprecation
+while confirming the schema is valid. Run `check` and a snapshot build before
+changing the pin/schema, and inspect other errors separately. A schema check
+alone does not validate changelog templates.
 
 Desktop signing uses a pnpm patch for `app-builder-lib@26.8.1` to keep the
 temporary keychain password separate from the certificate import passwords.

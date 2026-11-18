@@ -3,8 +3,8 @@ version: 2
 project_name: multica
 
 release:
-  # Keep stable update clients on the previous complete release until the
-  # shared promotion workflow has verified every platform's artifacts.
+  # Publish this fork as Latest immediately; required assets and deployment
+  # are gated separately, and macOS publication is optional.
   make_latest: true
   # GitHub rejects duplicate asset names with 422. On a same-tag rerun,
   # replace only the matching CLI artifact and retry the upload; unrelated
