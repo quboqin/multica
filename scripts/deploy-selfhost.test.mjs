@@ -8,13 +8,15 @@ import test from "node:test";
 
 const script = fileURLToPath(new URL("./deploy-selfhost.sh", import.meta.url));
 const sha = "a".repeat(40);
-const githubSettings = {
+const integrationSettings = {
   GITHUB_APP_SLUG: "multica-test",
   GITHUB_WEBHOOK_SECRET: "webhook-$literal-'quoted'",
   GITHUB_APP_CLIENT_ID: "Iv1.test",
   GITHUB_APP_CLIENT_SECRET: "client-test-secret",
   GITHUB_APP_ID: "12345",
   GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nTEST-ONLY\n-----END RSA PRIVATE KEY-----\n",
+  MULTICA_TELEGRAM_SECRET_KEY: Buffer.alloc(32, 1).toString("base64"),
+  MULTICA_WECOM_SECRET_KEY: Buffer.alloc(32, 2).toString("base64"),
 };
 
 function setupTransfer(t) {
@@ -30,7 +32,7 @@ function setupTransfer(t) {
     writeFileSync(join(bin, command), `#!/bin/bash
 printf '%s\\n' '${command}' "$@" 'END' >> "$TEST_SSH_LOG"
 if [[ "$*" == *'mktemp -d'* ]]; then echo /tmp/multica-release.TEST1234; fi
-if [[ '${command}' == scp ]]; then cp "$RUNNER_TEMP/deploy-ssh/github-app.json" "$RUNNER_TEMP/transferred.json"; fi
+if [[ '${command}' == scp ]]; then cp "$RUNNER_TEMP/deploy-ssh/integrations.json" "$RUNNER_TEMP/transferred.json"; fi
 exit 0
 `, { mode: 0o755 });
   }
@@ -43,7 +45,7 @@ exit 0
       RUNNER_TEMP: root, RELEASE_TAG: "v1.2.3", DEPLOY_HOST: "deploy.example.test",
       DEPLOY_PORT: port, DEPLOY_USER: "deploy", DEPLOY_PATH: "/srv/multica",
       DEPLOY_SSH_KEY: "test-only-key", DEPLOY_KNOWN_HOSTS: "test-only-host-key",
-      ...githubSettings, ...env,
+      ...integrationSettings, ...env,
     },
   });
   return { root, log, run };
@@ -64,9 +66,9 @@ for (const port of ["22", "23022"]) {
       assert.ok(args.includes(`UserKnownHostsFile=${root}/deploy-ssh/known_hosts`));
     }
     assert.equal(existsSync(join(root, "deploy-ssh/key")), false, "temporary key is removed");
-    assert.equal(existsSync(join(root, "deploy-ssh/github-app.json")), false, "temporary settings are removed");
-    assert.deepEqual(JSON.parse(readFileSync(join(root, "transferred.json"), "utf8")), githubSettings);
-    for (const value of Object.values(githubSettings)) {
+    assert.equal(existsSync(join(root, "deploy-ssh/integrations.json")), false, "temporary settings are removed");
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "transferred.json"), "utf8")), integrationSettings);
+    for (const value of Object.values(integrationSettings)) {
       assert.ok(!readFileSync(log, "utf8").includes(value), "settings never appear in SSH arguments");
       assert.ok(!(result.stdout + result.stderr).includes(value), "settings never appear in logs");
     }
@@ -82,13 +84,26 @@ test("invalid deployment ports fail before any SSH connection or key write", (t)
   }
 });
 
-test("missing production GitHub settings fail before connecting and clean up temporary files", (t) => {
+test("missing production integration settings fail before connecting and clean up temporary files", (t) => {
   const { root, log, run } = setupTransfer(t);
-  for (const key of Object.keys(githubSettings)) {
+  for (const key of Object.keys(integrationSettings)) {
     const result = run("22", { [key]: "" });
     assert.notEqual(result.status, 0, key);
     assert.equal(existsSync(log), false);
-    assert.equal(existsSync(join(root, "deploy-ssh/github-app.json")), false);
+    assert.equal(existsSync(join(root, "deploy-ssh/integrations.json")), false);
+  }
+});
+
+test("invalid channel encryption keys fail before SSH without logging their values", (t) => {
+  const { root, log, run } = setupTransfer(t);
+  for (const key of ["MULTICA_TELEGRAM_SECRET_KEY", "MULTICA_WECOM_SECRET_KEY"]) {
+    for (const value of ["not-base64!", Buffer.alloc(31).toString("base64"), Buffer.alloc(33).toString("base64"), ` ${integrationSettings[key]}`]) {
+      const result = run("22", { [key]: value });
+      assert.notEqual(result.status, 0, `${key} must decode to 32 bytes`);
+      assert.equal(existsSync(log), false);
+      assert.equal(existsSync(join(root, "deploy-ssh/integrations.json")), false);
+      assert.ok(!(result.stdout + result.stderr).includes(value));
+    }
   }
 });
 
@@ -120,15 +135,15 @@ esac
 `, { mode: 0o755 });
   writeFileSync(join(bin, "sleep"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
   const log = join(root, "log");
-  const payload = join(root, "github-app.json");
-  writeFileSync(payload, JSON.stringify(githubSettings));
+  const payload = join(root, "integrations.json");
+  writeFileSync(payload, JSON.stringify(integrationSettings));
   const run = (env = {}, tag = "v1.2.3", settings = false) => spawnSync("bash", [script, tag, sha, deploy, ...(settings ? [payload] : [])], {
     encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: log, FAIL_BACKUP: "false", FAIL_HEALTH: "false", ...env },
   });
   return { deploy, log, run, payload };
 }
 
-test("successful upgrade persists GitHub settings and keeps the previous environment in its backup", (t) => {
+test("successful upgrade persists integration settings and keeps the previous environment in its backup", (t) => {
   const { deploy, log, run } = setup(t);
   const previous = "JWT_SECRET=preserve-me\nGITHUB_APP_PRIVATE_KEY=\"old\nkey\"\nGITHUB_APP_ID=old\nUNRELATED=\"keep\nmultiline\"\n";
   writeFileSync(join(deploy, ".env"), previous);
@@ -136,26 +151,29 @@ test("successful upgrade persists GitHub settings and keeps the previous environ
   assert.equal(result.status, 0, result.stderr);
   const updated = readFileSync(join(deploy, ".env"), "utf8");
   assert.ok(updated.startsWith("JWT_SECRET=preserve-me\n"));
-  assert.equal(JSON.parse(updated.match(/^GITHUB_APP_PRIVATE_KEY=(.*)$/m)[1]), githubSettings.GITHUB_APP_PRIVATE_KEY);
+  assert.equal(JSON.parse(updated.match(/^GITHUB_APP_PRIVATE_KEY=(.*)$/m)[1]), integrationSettings.GITHUB_APP_PRIVATE_KEY);
+  for (const key of ["MULTICA_TELEGRAM_SECRET_KEY", "MULTICA_WECOM_SECRET_KEY"]) {
+    assert.equal(JSON.parse(updated.match(new RegExp(`^${key}=(.*)$`, "m"))[1]), integrationSettings[key]);
+  }
   assert.ok(updated.includes('UNRELATED="keep\nmultiline"\n'));
   assert.doesNotMatch(updated, /old/);
-  assert.match(readFileSync(log, "utf8"), /--env-file .*\.env\.github-app\./);
+  assert.match(readFileSync(log, "utf8"), /--env-file .*\.env\.integrations\./);
   const backup = readdirSync(join(deploy, "backups"))[0];
   assert.equal(readFileSync(join(deploy, "backups", backup, "env"), "utf8"), previous);
-  assert.equal(readdirSync(deploy).some((name) => name.startsWith(".env.github-app.")), false);
+  assert.equal(readdirSync(deploy).some((name) => name.startsWith(".env.integrations.")), false);
   assert.equal(run({}, "v1.2.3", true).status, 0);
   assert.equal(readFileSync(join(deploy, ".env"), "utf8"), updated, "repeated deployment replaces credentials without accumulating entries");
 });
 
-test("failed upgrade preserves previous GitHub settings and removes the staged environment", (t) => {
+test("failed upgrade preserves previous integration settings and removes the staged environment", (t) => {
   const { deploy, run } = setup(t);
   const previous = readFileSync(join(deploy, ".env"), "utf8");
   assert.notEqual(run({ FAIL_HEALTH: "true" }, "v1.2.3", true).status, 0);
   assert.equal(readFileSync(join(deploy, ".env"), "utf8"), previous);
-  assert.equal(readdirSync(deploy).some((name) => name.startsWith(".env.github-app.")), false);
+  assert.equal(readdirSync(deploy).some((name) => name.startsWith(".env.integrations.")), false);
 });
 
-test("malformed GitHub settings stop deployment before Docker operations without leaking input", (t) => {
+test("malformed integration settings stop deployment before Docker operations without leaking input", (t) => {
   const { deploy, log, run, payload } = setup(t);
   writeFileSync(payload, "{secret-invalid-json");
   const previous = readFileSync(join(deploy, ".env"), "utf8");

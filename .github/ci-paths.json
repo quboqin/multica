@@ -149,7 +149,6 @@
     "scripts/check-release*",
     "scripts/verify-release-assets*",
     "scripts/deploy-selfhost*",
-    "scripts/github-app-env.py",
     "scripts/check-collection-db-compat.sql",
     ".github/workflows/release.yml",
     ".github/workflows/deploy.yml",
