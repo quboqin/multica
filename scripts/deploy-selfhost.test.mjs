@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,14 @@ import test from "node:test";
 
 const script = fileURLToPath(new URL("./deploy-selfhost.sh", import.meta.url));
 const sha = "a".repeat(40);
+const githubSettings = {
+  GITHUB_APP_SLUG: "multica-test",
+  GITHUB_WEBHOOK_SECRET: "webhook-$literal-'quoted'",
+  GITHUB_APP_CLIENT_ID: "Iv1.test",
+  GITHUB_APP_CLIENT_SECRET: "client-test-secret",
+  GITHUB_APP_ID: "12345",
+  GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nTEST-ONLY\n-----END RSA PRIVATE KEY-----\n",
+};
 
 function setupTransfer(t) {
   const workflow = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
@@ -22,17 +30,20 @@ function setupTransfer(t) {
     writeFileSync(join(bin, command), `#!/bin/bash
 printf '%s\\n' '${command}' "$@" 'END' >> "$TEST_SSH_LOG"
 if [[ "$*" == *'mktemp -d'* ]]; then echo /tmp/multica-release.TEST1234; fi
+if [[ '${command}' == scp ]]; then cp "$RUNNER_TEMP/deploy-ssh/github-app.json" "$RUNNER_TEMP/transferred.json"; fi
 exit 0
 `, { mode: 0o755 });
   }
   writeFileSync(join(bin, "git"), `#!/bin/bash\necho ${sha}\n`, { mode: 0o755 });
-  const run = (port) => spawnSync("bash", ["-c", body], {
+  const run = (port, env = {}) => spawnSync("bash", ["-c", body], {
     encoding: "utf8",
+    cwd: fileURLToPath(new URL("../", import.meta.url)),
     env: {
       ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_SSH_LOG: log,
       RUNNER_TEMP: root, RELEASE_TAG: "v1.2.3", DEPLOY_HOST: "deploy.example.test",
       DEPLOY_PORT: port, DEPLOY_USER: "deploy", DEPLOY_PATH: "/srv/multica",
       DEPLOY_SSH_KEY: "test-only-key", DEPLOY_KNOWN_HOSTS: "test-only-host-key",
+      ...githubSettings, ...env,
     },
   });
   return { root, log, run };
@@ -53,6 +64,12 @@ for (const port of ["22", "23022"]) {
       assert.ok(args.includes(`UserKnownHostsFile=${root}/deploy-ssh/known_hosts`));
     }
     assert.equal(existsSync(join(root, "deploy-ssh/key")), false, "temporary key is removed");
+    assert.equal(existsSync(join(root, "deploy-ssh/github-app.json")), false, "temporary settings are removed");
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "transferred.json"), "utf8")), githubSettings);
+    for (const value of Object.values(githubSettings)) {
+      assert.ok(!readFileSync(log, "utf8").includes(value), "settings never appear in SSH arguments");
+      assert.ok(!(result.stdout + result.stderr).includes(value), "settings never appear in logs");
+    }
   });
 }
 
@@ -62,6 +79,16 @@ test("invalid deployment ports fail before any SSH connection or key write", (t)
     assert.notEqual(run(port).status, 0, `reject ${JSON.stringify(port)}`);
     assert.equal(existsSync(log), false);
     assert.equal(existsSync(join(root, "deploy-ssh/key")), false);
+  }
+});
+
+test("missing production GitHub settings fail before connecting and clean up temporary files", (t) => {
+  const { root, log, run } = setupTransfer(t);
+  for (const key of Object.keys(githubSettings)) {
+    const result = run("22", { [key]: "" });
+    assert.notEqual(result.status, 0, key);
+    assert.equal(existsSync(log), false);
+    assert.equal(existsSync(join(root, "deploy-ssh/github-app.json")), false);
   }
 });
 
@@ -93,11 +120,52 @@ esac
 `, { mode: 0o755 });
   writeFileSync(join(bin, "sleep"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
   const log = join(root, "log");
-  const run = (env = {}, tag = "v1.2.3") => spawnSync("bash", [script, tag, sha, deploy], {
+  const payload = join(root, "github-app.json");
+  writeFileSync(payload, JSON.stringify(githubSettings));
+  const run = (env = {}, tag = "v1.2.3", settings = false) => spawnSync("bash", [script, tag, sha, deploy, ...(settings ? [payload] : [])], {
     encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: log, FAIL_BACKUP: "false", FAIL_HEALTH: "false", ...env },
   });
-  return { deploy, log, run };
+  return { deploy, log, run, payload };
 }
+
+test("successful upgrade persists GitHub settings and keeps the previous environment in its backup", (t) => {
+  const { deploy, log, run } = setup(t);
+  const previous = "JWT_SECRET=preserve-me\nGITHUB_APP_PRIVATE_KEY=\"old\nkey\"\nGITHUB_APP_ID=old\nUNRELATED=\"keep\nmultiline\"\n";
+  writeFileSync(join(deploy, ".env"), previous);
+  const result = run({}, "v1.2.3", true);
+  assert.equal(result.status, 0, result.stderr);
+  const updated = readFileSync(join(deploy, ".env"), "utf8");
+  assert.ok(updated.startsWith("JWT_SECRET=preserve-me\n"));
+  assert.equal(JSON.parse(updated.match(/^GITHUB_APP_PRIVATE_KEY=(.*)$/m)[1]), githubSettings.GITHUB_APP_PRIVATE_KEY);
+  assert.ok(updated.includes('UNRELATED="keep\nmultiline"\n'));
+  assert.doesNotMatch(updated, /old/);
+  assert.match(readFileSync(log, "utf8"), /--env-file .*\.env\.github-app\./);
+  const backup = readdirSync(join(deploy, "backups"))[0];
+  assert.equal(readFileSync(join(deploy, "backups", backup, "env"), "utf8"), previous);
+  assert.equal(readdirSync(deploy).some((name) => name.startsWith(".env.github-app.")), false);
+  assert.equal(run({}, "v1.2.3", true).status, 0);
+  assert.equal(readFileSync(join(deploy, ".env"), "utf8"), updated, "repeated deployment replaces credentials without accumulating entries");
+});
+
+test("failed upgrade preserves previous GitHub settings and removes the staged environment", (t) => {
+  const { deploy, run } = setup(t);
+  const previous = readFileSync(join(deploy, ".env"), "utf8");
+  assert.notEqual(run({ FAIL_HEALTH: "true" }, "v1.2.3", true).status, 0);
+  assert.equal(readFileSync(join(deploy, ".env"), "utf8"), previous);
+  assert.equal(readdirSync(deploy).some((name) => name.startsWith(".env.github-app.")), false);
+});
+
+test("malformed GitHub settings stop deployment before Docker operations without leaking input", (t) => {
+  const { deploy, log, run, payload } = setup(t);
+  writeFileSync(payload, "{secret-invalid-json");
+  const previous = readFileSync(join(deploy, ".env"), "utf8");
+  const result = run({}, "v1.2.3", true);
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(result.stderr, /secret-invalid-json/);
+  assert.equal(existsSync(log), false);
+  assert.equal(readFileSync(join(deploy, ".env"), "utf8"), previous);
+  assert.equal(existsSync(join(deploy, ".deploy-lock")), false);
+});
 test("upgrade backs up quiesced data before starting and records a pinned version", (t) => {
   const { deploy, log, run } = setup(t);
   const result = run(); assert.equal(result.status, 0, result.stderr);

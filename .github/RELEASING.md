@@ -146,6 +146,22 @@ Create the `production` GitHub Environment. Allow `v*` tags as deployment source
 | Variable | `DEPLOY_PATH` | Absolute path to an existing deployment; no spaces |
 | Secret | `DEPLOY_SSH_KEY` | Dedicated SSH private key |
 | Secret | `DEPLOY_KNOWN_HOSTS` | Independently verified SSH host public-key entry |
+| Variable | `MULTICA_GITHUB_APP_SLUG` | GitHub App slug from `https://github.com/apps/<slug>` |
+| Variable | `MULTICA_GITHUB_APP_CLIENT_ID` | GitHub App OAuth client ID |
+| Variable | `MULTICA_GITHUB_APP_ID` | Numeric GitHub App ID |
+| Secret | `MULTICA_GITHUB_WEBHOOK_SECRET` | GitHub App webhook signing secret |
+| Secret | `MULTICA_GITHUB_APP_CLIENT_SECRET` | GitHub App OAuth client secret |
+| Secret | `MULTICA_GITHUB_APP_PRIVATE_KEY` | Full PEM private key, including BEGIN/END lines and actual newlines |
+
+All six GitHub App settings are required by the production deployment job. It
+reads them from `production` and maps them to the backend's `GITHUB_*` settings
+(without the `MULTICA_` prefix). Exit cleanup removes the private transfer payload
+from the runner and attempts to remove it from the host. After backing up the existing `.env`, the host
+stages the updated settings for Compose; it persists them to `.env` only after
+health and database checks succeed. Other `.env` settings are preserved. Manual
+invocations without the optional fourth JSON-file argument retain existing App
+settings. Failed upgrades retain the previous `.env`; new containers may already
+be running with the staged credentials, so inspect them before recovery.
 
 For a non-default SSH port, the known-hosts entry must identify
 `[host]:port`, for example `[multica.magicefire.xyz]:23022`. Compare the host-key
@@ -153,8 +169,8 @@ fingerprint with the server console or an existing trusted record before saving
 it; `ssh-keyscan` alone does not establish trust. Both SSH commands and SCP file
 transfers use `DEPLOY_PORT` with strict host-key verification.
 
-Install Docker Compose on that host. Its deployment directory must contain a
-production `.env`, with `postgres` and `backend` already running under the Compose
+Install Docker Compose and Python 3 on that host. Its deployment directory must
+contain a production `.env`, with `postgres` and `backend` already running under the Compose
 project configured by the supplied file (`multica` unless explicitly configured).
 For private GHCR packages, authenticate Docker on the host before enabling
 deployment; the workflow does not send registry tokens to the host. Keep database,
