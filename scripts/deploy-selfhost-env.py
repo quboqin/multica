@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Transfer GitHub App settings and update Compose dotenv without logging values."""
+"""Transfer production integration settings and update Compose dotenv privately."""
 
+import base64
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ import re
 import sys
 
 
+CHANNEL_KEYS = ("MULTICA_TELEGRAM_SECRET_KEY", "MULTICA_WECOM_SECRET_KEY")
 KEYS = (
     "GITHUB_APP_SLUG",
     "GITHUB_WEBHOOK_SECRET",
@@ -15,7 +17,7 @@ KEYS = (
     "GITHUB_APP_CLIENT_SECRET",
     "GITHUB_APP_ID",
     "GITHUB_APP_PRIVATE_KEY",
-)
+) + CHANNEL_KEYS
 # Match whole assignments, including quoted multiline PEM values, so rotations
 # remove old credentials without changing unrelated dotenv bytes.
 ASSIGNMENT = re.compile(
@@ -32,12 +34,17 @@ def main():
     elif mode == "merge" and len(paths) == 3:
         values = json.loads(Path(paths[1]).read_text())
     else:
-        raise ValueError("Invalid GitHub App configuration command")
+        raise ValueError("Invalid integration configuration command")
     if not isinstance(values, dict) or set(values) != set(KEYS):
-        raise ValueError("GitHub App configuration must contain all six settings")
+        raise ValueError("Integration configuration must contain all eight settings")
     for key in KEYS:
         if not isinstance(values[key], str) or not values[key].strip() or "\0" in values[key]:
-            raise ValueError(f"Missing or invalid GitHub App setting: {key}")
+            raise ValueError(f"Missing or invalid integration setting: {key}")
+    for key in CHANNEL_KEYS:
+        # Go's base64.StdEncoding ignores CR/LF but rejects other whitespace.
+        encoded = values[key].replace("\r", "").replace("\n", "")
+        if len(base64.b64decode(encoded, validate=True)) != 32:
+            raise ValueError(f"Invalid channel encryption key: {key}")
     if mode == "capture":
         output = json.dumps(values)
         destination = paths[0]
@@ -61,4 +68,4 @@ if __name__ == "__main__":
         main()
     except (ValueError, OSError):
         # Malformed JSON and I/O errors can contain secret data or file contents.
-        sys.exit("Could not prepare GitHub App configuration; check all six production settings.")
+        sys.exit("Could not prepare production integration configuration; check GitHub App settings and both 32-byte base64 channel keys.")

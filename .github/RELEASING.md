@@ -152,16 +152,28 @@ Create the `production` GitHub Environment. Allow `v*` tags as deployment source
 | Secret | `MULTICA_GITHUB_WEBHOOK_SECRET` | GitHub App webhook signing secret |
 | Secret | `MULTICA_GITHUB_APP_CLIENT_SECRET` | GitHub App OAuth client secret |
 | Secret | `MULTICA_GITHUB_APP_PRIVATE_KEY` | Full PEM private key, including BEGIN/END lines and actual newlines |
+| Secret | `MULTICA_TELEGRAM_SECRET_KEY` | Base64-encoded 32-byte encryption key for saved Telegram Bot tokens |
+| Secret | `MULTICA_WECOM_SECRET_KEY` | Separate base64-encoded 32-byte encryption key for saved WeCom bot credentials |
 
-All six GitHub App settings are required by the production deployment job. It
-reads them from `production` and maps them to the backend's `GITHUB_*` settings
-(without the `MULTICA_` prefix). Exit cleanup removes the private transfer payload
-from the runner and attempts to remove it from the host. After backing up the existing `.env`, the host
+The production deployment job requires all six GitHub App settings and both
+channel encryption keys. It reads them from `production`, maps the App settings
+to the backend's `GITHUB_*` names (without the `MULTICA_` prefix), and keeps the
+channel key names unchanged. `deploy-selfhost-env.py` checks that both channel
+keys decode to exactly 32 bytes before any SSH connection and again before
+Compose runs. Exit cleanup removes the private transfer payload from the runner
+and attempts to remove it from the host. After backing up the existing `.env`, the host
 stages the updated settings for Compose; it persists them to `.env` only after
 health and database checks succeed. Other `.env` settings are preserved. Manual
-invocations without the optional fourth JSON-file argument retain existing App
+invocations without the optional fourth JSON-file argument retain existing integration
 settings. Failed upgrades retain the previous `.env`; new containers may already
 be running with the staged credentials, so inspect them before recovery.
+
+Generate each channel key separately with `openssl rand -base64 32` and keep it
+stable across releases. Changing it makes saved bot credentials unreadable and
+requires reconnecting the bots. Telegram Bot tokens and WeCom Bot ID/Secret are
+entered through Multica's message-channel connection UI; they are not these
+deployment encryption keys. The Compose file already maps both keys into the
+backend, so supplying them enables the channel connection endpoints after restart.
 
 For a non-default SSH port, the known-hosts entry must identify
 `[host]:port`, for example `[multica.magicefire.xyz]:23022`. Compare the host-key

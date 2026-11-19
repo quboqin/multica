@@ -4,10 +4,10 @@ umask 077
 
 # Upgrade an existing Compose installation. Bootstrap, .env provisioning and
 # restore decisions belong to the operator; this script never creates secrets.
-tag="${1:?Usage: deploy-selfhost.sh TAG COMMIT DEPLOY_PATH [GITHUB_APP_JSON]}"
+tag="${1:?Usage: deploy-selfhost.sh TAG COMMIT DEPLOY_PATH [INTEGRATION_JSON]}"
 commit="${2:?Missing commit}"
 deploy_dir="${3:?Missing deployment path}"
-github_app_json="${4:-}"
+integration_json="${4:-}"
 [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
 [[ "$commit" =~ ^[a-f0-9]{40}$ ]] || exit 1
 [[ "$deploy_dir" =~ ^/[a-zA-Z0-9_./-]+$ && "$deploy_dir" != / ]] || exit 1
@@ -40,9 +40,9 @@ if [[ -f "$deploy_dir/.current-release" ]]; then
 fi
 
 env_file="$deploy_dir/.env"
-if [[ -n "$github_app_json" ]]; then
-  candidate_env="$(mktemp "$deploy_dir/.env.github-app.XXXXXXXX")"
-  python3 "$source_dir/github-app-env.py" merge "$env_file" "$github_app_json" "$candidate_env"
+if [[ -n "$integration_json" ]]; then
+  candidate_env="$(mktemp "$deploy_dir/.env.integrations.XXXXXXXX")"
+  python3 "$source_dir/deploy-selfhost-env.py" merge "$env_file" "$integration_json" "$candidate_env"
   env_file="$candidate_env"
 fi
 
